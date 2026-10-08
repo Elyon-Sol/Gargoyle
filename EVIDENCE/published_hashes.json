@@ -1,7 +1,7 @@
 {
   "canon_sha256": "d1c9d187953eed8145c2d67a98e052415ca2a4c8b722a8011280e21502b4d7bd",
   "canon_version": "0.9.8.4",
-  "evaluator_sha256": "ca7c922cd0d8bbbdeb2fb75615afe2d6b6a1d77ff0a6ee119c180c16d95e736b",
+  "evaluator_sha256": "42828f232579291ebf17dfcff173d98935b5cf3eb88df11f50b4f89ece415e9c",
   "evaluator_version": "0.9.8.4",
   "manifest_sha256": "ac18ac78c39dfed3d202964ab5e88d34a87ddebf8b41c1abda49bf75a0bcaeb1",
   "manifest_version": "1.0"

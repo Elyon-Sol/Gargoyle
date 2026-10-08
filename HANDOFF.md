@@ -1,8 +1,8 @@
 # Gargoyle - design directive and handoff (2026-10-08)
 
 Gargoyle is the stripped-down successor of Elyon-Sol (/elyon/Elyon-Sol, HEAD f73f806,
-clean, 3 commits ahead of origin/main, NOT pushed). This directory is a staging copy,
-not a git repository. Owner: Justin LaPorte, sole copyright holder of the source
+clean, 3 commits ahead of origin/main, NOT pushed). This directory is the Gargoyle
+git repository (fresh history). Owner: Justin LaPorte, sole copyright holder of the source
 (all commits from the owner's two accounts), so any license may be chosen.
 
 ## Positioning (decided)
@@ -13,15 +13,15 @@ Cedar, or the integrator's code); Gargoyle issues, verifies and consumes receipt
 NOT a governance substrate, NOT a policy language, no canon, no ledger.
 
 ## What is staged here (runs: 253 passed with the repo's .venv)
-IMPLEMENTATION/: envelope, verifier, replay_cache, approval, approver_trust,
+gargoyle/ (was IMPLEMENTATION/): envelope, verifier, replay_cache, approval, approver_trust,
   approver_cli, pending_store, impact, mcp_server, executor_sdk, transport,
   evaluator, published_source, published_record_source, key_record_source,
   reference_target (16 modules, ~4.2k lines)
-TESTS/: 23 files (~5.2k lines); TESTS/conftest.py is REWRITTEN here without the
+tests/ (was TESTS/): 23 files (~5.2k lines); tests/conftest.py is REWRITTEN here without the
   gate module (pep.py) - the original autouse fixture monkeypatched pep.
 CANON/canon.lock, EVIDENCE/published_hashes.json, MANIFEST/manifest.json: kept
   only because envelope.reassert() and mcp_server read them by hard-coded path.
-Run: PYTHONPATH=. ELYON_ALLOW_PRIVATE_TARGETS=1 /elyon/Elyon-Sol/.venv/bin/python -m pytest TESTS/ -q
+Run: pip install -e ".[dev]" && python -m pytest
 
 ## Left behind (deliberately)
 pep.py (the HTTP gate), request_validator, authz_sidecar, governance_wiring,
@@ -32,10 +32,18 @@ Tests dropped: every file importing pep, authz_sidecar, publisher, root_record_s
 replay, issuance_log, envelope_inspector, governance_wiring, request_validator.
 
 ## Work remaining, in order
-1. Rename: package name `gargoyle` (PyPI `gargoyle` is taken by a dead 2015 Disqus
-   Django feature-flag lib; pick a distribution name such as gargoyle-receipts).
-   GitHub Elyon-Sol/Gargoyle is free. Create a FRESH repo (no GitHub fork; the old
-   history carries two rotated-but-exposed signing keys, VL-108/VL-146).
+1. DONE (2026-10-08). Package `gargoyle` (dir gargoyle/, tests in tests/),
+   distribution `gargoyle-receipts` (free on PyPI; `gargoyle` itself is a dead 2015
+   Disqus Django lib, and its import name would collide if both were installed).
+   Renamed: env vars ELYON_* -> GARGOYLE_*, header X-Elyon-Sol-Envelope ->
+   X-Gargoyle-Envelope, MCP meta keys elyon-sol/* -> gargoyle/*, key-record format
+   string -> gargoyle-key-record. evaluator_sha256 in EVIDENCE/published_hashes.json
+   recomputed (the file's bytes changed). pyproject.toml replaces requirements*.txt;
+   `pip install -e ".[dev]"` then `python -m pytest` (253 pass, no PYTHONPATH needed).
+   Fresh git repo, two commits, no Elyon-Sol history. Remote: Elyon-Sol/Gargoyle,
+   created PRIVATE; visibility is decided with the license at step 7.
+   NOT done: docstrings still cite Elyon-Sol paths, VL entries and canon sections;
+   rewrite them alongside steps 2-4, which change the code they describe.
 2. Replace evaluator.py's subset check with a decision interface:
    decide(call) -> (ELIGIBLE|REFUSE, reason) supplied by the integrator / policy
    engine. Keep ONLY the manifest/policy hash pinning so a receipt self-invalidates

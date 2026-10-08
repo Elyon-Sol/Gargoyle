@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gargoyle-receipts"
+version = "0.1.0.dev0"
+description = "Signed, single-use, argument-bound receipts and human-approval holds for agent tool calls."
+readme = "README.md"
+requires-python = ">=3.14"
+# Placeholder: carried over from Elyon-Sol. The license is chosen at HANDOFF step 7.
+license = "AGPL-3.0-only"
+license-files = ["LICENSE"]
+authors = [{ name = "Justin LaPorte" }]
+dependencies = [
+    "cryptography==44.0.0",
+    "fastapi==0.141.1",
+    "uvicorn==0.54.0",
+    "requests==2.34.2",
+]
+
+[project.optional-dependencies]
+redis = ["redis"]
+dev = ["httpx==0.28.1", "pytest==9.1.1", "redis"]
+
+[project.scripts]
+gargoyle-approver = "gargoyle.approver_cli:main"
+
+[tool.setuptools]
+packages = ["gargoyle"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
