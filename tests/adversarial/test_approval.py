@@ -1,14 +1,9 @@
-"""
-Governance layer, Feature 1, increment 1b: the approval grant.
+"""Approval grants: build, sign and verify against real Ed25519 keys.
 
-Spec: docs/design/governance_layer_design.md section 1.4 (with review fixes
-H3/H4/H5/H7). Exercises build_grant/sign_grant/verify_grant against REAL
-Ed25519 keypairs. The starred tests are the revert-catchers (proven RED on
-revert in the VL-114 session before being trusted).
-
-Build-then-wire: approval.py has NO caller on the default pep.py path this
-increment; single-use (claiming grant_id) + the pending-request set are the
-stateful pep wiring at 1c.
+A grant releases one held decision. It must be bound to that decision and
+that hold, carry a single-use grant_id, be signed by a trusted approver key
+that is not the issuer's, and be unexpired. Tests marked "regression guard"
+fail if the check they name is removed.
 """
 
 import dataclasses
@@ -93,12 +88,12 @@ def test_valid_grant_accepted(approver, trust):
 
 
 # --------------------------------------------------------------------------
-# [FIX H4] action + request binding
+# Binding to the decision and to the hold
 # --------------------------------------------------------------------------
 
 def test_action_binding_mismatch_REVERT_CATCHER(approver, trust):
-    """star: a grant for decision A presented against decision B -> REFUSE.
-    Reverting the decision_sha256 binding check would accept it. [FIX H4]"""
+    """Regression guard: a grant for decision A presented against decision B
+    is refused. Without the decision_sha256 binding check it would be accepted."""
     grant = _valid_signed(approver, decision_sha256="b" * 64)
     res = _verify(grant, trust, expected_decision_sha256=DECISION)
     assert res["accepted"] is False
@@ -106,9 +101,9 @@ def test_action_binding_mismatch_REVERT_CATCHER(approver, trust):
 
 
 def test_request_binding_mismatch_REVERT_CATCHER(approver, trust):
-    """star: a grant carrying a different approval_request_id -> REFUSE.
-    Reverting the request-id binding would accept a grant minted for another
-    held request. [FIX H4]"""
+    """Regression guard: a grant carrying a different approval_request_id is
+    refused. Without the request binding, a grant minted for another hold
+    would be accepted."""
     grant = _valid_signed(approver, approval_request_id="req-9999")
     res = _verify(grant, trust, expected_approval_request_id=REQ_ID)
     assert res["accepted"] is False
@@ -116,13 +111,13 @@ def test_request_binding_mismatch_REVERT_CATCHER(approver, trust):
 
 
 # --------------------------------------------------------------------------
-# [FIX H3] mandatory grant_id (single-use cannot be skipped)
+# Mandatory grant_id, so single use cannot be skipped
 # --------------------------------------------------------------------------
 
 def test_absent_grant_id_refused_REVERT_CATCHER(approver, trust):
-    """star: an otherwise-valid grant with NO grant_id -> REFUSE. Reverting the
-    mandatory-id requirement would accept it, and the later single-use claim
-    would have no key to claim (silent replay). [FIX H3]"""
+    """Regression guard: an otherwise valid grant with no grant_id is refused.
+    Accepting it would leave the single-use claim nothing to claim, so the
+    grant could be replayed silently."""
     sk, _ = approver
     g = {
         "grant_version": "1.0",
@@ -158,27 +153,27 @@ def test_build_grant_rejects_empty_grant_id():
 
 
 # --------------------------------------------------------------------------
-# [FIX H5] separation of duties
+# Separation of duties
 # --------------------------------------------------------------------------
 
 def test_sod_approver_equals_gate_key_REVERT_CATCHER(approver):
-    """star: an approval signed by a key whose id == the gate key id -> REFUSE,
-    even though the signature is valid. Reverting the SoD check would let the
-    gate mint its own approval. [FIX H5]"""
+    """Regression guard: an approval signed under the issuer's key id is
+    refused even with a valid signature. Without this check the issuer could
+    approve its own held decision."""
     sk, pk = approver
-    grant = _valid_signed(approver, key_id=GATE_KEY_ID)  # signer IS the gate id
+    grant = _valid_signed(approver, key_id=GATE_KEY_ID)  # signer uses the issuer's id
     res = _verify(grant, {GATE_KEY_ID: pk}, gate_key_id=GATE_KEY_ID)
     assert res["accepted"] is False
     assert res["reason"] == REF_APPROVAL_SOD
 
 
 # --------------------------------------------------------------------------
-# [FIX H7] freshness (reuses verifier.not_after_valid)
+# Freshness (reuses verifier.not_after_valid)
 # --------------------------------------------------------------------------
 
 def test_expired_grant_refused_REVERT_CATCHER(approver, trust):
-    """star: a grant whose not_after is in the past -> REFUSE. Reverting the
-    freshness check would honor a stale human approval indefinitely. [FIX H7]"""
+    """Regression guard: a grant whose not_after has passed is refused.
+    Without the expiry check a stale approval would be honored forever."""
     grant = _valid_signed(approver, not_after=datetime.now(timezone.utc) - timedelta(seconds=1))
     res = _verify(grant, trust)
     assert res["accepted"] is False
@@ -186,8 +181,8 @@ def test_expired_grant_refused_REVERT_CATCHER(approver, trust):
 
 
 def test_tz_naive_not_after_refused(approver, trust):
-    """A tz-naive not_after string (hand-crafted) -> REFUSE (fail closed),
-    parity with verify_envelope. build_grant itself rejects naive datetimes."""
+    """A hand-crafted timezone-naive not_after is refused (fail closed), as in
+    verify_envelope. build_grant itself rejects naive datetimes."""
     sk, _ = approver
     g = {
         "grant_version": "1.0",
@@ -203,15 +198,15 @@ def test_tz_naive_not_after_refused(approver, trust):
 
 
 def test_clock_skew_tolerates_recent_expiry(approver, trust):
-    """Parity with verify_envelope: a not_after just past is honored within a
-    clock_skew window (default 0 is strict)."""
+    """As in verify_envelope, a not_after just past is honored within a
+    clock_skew window; the default of 0 is strict."""
     grant = _valid_signed(approver, not_after=datetime.now(timezone.utc) - timedelta(seconds=2))
     res = _verify(grant, trust, clock_skew=timedelta(seconds=30))
     assert res["accepted"] is True
 
 
 # --------------------------------------------------------------------------
-# provenance / tamper / structure
+# Key trust, tampering, structure
 # --------------------------------------------------------------------------
 
 def test_unknown_approver_key_refused(approver):

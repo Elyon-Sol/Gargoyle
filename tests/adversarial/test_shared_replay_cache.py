@@ -1,20 +1,10 @@
-"""
-Shared-replay-cache seam tests
-(docs/restructure/16_shared_replay_cache_spec.md, increment VL-076, B3).
+"""Replay caches: single use within one process, and across processes only
+with a shared store.
 
-These exercise IMPLEMENTATION/replay_cache.py - the seam that lets the in-window
-exactly-once replay defense (VL-066) be backed by a cross-instance store instead
-of the per-process inline `app.state.seen` dict in reference_target.py. The seam
-is introduced with NO caller (build-then-wire); reference_target.py is unchanged,
-so these tests drive the cache directly at the seam, simulating two target
-"instances" as two call sites that share - or do not share - a cache.
-
-The load-bearing properties:
-- InMemoryReplayCache is behavior-identical to the VL-066 inline dict.
-- Two SEPARATE in-memory caches MISS a cross-instance replay (the gap B3 names);
-  ONE SHARED cache CATCHES it (the seam's point).
-- ExternalStoreReplayCache over a shared store catches it across instances, and
-  fails CLOSED (propagates) when the store cannot decide.
+Two executor instances are modeled as two call sites that do or do not share
+a cache. Separate in-memory caches each honor the same decision_id once; a
+shared cache or a shared store honors it exactly once. A store that cannot
+answer raises rather than honoring.
 """
 
 from datetime import datetime, timezone, timedelta
@@ -40,7 +30,7 @@ def _past(seconds=3600):
 
 
 # ---------------------------------------------------------------------------
-# InMemoryReplayCache: behavior-identical to the VL-066 inline dict
+# InMemoryReplayCache
 # ---------------------------------------------------------------------------
 
 def test_in_memory_honors_once_then_refuses_exact_replay():
@@ -58,9 +48,9 @@ def test_in_memory_distinct_decision_ids_each_honored():
 
 
 def test_in_memory_prunes_expired_entry_then_treats_reuse_as_fresh():
-    # Mirrors VL-066: an entry past its not_after is pruned, so a later
-    # re-presentation is "fresh" to the cache (freshness would independently
-    # refuse it at the verifier - the cache is only the de-dup half).
+    # An entry past its not_after is pruned, so a later re-presentation looks
+    # fresh to the cache. The verifier's expiry check refuses it independently;
+    # the cache is only the de-duplication half.
     cache = InMemoryReplayCache()
     fixed_now = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
     expiry = fixed_now + timedelta(seconds=10)
@@ -79,8 +69,8 @@ def test_in_memory_within_window_replay_still_refused():
 
 
 def test_in_memory_none_expiry_entry_is_retained_across_prune():
-    # A decision with no parseable not_after stores expiry None; it must not be
-    # pruned by time even when a sibling entry is pruned.
+    # A receipt with no parseable not_after stores expiry None; it must not be
+    # pruned by time even when a sibling entry is.
     cache = InMemoryReplayCache()
     fixed_now = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
     assert cache.check_and_claim("forever", None, now=fixed_now) is True
@@ -92,13 +82,13 @@ def test_in_memory_none_expiry_entry_is_retained_across_prune():
 
 
 # ---------------------------------------------------------------------------
-# The gap and the seam: separate caches MISS, a shared cache CATCHES
+# Separate caches miss a cross-instance replay; a shared cache catches it
 # ---------------------------------------------------------------------------
 
 def test_separate_in_memory_caches_miss_cross_instance_replay():
-    # The gap B3 names: two target processes, each its own in-process dict. The
-    # same decision_id is honored once on EACH - replay crosses instances. This
-    # is the contrast that pins the gap (cf. VL-074 test_byte_anchor_*).
+    # Two executor processes, each with its own in-process cache: the same
+    # decision_id is honored once on each. This pins why multi-instance
+    # deployments need a shared store.
     instance_a = InMemoryReplayCache()
     instance_b = InMemoryReplayCache()
     na = _future()
@@ -107,8 +97,7 @@ def test_separate_in_memory_caches_miss_cross_instance_replay():
 
 
 def test_shared_in_memory_cache_catches_cross_instance_replay():
-    # The seam's point: one cache injected into both call sites -> exactly-once
-    # across instances.
+    # One cache shared by both call sites: exactly once across them.
     shared = InMemoryReplayCache()
     na = _future()
     assert shared.check_and_claim("d1", na) is True       # instance A honors
@@ -122,7 +111,7 @@ def test_shared_in_memory_cache_catches_cross_instance_replay():
 class FakeSharedStore:
     """In-memory stand-in for a cross-process store (Redis SET NX EX). One
     instance shared by every ExternalStoreReplayCache models a single backend
-    behind N target processes."""
+    behind N executor processes."""
 
     def __init__(self):
         self._d = {}
@@ -158,15 +147,15 @@ def test_external_store_shared_catches_cross_instance_replay():
 
 
 def test_external_store_failure_propagates_fail_closed():
-    # A store that cannot decide must NOT yield a silent honor: the exception
-    # propagates to the caller's fail-closed try/except.
+    # A store that cannot answer must not yield a silent honor: the exception
+    # propagates so the caller refuses.
     cache = ExternalStoreReplayCache(RaisingStore())
     with pytest.raises(ConnectionError):
         cache.check_and_claim("d1", _future())
 
 
 # ---------------------------------------------------------------------------
-# Structural: both concrete caches satisfy the seam contract
+# Both concrete caches satisfy the ReplayCache protocol
 # ---------------------------------------------------------------------------
 
 def test_implementations_satisfy_replay_cache_protocol():
@@ -176,12 +165,12 @@ def test_implementations_satisfy_replay_cache_protocol():
 
 
 # ---------------------------------------------------------------------------
-# RedisReplayStore (the concrete cross-process store, VL-094 wiring)
+# RedisReplayStore
 # ---------------------------------------------------------------------------
 
 class _FakeRedis:
     """Minimal in-memory stand-in for a Redis client (SET ... NX EX). One instance shared by N
-    RedisReplayStore instances models a single Redis behind N target processes."""
+    RedisReplayStore instances models a single Redis behind N executor processes."""
 
     def __init__(self):
         self._d = {}

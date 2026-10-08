@@ -1,27 +1,15 @@
-"""
-Real MCP server with the Elyon-Sol admissibility gate on tool execution
-(docs/restructure/17_mcp_server_spec.md, increment VL-077, artifact 13 Phase B step B4).
+"""An MCP server that executes a tool call only when it carries a valid receipt.
 
-Promotes the in-process wedge demo (EVIDENCE/proofs/wedge_agent_toolcall_001_runner.py, VL-066)
-to a REAL MCP server: JSON-RPC 2.0 over stdio, the MCP `initialize` handshake, `tools/list`, and
-`tools/call`, with the production admissibility gate on tool execution. The demo proved the
-executor-side wedge SEMANTICS but stated its fidelity gap ("no initialize handshake, capability
-negotiation, or stdio transport"); this module closes it.
+JSON-RPC 2.0 over stdio: initialize, tools/list, tools/call. This server is
+the executor, not the issuer. An agent obtains a signed receipt from the
+issuer (gargoyle.issuer.issue) and sends it in tools/call params._meta under
+"gargoyle/envelope". The server rebuilds the expected call from the actual
+tool name and arguments, runs verify_envelope (signature, policy pin,
+binding, expiry), then claims decision_id in the replay cache. The tool
+fires only after a positive verdict and a fresh claim; every other path
+leaves it unfired.
 
-This server is the EXECUTOR, not the gate. Admission is still performed by pep.py: the agent
-calls the gate to obtain a signed envelope, then calls a tool here carrying it. The server
-reconstructs the expected interaction from the ACTUAL call and runs the production
-`verify_envelope` (signature -> reassert/currency -> binding -> freshness), then the VL-076
-`ReplayCache` seam for exactly-once. No gate logic is re-implemented; no new reason code is added
-on the verify path. The tool side effect fires ONLY on a positive verdict followed by a fresh
-replay claim - every undecidable path fails closed (canon section 9) and leaves the tool unfired.
-
-No new canonical invariant (canon section 14): the server consumes the target-side revalidation
-step (canon section 13); it changes WHERE the gate runs (a real MCP surface), not WHAT it
-decides. Build-then-wire: no caller on the default pep.py path; this is the first real consumer
-of the VL-076 replay seam.
-
-Run as a real stdio MCP server:  PYTHONPATH=. python3 -m gargoyle.mcp_server
+Run as a stdio MCP server:  python3 -m gargoyle.mcp_server
 """
 
 import hashlib
@@ -44,8 +32,8 @@ from gargoyle.verifier import verify_envelope, REF_VERIFY_REPLAY
 PROTOCOL_VERSION = "2025-06-18"
 SERVER_INFO = {"name": "gargoyle", "version": "0.1.0"}
 
-# The _meta key the admissibility envelope rides under in tools/call params
-# (the MCP-idiomatic parallel of the HTTP X-Gargoyle-Envelope header).
+# The _meta key the receipt rides under in tools/call params (the MCP
+# counterpart of the HTTP X-Gargoyle-Envelope header).
 ENVELOPE_META_KEY = "gargoyle/envelope"
 EXECUTED_META_KEY = "gargoyle/executed"
 REASON_META_KEY = "gargoyle/reason"
@@ -55,30 +43,28 @@ JSONRPC_PARSE_ERROR = -32700
 JSONRPC_METHOD_NOT_FOUND = -32601
 JSONRPC_NOT_INITIALIZED = -32002
 
-# Representative tools advertised by tools/list. tools/call does NOT restrict by
-# this set: the envelope's binding to the tool name (not a server-side registry)
-# is the control, so an envelope admitted for tool A presented for tool B fails
-# the binding check regardless of registration.
+# Example tools advertised by tools/list. tools/call does not restrict to this
+# set: the receipt's binding to the tool name is the control, so a receipt for
+# tool A presented for tool B fails the binding check whether or not either is
+# listed.
 ADVERTISED_TOOLS = [
     {"name": "transfer_funds", "description": "Move funds between accounts (gated)."},
     {"name": "delete_database", "description": "Delete a database (gated)."},
 ]
 
-# Out-of-band configuration environment variable names (parallel reference_target).
+# Out-of-band configuration, read from the environment (see config_from_env).
 ENV_GATE_KEY_ID = "GARGOYLE_MCP_GATE_KEY_ID"
 ENV_GATE_PUBLIC_KEY_HEX = "GARGOYLE_MCP_GATE_PUBLIC_KEY_HEX"
 ENV_TARGET_ID = "GARGOYLE_MCP_TARGET_ID"
 ENV_RECORD_PATH = "GARGOYLE_MCP_RECORD_PATH"
 
 
-# Tool -> interaction-type taxonomy (typed-impact, step 8.2). A tool maps to a
-# manifest interaction_type; the tokens it declares are that type's required
-# sets. Under a TYPED manifest a benign tool declares the reduced (benign) set;
-# under a FLAT manifest (no interaction_types) the output is BYTE-IDENTICAL to
-# the pre-typed hardcoded interaction (full tokens, no interaction_type field),
-# so this is default-off until a typed manifest is pinned. An unknown tool maps
-# to no type -> the top-level (union) sets -> held under a typed policy (fail
-# toward oversight). Edit this table when the deployed manifest's type set changes.
+# Tool name -> manifest interaction_type. Under a manifest with
+# interaction_types, a tool declares its type's required tokens, so a benign
+# tool declares fewer and need not be held. Under a flat manifest the type is
+# ignored. An unknown tool gets no type and so the full top-level token set,
+# which a typed manifest holds for approval (fail toward oversight). Keep this
+# table in step with the deployed manifest's types.
 _BENIGN_TOOLS = frozenset(
     {"read", "list", "get", "status", "inspect", "read_file", "list_files", "healthz"}
 )
@@ -89,8 +75,7 @@ _SENSITIVE_TOOLS = frozenset(
 
 
 def _interaction_type_for_tool(tool: str):
-    """Map a tool name to a manifest interaction_type, or None (unknown -> the
-    conservative top-level path)."""
+    """A tool's manifest interaction_type, or None for an unknown tool."""
     if tool in _BENIGN_TOOLS:
         return "read"
     if tool in _SENSITIVE_TOOLS:
@@ -99,16 +84,11 @@ def _interaction_type_for_tool(tool: str):
 
 
 def interaction_for(tool: str, args: Any) -> Dict[str, Any]:
-    """Encode a tool call as an admissibility interaction. AP/OP are the
-    authority/operation sets the gate evaluates; the tool identity + an args
-    digest ride in the free-form context (canon 11.1 C) so the envelope BINDS to
-    this exact tool call.
-
-    Typed-impact (step 8.2): under a manifest that declares `interaction_types`,
-    the tool's mapped type selects the REDUCED required sets it must cover (a
-    benign tool declares fewer tokens, so requires_approval need not hold it).
-    Under the flat/default manifest the output is byte-identical to the pre-typed
-    behavior (full tokens, no interaction_type field)."""
+    """Encode a tool call as the interaction a receipt binds to. The tool name
+    and a SHA-256 of its canonical arguments go in `context`, so a receipt
+    covers exactly this call. AP/OP are the tokens ManifestPolicy checks:
+    the tool type's required sets under a typed manifest, else the top-level
+    sets. This ties the server to ManifestPolicy's call shape."""
     manifest = load_manifest()
     base = {
         "context": {
@@ -127,15 +107,14 @@ def interaction_for(tool: str, args: Any) -> Dict[str, Any]:
         if AR is not None and R is not None:
             return {"AP": sorted(AR), "OP": sorted(R),
                     "interaction_type": itype, **base}
-    # Flat manifest or unknown/absent type: top-level tokens, no interaction_type
-    # (byte-identical to the pre-typed default-manifest interaction).
+    # Flat manifest, or unknown or absent type: top-level tokens, no type.
     return {"AP": ["identity", "role"], "OP": ["session", "request"], **base}
 
 
 class ServerState:
-    """Holds the executor's out-of-band trust material, the replay cache (the VL-076 seam), and
-    the observable executed-actions list. `config` is None when the server is unconfigured, in
-    which case tools/call fails closed (REF_TARGET_NOT_CONFIGURED)."""
+    """The executor's out-of-band trust material, its replay cache and the list
+    of tool calls actually executed. `config` None means unconfigured: every
+    tools/call is refused with REF_TARGET_NOT_CONFIGURED."""
 
     def __init__(
         self,
@@ -159,9 +138,9 @@ def _parse_not_after(envelope: Dict[str, Any]) -> Optional[datetime]:
 
 
 def gate_tool_call(state: ServerState, params: Dict[str, Any]) -> (bool, str):
-    """The executor-side admissibility gate. Returns (executed, reason). The tool side effect is
-    appended to state.executed ONLY on a positive verify verdict followed by a fresh replay
-    claim; every other path returns (False, <reason>) and leaves the tool unfired."""
+    """Decide and, if honored, execute one tools/call. Returns (executed,
+    reason). The side effect (appending to state.executed) happens only after
+    a positive verdict and a fresh replay claim."""
     if state.config is None:
         return False, REF_TARGET_NOT_CONFIGURED
 
@@ -170,7 +149,7 @@ def gate_tool_call(state: ServerState, params: Dict[str, Any]) -> (bool, str):
     meta = params.get("_meta") or {}
     envelope = meta.get(ENVELOPE_META_KEY)
     if not isinstance(envelope, dict):
-        envelope = None  # absent / non-object -> un-attested (A1)
+        envelope = None  # absent or not an object: an unattested call
 
     record = load_record_from_bytes(
         state.config["record_bytes"], state.config["pinned_root"]
@@ -189,8 +168,9 @@ def gate_tool_call(state: ServerState, params: Dict[str, Any]) -> (bool, str):
     if not result["accepted"]:
         return False, result["reason"]
 
-    # Exactly-once over the freshness window via the VL-076 seam. decision_id is
-    # inside the signed region (tamper-proof) and stamped by the gate.
+    # Exactly once over the validity window. decision_id is signed, so it cannot
+    # be altered. NOTE: a receipt with no decision_id skips this claim here,
+    # unlike ExecutorGate, which refuses it.
     decision_id = envelope.get("decision_id")
     if decision_id is not None:
         if not state.replay_cache.check_and_claim(
@@ -238,10 +218,9 @@ def handle_message(state: ServerState, msg: Dict[str, Any]) -> Optional[Dict[str
         return _success(msg_id, {})
 
     if method == "gargoyle/executed_count":
-        # Observability (read-only), parallel to reference_target's /received: how
-        # many tool calls actually fired. Not part of the admission policy and not a
-        # trust surface; it discloses only an integer count, letting a real-stdio
-        # runner confirm exactly-once across the process boundary.
+        # Read-only observability: how many tool calls actually fired. Not part
+        # of admission; it discloses only a count, so a test driving the stdio
+        # server can confirm exactly-once across the process boundary.
         return _success(msg_id, {"count": len(state.executed)})
 
     if method in ("tools/list", "tools/call") and not state.initialized:
@@ -268,11 +247,12 @@ def handle_message(state: ServerState, msg: Dict[str, Any]) -> Optional[Dict[str
 
 
 def config_from_env() -> Optional[Dict[str, Any]]:
-    """Resolve the executor's out-of-band configuration from the environment. Returns a config
-    dict or None (the fail-closed signal: an unconfigured server refuses every tool call with
-    REF_TARGET_NOT_CONFIGURED). The published record is read from GARGOYLE_MCP_RECORD_PATH (default
-    EVIDENCE/published_hashes.json) and anchored on its own bytes; the pinned gate public key is
-    supplied as hex."""
+    """The executor's configuration from the environment, or None (then every
+    tool call is refused). GARGOYLE_MCP_GATE_KEY_ID and
+    GARGOYLE_MCP_GATE_PUBLIC_KEY_HEX pin the issuer's public key;
+    GARGOYLE_MCP_TARGET_ID is the identity receipts bind to; the published
+    record is read from GARGOYLE_MCP_RECORD_PATH and anchored on its own
+    bytes."""
     import os
 
     key_id = os.environ.get(ENV_GATE_KEY_ID)
@@ -298,9 +278,9 @@ def config_from_env() -> Optional[Dict[str, Any]]:
 
 
 def serve_stdio(state: ServerState, stdin=None, stdout=None) -> None:
-    """Read line-delimited JSON-RPC messages from stdin, dispatch, write line-delimited
-    responses to stdout. The real MCP stdio transport (newline-delimited JSON). A parse error
-    emits a JSON-RPC parse error; a notification produces no response line."""
+    """The MCP stdio transport: newline-delimited JSON-RPC in on stdin, responses
+    out on stdout. A parse error yields a JSON-RPC parse error; a notification
+    yields no line."""
     stdin = stdin if stdin is not None else sys.stdin
     stdout = stdout if stdout is not None else sys.stdout
     for line in stdin:

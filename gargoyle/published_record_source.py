@@ -1,41 +1,22 @@
-"""
-B-prime-1 SIGNED published-record reader for Elyon-Sol (VL-074, B1; the
-A3b sub-case (b) record-freshness increment). Repo path:
-IMPLEMENTATION/published_record_source.py.
+"""Signed published-record reader: a record that can be reissued and goes stale.
 
-MIRRORS IMPLEMENTATION/key_record_source.py (the B-prime-2 key-record reader)
-as a SIBLING, applying the same signed-record trust model to the published
-HASH record that published_source.py serves under the byte-anchor model:
+published_source pins the SHA-256 of a record's bytes. That pin has no time
+dimension: an old record that still matches the anchor is honored forever,
+and every reissue needs a new anchor on every target. This reader pins a
+publisher public key instead and verifies a publisher signature over a
+record carrying a serial and a not_after, so the publisher can reissue under
+a stable pin and a stale or rolled-back record is refused
+(REF_VERIFY_PUBLISHED_RECORD_STALE).
 
-  - B-prime-1 ORIGINAL (published_source.py) pins the sha256 of the record
-    BYTES (anchor_sha256). That has NO temporal dimension: a stale-but-anchor-
-    matching record is honored arbitrarily later (A3b sub-case (b), artifact 04
-    G5 / A3b). It is left BYTE-UNCHANGED here (build-then-wire; its runners and
-    tests are untouched).
-  - B-prime-1 SIGNED (this module) pins a PUBLISHER PUBLIC KEY and verifies a
-    publisher SIGNATURE over a record that carries serial + not_after, so the
-    record may be reissued under a STABLE pin AND a stale record fails closed
-    (REF_VERIFY_PUBLISHED_RECORD_STALE). This is the freshness B1 adds.
+The pinned publisher key is held out-of-band and is never fetched alongside
+the record, which would be circular. canonical_json is shared with the
+signing side so both sign and verify the same bytes. The refusal codes are
+defined in verifier.py and imported here.
 
-Like key_record_source.py it imports cryptography (to reconstruct the publisher
-public key) and reuses canonical_json from envelope.py so the gen-side and
-reader-side canonicalization match exactly. The pinned publisher key, like the
-B-prime-1 anchor and the B-prime-2 root, is held OUT-OF-BAND and is NEVER
-fetched alongside the record (that would be circular).
-
-REF_VERIFY_PUBLISHED_RECORD_* codes: verifier.py is the canonical home of the
-REF_VERIFY_* namespace. This reader EMITS the two
-(REF_VERIFY_PUBLISHED_RECORD_INVALID, REF_VERIFY_PUBLISHED_RECORD_STALE) and
-IMPORTS them from verifier.py for a single source of truth. No import cycle:
-verifier imports envelope, not this module.
-
-Return contract (parity with key_record_source.py's discriminating reader):
-  {"record": <currency dict>, "reason": None}             on success
-  {"record": None, "reason": <REF_VERIFY_PUBLISHED_RECORD_*>}  on any fault
-On success "record" is the validated record dict, which carries the three
-currency pins (canon_sha256 / evaluator_sha256 / manifest_sha256) that
-envelope.reassert(record_source=...) consults, so it is a drop-in record_source
-once a caller chooses to use it (the wiring step, a later increment).
+Returns {"record": <dict>, "reason": None} on success, or
+{"record": None, "reason": REF_VERIFY_PUBLISHED_RECORD_*}. A successful
+record carries policy_id / policy_sha256 and can be passed straight to
+envelope.reassert(record_source=...).
 """
 
 import json
@@ -51,20 +32,18 @@ from gargoyle.verifier import (
     REF_VERIFY_PUBLISHED_RECORD_STALE,
 )
 
-# canonical_json REUSED from envelope.py so reader-side canonicalization matches
-# the gen/sign side exactly (prefix-ful import per VL-027).
+# Shared with the signing side so both canonicalize identically.
 from gargoyle.envelope import canonical_json
 
 PUBLISHED_RECORD_FORMAT = "elyon-sol-published-record"
 _SIGNATURE_FIELD = "publisher_signature"
 
-# Structural envelope keys the signed record must carry.
+# Structural keys the signed record must carry.
 _REQUIRED_RECORD_KEYS = (
     "format", "version", "publisher_key_id", "serial",
     "issued_at", "not_after", _SIGNATURE_FIELD,
 )
-# The three currency pins the record must carry (parity with
-# EVIDENCE/published_hashes_gen.py and build_envelope's pins).
+# The policy pin the record must carry, matching a receipt's policy block.
 _REQUIRED_PIN_KEYS = (
     "policy_id",
     "policy_sha256",
@@ -116,26 +95,19 @@ def load_signed_record_from_bytes(
     last_seen_serial: Optional[int] = None,
     clock_skew: timedelta = timedelta(0),
 ) -> Dict[str, Any]:
-    """
-    The pure, network-free trust check (mirror of
-    key_record_source.load_key_record_from_bytes). Order, each step fail-closed:
+    """The network-free trust check. Each step fails closed, in order:
 
-      1. parse JSON + structural validation        -> PUBLISHED_RECORD_INVALID
-      2. select pinned publisher key by id          -> PUBLISHED_RECORD_INVALID
-      3. verify publisher_signature vs pinned key    -> PUBLISHED_RECORD_INVALID
-      4. freshness: now < not_after + clock_skew;
-         serial monotonic if last_seen given         -> PUBLISHED_RECORD_STALE
-      5. return the validated record dict (carries the three currency pins).
+      1. parse JSON and check structure            -> PUBLISHED_RECORD_INVALID
+      2. select the pinned publisher key by id      -> PUBLISHED_RECORD_INVALID
+      3. verify publisher_signature                 -> PUBLISHED_RECORD_INVALID
+      4. now < not_after + clock_skew, and serial
+         not below last_seen_serial when given      -> PUBLISHED_RECORD_STALE
 
-    A tz-naive / unparseable not_after fails closed to STALE (it cannot be
-    safely compared and the freshness field owns the field, parity with the
-    key reader). now defaults to datetime.now(timezone.utc).
-
-    clock_skew (VL-075, B2; spec 15_clock_skew_tolerance_spec.md): a non-negative
-    tolerance for cross-host clock divergence. The record-level freshness check
-    becomes now < not_after + clock_skew (default timedelta(0) -> the strict
-    pre-VL-075 check, byte-behavior-identical). A negative value narrows the
-    window (a config error) and raises ValueError.
+    The signature is checked before freshness, so nothing in an unsigned
+    record is believed. A tz-naive or unparseable not_after is STALE, since it
+    cannot be compared safely. `clock_skew` tolerates cross-host clock drift;
+    it must be non-negative (a negative value would be a config error and
+    raises ValueError). `now` defaults to the current UTC time.
     """
     if clock_skew < timedelta(0):
         raise ValueError("clock_skew must be non-negative")
@@ -171,7 +143,7 @@ def load_signed_record_from_bytes(
     except Exception:
         return _reject(REF_VERIFY_PUBLISHED_RECORD_INVALID)
 
-    # 4. freshness: record not_after, then serial rollback if state persisted
+    # 4. freshness: not_after, then serial rollback when the caller keeps state
     try:
         record_not_after = _parse_aware(record["not_after"])
     except ValueError:
@@ -181,7 +153,7 @@ def load_signed_record_from_bytes(
     if last_seen_serial is not None and record["serial"] < last_seen_serial:
         return _reject(REF_VERIFY_PUBLISHED_RECORD_STALE)
 
-    # 5. success: the validated record (carries the three currency pins)
+    # 5. success: the validated record, carrying the policy pin
     return {"record": record, "reason": None}
 
 
@@ -193,17 +165,12 @@ def fetch_signed_record(
     timeout: int = 10,
     clock_skew: timedelta = timedelta(0),
 ) -> Dict[str, Any]:
-    """
-    Fetch the signed published record over HTTP, then run the pure trust check.
-    Cross-host is modeled with loopback (the B-prime-1/2 transport model; true
-    multi-machine + TLS is G5 / deployment). Any transport failure (connection,
-    non-200, timeout) fails closed to PUBLISHED_RECORD_INVALID - the target
-    refuses rather than proceeding without a validated record (canon section 9).
-    """
+    """Fetch the signed record over HTTP(S), then run the trust check. Any
+    transport failure (connection error, timeout, non-200) is
+    PUBLISHED_RECORD_INVALID: the target refuses rather than proceeding
+    without a validated record."""
     try:
-        # TLS-aware transport seam (VL-039): resolves GARGOYLE_TLS_CA_BUNDLE fail-closed, so
-        # signed mode works over the real cross-host TLS deployment (parity with the
-        # byte-anchor fetch_published_record).
+        # TLS settings come from gargoyle.transport (GARGOYLE_TLS_CA_BUNDLE).
         response = get_published(publisher_url, timeout=timeout)
     except Exception:
         return _reject(REF_VERIFY_PUBLISHED_RECORD_INVALID)

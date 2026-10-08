@@ -1,7 +1,8 @@
-"""SES-7 regression: interaction_type is bound into the envelope (signed + hashed)
-and verified target-side; the flat/untyped path stays byte-identical; and the
-receipt is now self-consistent (re-evaluation from request_context reproduces the
-gate's typed verdict)."""
+"""
+interaction_type is bound into the receipt (hashed and signed) and checked by
+the verifier. Untyped receipts are unchanged. The receipt is self-consistent:
+re-running the policy on its request_context reproduces the typed decision.
+"""
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from gargoyle.policy import ManifestPolicy
@@ -65,7 +66,7 @@ def test_flat_still_accepts():
                         TARGET, pinned_public_keys={KID: pub})
     assert r["accepted"] is True
 
-# ---- the SES-7 self-consistency the finding was about ----
+# ---- self-consistency: the receipt reproduces the typed decision ----
 def test_receipt_reproduces_typed_verdict():
     mfst = {"version":"1.0","AR":["identity","role"],"R":["session","request","transfer"],
             "HIGH_IMPACT":["transfer"],
@@ -80,5 +81,5 @@ def test_receipt_reproduces_typed_verdict():
         policy_pin=ManifestPolicy().pin(),decision="ELIGIBLE", target_url=TARGET, normalized_interaction=ctx,
                        timestamp_utc="2026-07-11T00:00:00+00:00")
     assert eligible(ctx) is True
-    # BEFORE the fix this was False (receipt dropped interaction_type -> self-inconsistent):
+    # Fails if the receipt drops interaction_type:
     assert eligible(e["request_context"]) is True

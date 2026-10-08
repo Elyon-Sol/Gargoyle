@@ -1,12 +1,12 @@
 """
-VL-041 canon/spec-derived tests for issuer-key validity windows (expiry).
+Receipt expiry (not_after) on the signed path.
 
-Derivation: artifact 05 "Issuer signature (opt-in)" (the not_after field, the
-signed-region placement, the decision_sha256 exclusion) + canon section 9
-(fail-closed) + the VL-040 follow-up 2 verdict (expiry is the time-bounded
-answer to the compromised-key decisive failure). reassert() runs pure via
-record_source; `now` is injected for determinism. The signed path only:
-expiry is meaningless without a verified signature.
+not_after is inside the signed region, so it cannot be extended, and outside
+decision_sha256, so it does not change the decision hash. Expiry bounds how
+long a captured or leaked receipt is useful without anyone having to detect
+the leak. It is only enforced when the signature is verified; an unsigned
+not_after is forgeable. `now` is injected and reassert() uses record_source,
+so the tests are deterministic.
 """
 from datetime import datetime, timedelta, timezone
 
@@ -57,13 +57,13 @@ def _vfy(env, pub, **kw):
 
 
 def test_not_after_in_signed_region_not_in_hash_region():
-    # Checkpoint B decision encoded as a test (artifact 05).
     assert "not_after" in _HASH_EXCLUDED_KEYS
     assert "not_after" not in _SIGNATURE_EXCLUDED_KEYS
 
 
 def test_signed_no_expiry_honored(keys):
-    # VL-040 compat: absent not_after means no expiry.
+    # sign_envelope without not_after produces a receipt with no expiry.
+    # gargoyle.issuer.issue always sets one.
     priv, pub = keys
     e = sign_envelope(_env(), priv, "k1")
     assert _vfy(e, pub, now=NOW)["reason"] == ACCEPT_REASSERTED_AND_BOUND
@@ -82,7 +82,7 @@ def test_past_window_refused_expired(keys):
 
 
 def test_boundary_now_equals_not_after_refused(keys):
-    # Strict: valid iff now < not_after (canon section 9 fail-closed at the edge).
+    # Strict: valid only while now < not_after; the boundary itself is expired.
     priv, pub = keys
     e = sign_envelope(_env(), priv, "k1", not_after=NOW)
     assert _vfy(e, pub, now=NOW)["reason"] == REF_VERIFY_SIGNATURE_EXPIRED
@@ -97,7 +97,6 @@ def test_extend_not_after_breaks_signature(keys):
 
 
 def test_decision_sha256_unchanged_by_not_after(keys):
-    # VL-040 no-op property preserved.
     priv, pub = keys
     base = _env()["decision_sha256"]
     e_none = sign_envelope(_env(), priv, "k1")

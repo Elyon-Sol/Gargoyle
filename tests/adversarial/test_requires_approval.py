@@ -1,16 +1,10 @@
-"""
-Governance layer, Feature 1, increment 1a: impact classification.
+"""Impact classification: which eligible calls must be held for a human.
 
-Canon/spec basis: docs/design/governance_layer_design.md sections 1.2 + 1.8,
-with the eight-finding review folded in. These tests pin the [FIX H1] and
-[FIX H2] corrections for the pure, manifest-derived, fail-closed
-requires_approval()/safe_high_impact() functions. The starred tests are the
-revert-catchers: each is proven to go RED when its fix is reverted before it
-is trusted (per SESSION_PROTOCOL / GR; recorded in the VL entry).
-
-Build-then-wire: these functions have NO caller on the default pep.py path in
-this increment; evaluate() and safe_manifest() are unchanged. The pep.py
-approval branch (design 1.3 / 1c) is a later increment.
+requires_approval() and safe_high_impact() are pure, derived only from the
+manifest, and fail closed: a missing or malformed HIGH_IMPACT requires
+approval, and every HIGH_IMPACT token must be one the caller is forced to
+declare. Tests marked "regression guard" fail if the check they name is
+removed.
 """
 
 from gargoyle.impact import safe_high_impact, requires_approval
@@ -18,7 +12,7 @@ from gargoyle.policy import coverage_covered, authority_covered
 
 
 # A well-formed high-impact manifest: every HIGH_IMPACT token is a required
-# token (subset of AR u R), per [FIX H2].
+# token (a subset of AR u R).
 HI_MANIFEST = {
     "version": "1.0",
     "AR": ["auth_admin"],
@@ -30,15 +24,13 @@ ELIGIBLE_CTX = {"AP": ["auth_admin"], "OP": ["op_transfer", "op_read"]}
 
 
 # --------------------------------------------------------------------------
-# [FIX H1] missing / malformed HIGH_IMPACT must fail CLOSED, never empty-set
+# A missing or malformed HIGH_IMPACT fails closed, never as an empty set
 # --------------------------------------------------------------------------
 
 def test_missing_high_impact_requires_approval_REVERT_CATCHER():
-    """star: a manifest with NO HIGH_IMPACT key must require approval.
-
-    The silent-disable catcher: a `.get("HIGH_IMPACT", [])` regression would
-    make this False (oversight silently off). [FIX H1]
-    """
+    """Regression guard: a manifest with no HIGH_IMPACT key requires approval.
+    Reading it as `.get("HIGH_IMPACT", [])` would make this False and switch
+    oversight off silently."""
     manifest = {"version": "1.0", "AR": ["auth_admin"], "R": ["op_transfer"]}
     assert safe_high_impact(manifest) is None
     assert requires_approval(ELIGIBLE_CTX, manifest) is True
@@ -57,35 +49,31 @@ def test_malformed_high_impact_non_string_elements_requires_approval():
 
 
 def test_explicit_empty_high_impact_is_low_impact():
-    """An EXPLICIT empty list is the operator's conscious opt-out: low-impact,
-    forwards as today. Distinct from a missing key (which fails closed)."""
+    """An explicit empty list is the operator's deliberate opt-out: nothing is
+    held. A missing key, by contrast, fails closed."""
     manifest = dict(HI_MANIFEST, HIGH_IMPACT=[])
     assert safe_high_impact(manifest) == set()
     assert requires_approval(ELIGIBLE_CTX, manifest) is False
 
 
 # --------------------------------------------------------------------------
-# [FIX H2] selector tokens must be caller-forced (in AR u R)
+# HIGH_IMPACT tokens must be ones the caller is forced to declare (in AR u R)
 # --------------------------------------------------------------------------
 
 def test_high_impact_token_outside_required_is_manifest_error_REVERT_CATCHER():
-    """star: a HIGH_IMPACT token NOT in AR u R is a manifest error -> fail
-    closed. Reverting the subset check would let a caller omit that token and
-    be classified low-impact while still eligible. [FIX H2]
-    """
+    """Regression guard: a HIGH_IMPACT token outside AR u R is a manifest
+    error and fails closed. Without the subset check a caller could omit that
+    token and be classified low-impact while still eligible."""
     manifest = dict(HI_MANIFEST, HIGH_IMPACT=["op_transfer", "op_not_required"])
     assert safe_high_impact(manifest) is None
     assert requires_approval(ELIGIBLE_CTX, manifest) is True
 
 
 def test_h2_eligible_and_low_impact_by_omission_is_impossible_REVERT_CATCHER():
-    """star: the H2 guarantee. An out-of-band HIGH_IMPACT token (NOT in
-    AR u R) is the escape vector: a caller need not declare it, so without
-    [FIX H2] it could be coverage-eligible AND classified low-impact. With the
-    fix the out-of-band selector is a manifest error -> fail closed -> approval
-    required, so (coverage_covered AND not requires_approval) is unreachable.
-    Reverting the subset check makes requires_approval here return False -> RED.
-    """
+    """Regression guard: a HIGH_IMPACT token outside AR u R is the escape
+    route, because the caller need not declare it and could be eligible yet
+    classified low-impact. The subset check makes it a manifest error, so
+    approval is required and "eligible and not held" is unreachable."""
     manifest = {
         "version": "1.0",
         "AR": ["auth_admin"],
@@ -97,14 +85,14 @@ def test_h2_eligible_and_low_impact_by_omission_is_impossible_REVERT_CATCHER():
 
     assert coverage_covered(ctx, R) is True
     assert authority_covered(ctx, manifest["AR"]) is True
-    # With [FIX H2]: out-of-band selector -> fail closed -> approval required.
-    # Without it: requires_approval would be False (escape) while eligible.
+    # The out-of-range selector fails closed, so approval is required. Without
+    # the subset check requires_approval would be False while eligible.
     assert requires_approval(ctx, manifest) is True
     assert not (coverage_covered(ctx, R) and not requires_approval(ctx, manifest))
 
 
 # --------------------------------------------------------------------------
-# fail-closed on malformed ctx; manifest-derived (caller cannot influence)
+# Malformed calls fail closed; classification comes from the manifest, not the caller
 # --------------------------------------------------------------------------
 
 def test_malformed_ctx_with_high_impact_fails_closed():
@@ -114,9 +102,8 @@ def test_malformed_ctx_with_high_impact_fails_closed():
 
 
 def test_caller_cannot_self_declare_low_impact():
-    """Classification comes from the pinned manifest, not the caller. A caller
-    that declares the high-impact token is high-impact regardless of any extra
-    fields it sends."""
+    """Classification comes from the manifest, not the caller. A caller that
+    declares the high-impact token is high-impact whatever else it sends."""
     ctx = {"AP": ["auth_admin"], "OP": ["op_transfer", "op_read"], "impact": "low"}
     assert requires_approval(ctx, HI_MANIFEST) is True
 

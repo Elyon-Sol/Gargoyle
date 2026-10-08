@@ -1,46 +1,33 @@
-"""
-Shared pending-approval-set seam (Feature 1 residual R2; [FIX H4]/[FIX H3] under
-horizontal scale). docs/design/governance_layer_design.md section 1.4.
+"""Pending-approval stores: the hold half of human approval.
 
-MIRRORS IMPLEMENTATION/replay_cache.py as a SIBLING seam. The gate-side
-pending-request set - the 202 hold's `approval_request_id -> decision_sha256`
-binding, consumed exactly once when the approved grant returns - lives today as
-the in-process `_PendingApprovals` dict in pep.py (VL-115). A horizontally-scaled
-gate keeps N independent dicts, so:
-  - a 202 issued on instance A is UNKNOWN to instance B (the approved resubmit
-    fails REF_APPROVAL_REQUEST_UNKNOWN - availability break), and
-  - worse for [FIX H3]/[FIX H4]: the 202 slot's single-consume is only
-    per-process, so the same approval_request_id could be consumed once on EACH
-    instance.
-A single SHARED store closes both: an issue on any instance is visible on every
-instance, and check_and_consume is a GLOBAL atomic compare-and-delete.
+When a policy marks a call requires_approval, the issuing service holds it
+and hands back an approval_request_id bound to the receipt's
+decision_sha256. When the human-signed grant comes back, the binding is
+consumed exactly once. This module stores those bindings:
 
-The seam:
     issue(request_id, decision_sha256, *, not_after=None, now=None) -> None
     check_and_consume(request_id, decision_sha256, *, now=None) -> bool
 
-True  = request_id was pending AND bound to decision_sha256 -> CONSUMED (honor).
-False = unknown request_id OR bound to a DIFFERENT decision  -> refuse
-        (REF_APPROVAL_REQUEST_UNKNOWN at the pep boundary). On the False path
-        NOTHING is consumed - a wrong-decision probe must not burn a legitimate
-        pending slot (compare-AND-delete, never delete-then-compare).
+True means the request was pending and bound to this decision; it is now
+consumed and the call may proceed. False means unknown, expired, or bound to
+a different decision; refuse (REF_APPROVAL_REQUEST_UNKNOWN). On the False
+path nothing is consumed, so a probe with the wrong decision cannot burn a
+legitimate pending slot (compare-and-delete, never delete-then-compare).
 
-InMemoryPendingApprovals is the single-instance default (pending_store_from_env()
-returns it when no shared store is configured). Since 2026-10-07 every hold
-carries a not_after: pep issues each 202 with a hold TTL
-(GARGOYLE_PENDING_HOLD_TTL_SECONDS, default 3600) and both stores enforce it - the
-in-memory set refuses and prunes expired holds, the Redis store sets an EX - so
-an unanswered hold neither stays consumable nor accumulates without bound.
+Holds should carry a not_after (GARGOYLE_PENDING_HOLD_TTL_SECONDS, default
+3600). Both stores enforce it: the in-memory set refuses and prunes expired
+holds, the Redis store sets an EX. Without it an unanswered hold would stay
+consumable forever, and anyone able to trigger holds could grow the set
+without bound.
 
-Fail-closed (canon section 9): check_and_consume never returns True on doubt; a
-backing store that cannot decide raises through to pep's fail-closed handler
-rather than honoring an undecidable consume.
+Scope: a per-process set cannot keep a hold global across replicas. A hold
+issued on one instance would be unknown to another, and single consume
+would hold only per process, so the same request could be consumed once on
+each instance. pending_store_from_env() refuses to start when told it is
+multi-instance without a shared store.
 
-R-02 (the cross-model finding reused from replay_cache.py): a per-process pending
-set CANNOT keep the 202 slot global across replicas. A deployment that declares
-itself horizontally scaled (GARGOYLE_REPLAY_MULTI_INSTANCE) without a shared pending
-store fails closed at startup rather than silently handing each replica a
-per-process set.
+Fail-closed: check_and_consume never returns True on doubt. A shared store
+that cannot answer raises, and the caller turns that into a refusal.
 """
 
 import threading
@@ -50,8 +37,8 @@ from typing import Any, Dict, Optional, Protocol, runtime_checkable
 
 @runtime_checkable
 class PendingApprovals(Protocol):
-    """The seam contract: record a 202 hold's request->decision binding, then
-    consume it exactly once for the SAME decision."""
+    """Record a hold's request -> decision binding, then consume it exactly
+    once for the same decision."""
 
     def issue(
         self, request_id: str, decision_sha256: str, *,
@@ -69,10 +56,10 @@ class PendingApprovals(Protocol):
 @runtime_checkable
 class PendingStore(Protocol):
     """The cross-process primitive an ExternalStorePendingApprovals delegates to.
-    `put` records request_id -> decision_sha256 (optional expiry). `consume_if_matches`
-    atomically deletes-and-returns-True IFF the stored value equals decision_sha256
-    (compare-and-delete; a mismatch deletes nothing). Maps onto Redis SET + a Lua
-    GET-compare-DEL, or an UPDATE ... WHERE value=? RETURNING."""
+    `put` records request_id -> decision_sha256 with an optional expiry.
+    `consume_if_matches` atomically deletes and returns True iff the stored
+    value equals decision_sha256; a mismatch deletes nothing. Maps onto Redis
+    SET plus a Lua GET-compare-DEL, or an UPDATE ... WHERE value=? RETURNING."""
 
     def put(
         self, request_id: str, decision_sha256: str,
@@ -91,23 +78,17 @@ def _utcnow(now: Optional[datetime]) -> datetime:
 
 
 class InMemoryPendingApprovals:
-    """Process-local pending set (a lock + a dict). issue() records the binding
-    with an optional expiry; check_and_consume() honors exactly once, only for
-    the SAME decision, and only while the hold is unexpired (the get/compare/
-    expire/delete is serialized so it is atomic).
+    """Process-local pending set: a dict behind a lock, so get, compare,
+    expire and delete happen as one atomic step.
 
-    Hold TTL (2026-10-07, VL-154 open item): the pre-R2 dict had no TTL, so a
-    202 hold stayed consumable forever and the set grew without bound (one
-    entry per unanswered 202 - an unauthenticated caller can mint those at
-    will). With `not_after`, a hold is refused once `now >= not_after` and
-    expired entries are pruned on every issue(), so the set is bounded by the
-    holds issued inside one TTL. pep always passes a not_after
-    (GARGOYLE_PENDING_HOLD_TTL_SECONDS); `not_after=None` keeps an entry until
-    consumed, for callers that manage lifetime themselves.
+    A hold is refused once `now >= not_after`, and expired entries are pruned
+    on every issue(), so the set never holds more than the holds issued
+    within one TTL. `not_after=None` keeps an entry until consumed, for
+    callers that manage lifetime themselves.
 
-    Injected as a SINGLE shared instance it closes the cross-instance gap
-    in-process; a true cross-PROCESS store is the ExternalStorePendingApprovals
-    path (its Redis backing applies the same not_after as an EX)."""
+    Correct for one process only; ExternalStorePendingApprovals is the
+    cross-process path (its Redis backing applies the same not_after as an
+    EX)."""
 
     def __init__(self) -> None:
         self._d: Dict[str, tuple] = {}  # request_id -> (decision_sha256, expiry|None)
@@ -152,10 +133,9 @@ class InMemoryPendingApprovals:
 
 
 class ExternalStorePendingApprovals:
-    """Cross-process pending set: delegates to an injected shared PendingStore, so
-    issue is global and consume is exactly-once across instances. Holds no state;
-    a store that raises propagates (fail-closed - pep refuses rather than honors
-    on an undecidable consume)."""
+    """Cross-process pending set over a shared PendingStore: issue is visible
+    on every instance and consume is exactly once across them. Holds no
+    state; a store that raises propagates, so the caller refuses."""
 
     def __init__(self, store: PendingStore) -> None:
         self._store = store
@@ -174,17 +154,16 @@ class ExternalStorePendingApprovals:
 
 
 class RedisPendingStore:
-    """A cross-process PendingStore backed by Redis. `put` = SET <prefix><request_id>
+    """A PendingStore backed by Redis. `put` is SET <prefix><request_id>
     <decision_sha256> [EX <ttl>]. `consume_if_matches` runs an atomic Lua
-    compare-and-delete so a concurrent double-consume succeeds at most once and a
+    compare-and-delete, so concurrent consumes succeed at most once and a
     wrong-decision probe deletes nothing:
 
         if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('DEL', KEYS[1]) else return 0 end
 
-    The redis client is INJECTED (build via `from_url`); `redis` is imported lazily
-    so it is not a hard dependency of the gate. TTL is `expiry - now` (>= 1s); a
-    None expiry sets no EX (parity with InMemoryPendingApprovals retaining the
-    entry until consumed)."""
+    The client is injected (build one with `from_url`) and `redis` is imported
+    lazily, so it stays optional. TTL is `expiry - now`, at least 1 s; a None
+    expiry sets no EX, matching InMemoryPendingApprovals."""
 
     _CONSUME_LUA = (
         "if redis.call('GET', KEYS[1]) == ARGV[1] "
@@ -221,17 +200,13 @@ class RedisPendingStore:
 
 
 def pending_store_from_env() -> PendingApprovals:
-    """Build the pending-approval set a deployed gate uses, from the environment.
-    With `GARGOYLE_PENDING_REDIS_URL` set, a SHARED
-    ExternalStorePendingApprovals(RedisPendingStore) keeps the 202 slot global;
-    otherwise a per-instance InMemoryPendingApprovals (the bare default, so a
-    single-instance gate is unchanged).
+    """The pending set a deployed issuing service uses. With
+    GARGOYLE_PENDING_REDIS_URL set: a shared store, so holds are global.
+    Otherwise a per-process InMemoryPendingApprovals.
 
-    R-02 declare-or-fail guard (reused from replay_cache_from_env): a gate that
-    declares GARGOYLE_REPLAY_MULTI_INSTANCE without a shared pending store cannot keep
-    the 202 slot global -> it FAILS CLOSED at startup rather than handing each
-    replica a per-process set that consumes the same approval_request_id once
-    each. Single-instance (no flag) is unchanged."""
+    Declaring GARGOYLE_REPLAY_MULTI_INSTANCE without a shared store fails at
+    startup, rather than giving each replica its own set that would consume
+    the same approval_request_id once each."""
     import os
 
     url = os.environ.get("GARGOYLE_PENDING_REDIS_URL")

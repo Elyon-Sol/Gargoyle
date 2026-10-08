@@ -1,18 +1,15 @@
 """
-Canon/spec-derived tests for the B-prime-2 published key record (VL-042).
-Repo path: TESTS/adversarial/test_key_record.py.
+Tests for the published key record: the reader (key_record_source) and the
+verifier's key_record_view path.
 
-Covers the reader (IMPLEMENTATION/key_record_source.py) and the verifier
-consultation (IMPLEMENTATION/verifier.py::verify_envelope key_record_view path)
-against 09_key_record_spec.md sections 5-9 and canon sections 8.2 / 9 / 11.9 /
-13 / 14. Run from the repo root (build_envelope reads CANON/canon.lock,
-MANIFEST/manifest.json, IMPLEMENTATION/evaluator.py from disk), per
-constraint (m) sandbox discipline: pytest in the author's real environment.
+A key record is a root-signed list of issuer keys with validity windows,
+revocation flags, a serial and its own not_after. The verifier refuses a
+receipt whose signing key is unknown, revoked, outside its window, or not an
+issuer key, and refuses records that are badly signed, stale or rolled back.
 
-Records are built inline (not via EVIDENCE/published_keys_gen.py) so the suite
-does not depend on whether EVIDENCE/ is an importable package; the inline
-construction is byte-identical in structure to build_key_record's output
-(same signed region: canonical_json(record minus publisher_signature)).
+Records are built inline with the same signed region the generator uses
+(canonical_json of the record minus publisher_signature). Run from the repo
+root: build_envelope reads MANIFEST/manifest.json for the reference policy pin.
 """
 
 import base64
@@ -184,15 +181,14 @@ def test_serial_rollback_refused():
     root = Ed25519PrivateKey.generate()
     issuer = Ed25519PrivateKey.generate()
     nb, na = _valid_window()
-    # record serial 1 but verifier has already seen serial 5 -> rollback
+    # record serial 1 but the verifier has already seen serial 5 -> rollback
     loaded = _trust_view(root, [_key_entry("issuer-1", issuer.public_key(), nb, na)],
                         serial=1, last_seen_serial=5)
     assert loaded["reason"] == REF_VERIFY_KEY_RECORD_STALE
 
 
 def test_equal_serial_accepted():
-    # serial == last_seen is fine: the signed serial guarantees an identical
-    # record (spec section 5).
+    # serial == last_seen is fine: a signed serial names exactly one record.
     root = Ed25519PrivateKey.generate()
     issuer = Ed25519PrivateKey.generate()
     nb, na = _valid_window()
@@ -283,7 +279,7 @@ def test_tampered_signature_with_valid_record_refused():
 
 def test_record_exclusive_precedence_revocation_wins():
     # the key is REVOKED in the record but would be accepted by the static map;
-    # record-exclusive means the static map is ignored -> REVOKED (decision 3).
+    # when a record is supplied the static map is ignored -> REVOKED.
     root = Ed25519PrivateKey.generate()
     issuer = Ed25519PrivateKey.generate()
     nb, na = _valid_window()
@@ -300,7 +296,7 @@ def test_record_exclusive_precedence_revocation_wins():
 
 
 def test_static_map_path_unchanged():
-    # VL-040 byte-behavior: no record, static map supplied -> accepts.
+    # No record, static key map supplied -> accepts.
     issuer = Ed25519PrivateKey.generate()
     signed, interaction = _signed_envelope(issuer, "issuer-1")
     result = verify_envelope(signed, interaction, TARGET_URL,
@@ -310,7 +306,7 @@ def test_static_map_path_unchanged():
 
 
 def test_unsigned_path_unchanged():
-    # VL-040 byte-behavior: neither trust source supplied -> unsigned path,
+    # Neither trust source supplied -> unsigned mode,
     # reassert + binding pass on a freshly built envelope -> accepts.
     interaction = _interaction()
     env = build_envelope(
@@ -325,14 +321,15 @@ def test_unsigned_path_unchanged():
 
 
 # --------------------------------------------------------------------------
-# Role separation (2026-10-07 review): an approver-role key never issues
+# Role separation: an approver-role key never issues receipts
 # --------------------------------------------------------------------------
 
 def test_approver_role_key_cannot_sign_envelopes():
-    """A key the signed record designates role=approver (the R1 approver key) is
-    REFUSED as an envelope issuer, even though it is present, unrevoked, in
-    window and its signature is valid. Fails if the verifier's role check is
-    reverted (the approver holder could then mint gate envelopes)."""
+    """
+    A key the signed record marks role=approver is refused as a receipt issuer,
+    even though it is present, unrevoked, in window and its signature is valid.
+    Without this role check, an approver could mint receipts.
+    """
     root = Ed25519PrivateKey.generate()
     gate_key = Ed25519PrivateKey.generate()
     approver = Ed25519PrivateKey.generate()

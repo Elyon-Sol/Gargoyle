@@ -1,30 +1,17 @@
-"""
-Governance layer - approval grant (Feature 1, increment 1b).
+"""Approval grants: a human's signed release of a held, high-impact call.
 
-docs/design/governance_layer_design.md section 1.4, with review fixes
-[FIX H3] (mandatory grant_id; single-use cannot be skipped), [FIX H4] (bind to
-decision_sha256 + approval_request_id), [FIX H5] (separation of duties as a
-belt-and-braces approver_key_id != gate_key_id check), and [FIX H7] (freshness
-REUSES verifier.not_after_valid, not a re-implementation) folded in.
+When a Decision has requires_approval, the receipt is held until a human
+approver, using their own key on their own device, signs a grant for exactly
+that decision. A grant reuses the receipt's machinery: Ed25519 signatures
+over canonical_json. The approver's key is a different identity from the
+issuer's key.
 
-An "approval grant" is a small signed object a HUMAN (the approver) produces
-out-of-band to release a held high-impact decision. It mirrors envelope.py:
-the same Ed25519 duck-typed signing/verifying, the same canonical_json
-discipline - reusing, not re-implementing, the crypto. The approver identity is
-SEPARATE from the gate's issuer identity.
-
-WHAT THIS MODULE DECIDES vs WHAT pep WIRING (1c) DECIDES.
-verify_grant() is a PURE function of the grant plus the trust inputs the caller
-passes (the expected decision hash, the expected request id, the approver
-trust map, the gate key id, the clock). It establishes the grant's
-cryptographic provenance, action/request binding, separation of duties, and
-freshness. It does NOT consume the grant: SINGLE-USE (claiming grant_id exactly
-once via the ReplayCache seam) and the server-side pending-request set are
-STATEFUL gate concerns wired in pep.governed_call at increment 1c
-([FIX H3]/[FIX H4]); this module only enforces that a grant_id is PRESENT so
-the later single-use claim has a non-skippable key. Build-then-wire: NO caller
-on the default pep.py path this increment. Canon untouched; the grant lives
-above G(I).
+verify_grant() is pure: it checks provenance, binding to the held decision
+and request, separation of duties, and freshness. It does not consume the
+grant. Single use is stateful and belongs to whoever holds the call: claim
+grant_id exactly once (a ReplayCache), and consume approval_request_id from
+the pending set (gargoyle.pending_store). verify_grant only guarantees that
+grant_id is present, so that claim cannot be skipped.
 """
 
 from datetime import datetime, timedelta
@@ -41,7 +28,7 @@ GRANT_VERSION = "1.0"
 # not_after, and approver_key_id - so all of them are tamper-proof.
 _SIGNATURE_EXCLUDED_KEYS = ("approver_signature",)
 
-# Refusal vocabulary (REF_APPROVAL_* layer; parallels REF_VERIFY_* / REF_SCHEMA_*).
+# Refusal codes.
 REF_APPROVAL_MALFORMED = "REF_APPROVAL_MALFORMED"
 REF_APPROVAL_MISSING_GRANT_ID = "REF_APPROVAL_MISSING_GRANT_ID"
 REF_APPROVAL_SIGNATURE_INVALID = "REF_APPROVAL_SIGNATURE_INVALID"
@@ -50,9 +37,9 @@ REF_APPROVAL_SOD = "REF_APPROVAL_SOD"
 REF_APPROVAL_BINDING_MISMATCH = "REF_APPROVAL_BINDING_MISMATCH"
 REF_APPROVAL_REQUEST_MISMATCH = "REF_APPROVAL_REQUEST_MISMATCH"
 REF_APPROVAL_EXPIRED = "REF_APPROVAL_EXPIRED"
-# Surfaced by the pep wiring (1c), not verify_grant: single-use of the grant
-# (grant_id already claimed) and of the 202 slot (approval_request_id not in the
-# gate's pending-unconsumed set / not bound to this decision).
+# Emitted by the caller that consumes grants, not by verify_grant: grant_id
+# already claimed, or approval_request_id not pending or not bound to this
+# decision.
 REF_APPROVAL_REPLAY = "REF_APPROVAL_REPLAY"
 REF_APPROVAL_REQUEST_UNKNOWN = "REF_APPROVAL_REQUEST_UNKNOWN"
 
@@ -77,21 +64,17 @@ def build_grant(
     grant_id: str,
     not_after: datetime,
 ) -> Dict[str, Any]:
-    """
-    Construct an UNSIGNED approval grant.
+    """Construct an unsigned approval grant.
 
-    - decision_sha256 ([FIX H4]): the exact decision being approved. Binding to
-      decision_sha256 transitively binds target_url, AP, OP, context, and the
-      manifest pins (all inside the envelope's hashed region), so an approval of
-      action A cannot authorize a different action/args/target B.
-    - approval_request_id ([FIX H4]): the id the gate issued with its 202 hold;
-      since decision_sha256 is issuance-invariant, request identity is carried
-      here (and consumed against the gate's pending set at 1c).
-    - grant_id ([FIX H3]): a unique, MANDATORY id; the key the gate claims
-      exactly once for single-use. A grant without it is rejected by
-      verify_grant - single-use can never be skipped.
-    - not_after ([FIX H7]): a tz-AWARE expiry (approval freshness). Naive ->
-      ValueError here, mirroring sign_envelope's refusal of a naive not_after.
+    - decision_sha256: the exact decision approved. It covers the target,
+      the call's fields and the policy pin, so approving action A cannot
+      authorize a different action, argument set or target.
+    - approval_request_id: the id issued with the hold. decision_sha256 is
+      the same for every issuance of a decision, so the specific request is
+      identified here.
+    - grant_id: mandatory and unique; the key claimed exactly once for
+      single use.
+    - not_after: timezone-aware expiry; a naive datetime raises ValueError.
     """
     if not isinstance(grant_id, str) or not grant_id:
         raise ValueError("grant_id is mandatory and must be a non-empty string")
@@ -107,14 +90,11 @@ def build_grant(
 
 
 def sign_grant(grant: Dict[str, Any], signing_key: Any, key_id: str) -> Dict[str, Any]:
-    """
-    Sign a grant with the APPROVER key (Ed25519 duck-typed, like sign_envelope).
+    """Return a copy of `grant` signed with the approver's key.
 
-    Returns a NEW grant dict with approver_key_id + approver_signature added;
-    the input is not modified. signing_key exposes .sign(bytes) -> bytes;
-    approval.py does NOT import cryptography (the caller supplies the key
-    object). The signature covers canonical_json(grant minus approver_signature),
-    which includes approver_key_id - so the claimed signer is itself bound.
+    `signing_key` is any object with .sign(bytes) -> bytes. The signature
+    covers everything except approver_signature, including approver_key_id,
+    so the claimed signer is bound too. The input is not modified.
     """
     signed = dict(grant)
     signed["approver_key_id"] = key_id
@@ -142,36 +122,26 @@ def verify_grant(
     now: Optional[datetime] = None,
     clock_skew: timedelta = timedelta(0),
 ) -> Dict[str, Any]:
-    """
-    Decide whether an approval grant is a valid human release for the held
-    decision the gate is about to forward. Returns {"accepted", "reason"}.
+    """Is `grant` a valid human release of the held decision?
 
-    Order (fail-closed, canon section 9; first failure wins):
-      1. structural presence  -> REF_APPROVAL_MALFORMED
-      2. mandatory grant_id    -> REF_APPROVAL_MISSING_GRANT_ID        [FIX H3]
-      3. separation of duties (approver_key_id != gate_key_id)
-                               -> REF_APPROVAL_SOD                     [FIX H5]
-      4. known approver key    -> REF_APPROVAL_KEY_UNKNOWN
-      5. signature verifies    -> REF_APPROVAL_SIGNATURE_INVALID
-      6. action binding (decision_sha256)
-                               -> REF_APPROVAL_BINDING_MISMATCH        [FIX H4]
-      7. request binding (approval_request_id)
-                               -> REF_APPROVAL_REQUEST_MISMATCH        [FIX H4]
-      8. freshness (mandatory; via not_after_valid)
-                               -> REF_APPROVAL_EXPIRED                 [FIX H7]
-      9. accept                -> GRANT_VALID
+    Returns {"accepted", "reason"}. First failure wins:
+      1. structure                          -> REF_APPROVAL_MALFORMED
+      2. grant_id present                   -> REF_APPROVAL_MISSING_GRANT_ID
+      3. approver_key_id != gate_key_id     -> REF_APPROVAL_SOD
+      4. approver key known                 -> REF_APPROVAL_KEY_UNKNOWN
+      5. signature verifies                 -> REF_APPROVAL_SIGNATURE_INVALID
+      6. decision_sha256 matches            -> REF_APPROVAL_BINDING_MISMATCH
+      7. approval_request_id matches        -> REF_APPROVAL_REQUEST_MISMATCH
+      8. not_after present and not passed   -> REF_APPROVAL_EXPIRED
 
-    SoD ([FIX H5]) is checked BEFORE the signature so a grant the gate could
-    mint with its own key is rejected even if technically well-signed. This is
-    only the belt-and-braces id check; the load-bearing custody invariant (the
-    gate cannot resolve the approver PRIVATE key, and approver provenance/role
-    comes from the signed key-record chain) is a deployment/wiring property
-    (1c). approver_public_keys is the trust map the caller supplies (a static
-    pin now; the signed key-record view at 1c).
+    `gate_key_id` is the issuer's key id. Separation of duties is checked
+    before the signature, so a grant the issuer signed with its own key is
+    refused even when well-signed. That id check is only a backstop: the
+    real guarantee is that the issuer cannot hold an approver's private key,
+    and that `approver_public_keys` comes from a trust record the issuer's
+    operator does not control.
 
-    Single-use is NOT enforced here (it is stateful): the gate claims grant_id
-    exactly once via the ReplayCache seam at 1c. This function guarantees a
-    grant_id EXISTS so that claim is non-skippable ([FIX H3]).
+    Single use is not enforced here; see the module docstring.
     """
     # 1. structural presence
     if not isinstance(grant, dict):
@@ -180,7 +150,7 @@ def verify_grant(
         if k not in grant:
             return _reject(REF_APPROVAL_MALFORMED)
 
-    # 2. mandatory grant_id [FIX H3]
+    # 2. mandatory grant_id
     grant_id = grant.get("grant_id")
     if not isinstance(grant_id, str) or not grant_id:
         return _reject(REF_APPROVAL_MISSING_GRANT_ID)
@@ -190,7 +160,7 @@ def verify_grant(
     if not isinstance(key_id, str) or not isinstance(signature_hex, str):
         return _reject(REF_APPROVAL_SIGNATURE_INVALID)
 
-    # 3. separation of duties [FIX H5] - before signature: a gate-minted
+    # 3. separation of duties, before the signature: an issuer-signed
     #    approval is not oversight even if well-formed.
     if key_id == gate_key_id:
         return _reject(REF_APPROVAL_SOD)
@@ -208,15 +178,15 @@ def verify_grant(
     except Exception:
         return _reject(REF_APPROVAL_SIGNATURE_INVALID)
 
-    # 6. action binding [FIX H4]
+    # 6. action binding
     if grant.get("decision_sha256") != expected_decision_sha256:
         return _reject(REF_APPROVAL_BINDING_MISMATCH)
 
-    # 7. request binding [FIX H4]
+    # 7. request binding
     if grant.get("approval_request_id") != expected_approval_request_id:
         return _reject(REF_APPROVAL_REQUEST_MISMATCH)
 
-    # 8. freshness [FIX H7] - mandatory presence, then the shared primitive.
+    # 8. freshness: not_after is mandatory, then the verifier's shared check.
     not_after_raw = grant.get("not_after")
     if not_after_raw is None:
         return _reject(REF_APPROVAL_EXPIRED)

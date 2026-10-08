@@ -1,35 +1,17 @@
 """
-Issuer-signing tests for Elyon-Sol (VL-040, T-signing).
+Issuer-signing tests.
 
-Closes the VL-039 follow-up 2 forgery finding on the signed path: a party who
-knows the published record and recomputes an unkeyed decision_sha256 can mint a
-from-scratch envelope the unsigned verify_envelope accepts. Issuer signing
-(Ed25519) authenticates the gate; the target verifies the signature against a
-pinned public key before reassert().
+Without a signature, anyone who knows the published policy pin can build a
+receipt from scratch with a correct decision_sha256 (it is an unkeyed hash).
+Ed25519 issuer signatures close that: the target checks the signature against
+a pinned public key before anything else.
 
-Derivation (each test docstring cites its source):
-  - canon section 8.2 (PoE: an optional, implementation-dependent integrity
-    anchor that "does not affect admissibility logic")
-  - canon section 11.9 (integrity-verifiable)
-  - canon section 9 (fail-closed)
-  - canon section 14 (identity-agnostic: the key proves who ISSUED the
-    attestation, not who the actors are)
-  - docs/restructure/05_admissibility_envelope_spec.md "Issuer signature
-    (opt-in)" (the schema + the signed region + the no-new-reassertion-row
-    layering + the two reason codes)
+This holds only when the verifier is given pinned_public_keys. With
+pinned_public_keys=None the verifier runs in unsigned mode, which still
+accepts a from-scratch forgery; test_verifier_unsigned_mode_accepts_forge_non_default
+pins that fact so nobody mistakes unsigned mode for protection.
 
-Opt-in boundary (honest scope): forgery is closed ONLY on the signed path
-(pinned_public_keys supplied). With pinned_public_keys=None the unsigned path
-is byte-behavior-unchanged and STILL forgeable; that is pinned explicitly
-below (test_verifier_unsigned_mode_accepts_forge_non_default; renamed from the
-retired canary test_unsigned_path_unchanged_forge_still_accepted at the VL-047
-cutover), the same honesty as TESTS/adversarial/test_findings_001.py.
-
-Per VL-040 constraint (i): no hash-value pinning; the manifest sha is computed
-live and envelopes use a pinned timestamp_utc for determinism. The keypair is
-generated live; the private key is never written to disk.
-
-Ledger: VL-040 (issuer signing; opt-in).
+The keypair is generated per test and never written to disk.
 """
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -95,10 +77,9 @@ def _gate_keypair():
 
 def _construct_forge(interaction):
     """
-    The verbatim VL-039 follow-up 2 three-model construction: a from-scratch
-    envelope built from PUBLIC knowledge only (the published record's hashes +
-    the envelope shape), with a correctly recomputed unkeyed decision_sha256
-    and NO issuer signature. This is exactly what the unsigned path accepts.
+    A from-scratch receipt built only from public knowledge (the policy pin and
+    the receipt format), with a correctly computed decision_sha256 and no issuer
+    signature. Unsigned mode accepts exactly this.
     """
     forge = {
         "envelope_version": ENVELOPE_VERSION,
@@ -126,9 +107,8 @@ def _construct_forge(interaction):
 
 def test_sign_envelope_adds_issuer_fields_and_is_pure():
     """
-    Artifact 05 "Issuer signature (opt-in)": sign_envelope adds issuer_key_id
-    and issuer_signature and returns a NEW dict (purity, matching reassert()).
-    The input unsigned envelope is unchanged.
+    sign_envelope adds issuer_key_id and a 64-byte Ed25519 issuer_signature and
+    returns a new dict, leaving the unsigned input untouched.
     """
     priv, _ = _gate_keypair()
     env = _build_unsigned_envelope()
@@ -144,10 +124,8 @@ def test_sign_envelope_adds_issuer_fields_and_is_pure():
 
 def test_decision_sha256_identical_signed_vs_unsigned():
     """
-    Artifact 05 decision_sha256 rationale (VL-040): the issuer fields are
-    excluded from decision_sha256's region, so signing does not change
-    decision_sha256. This is what lets a signed envelope pass reassert() Row 2
-    unchanged and keeps the unsigned suite byte-stable.
+    The issuer fields are outside decision_sha256's hashed region, so signing does
+    not change decision_sha256 and a signed receipt still passes the integrity check.
     """
     priv, _ = _gate_keypair()
     env = _build_unsigned_envelope()
@@ -157,9 +135,8 @@ def test_decision_sha256_identical_signed_vs_unsigned():
 
 def test_signed_envelope_reasserts_unchanged():
     """
-    Artifact 05 layering: signing is not a reassert()/CCS concern. A signed
-    envelope built against current state still reasserts REASSERTED (Row 2
-    verifies because the issuer fields are in _HASH_EXCLUDED_KEYS).
+    A signed receipt issued under the current policy reasserts as REASSERTED:
+    signing does not affect the integrity or policy-pin checks.
     """
     priv, _ = _gate_keypair()
     signed = sign_envelope(_build_unsigned_envelope(), priv, GATE_KEY_ID)
@@ -167,14 +144,14 @@ def test_signed_envelope_reasserts_unchanged():
 
 
 # ---------------------------------------------------------------------------
-# Signed-path verification: honor genuine, refuse forge (the killer property)
+# Signed path: honor a genuine receipt, refuse forgeries
 # ---------------------------------------------------------------------------
 
 
 def test_signed_envelope_honored_on_signed_path():
     """
-    Canon section 8.2 / 11.9 + artifact 05: a target holding the gate's pinned
-    public key honors a genuinely gate-signed, current, bound envelope.
+    A target holding the issuer's pinned public key honors a genuinely signed,
+    current receipt bound to the call it is executing.
     """
     priv, pub = _gate_keypair()
     interaction = _normalized_interaction()
@@ -188,11 +165,9 @@ def test_signed_envelope_honored_on_signed_path():
 
 def test_three_model_forge_refused_on_signed_path():
     """
-    THE killer property (VL-040 goal). The verbatim VL-039 follow-up 2
-    construction - a from-scratch envelope, no key, correct unkeyed
-    decision_sha256 - is REFUSED on the signed path with
-    REF_VERIFY_SIGNATURE_INVALID (no issuer_signature present). Canon section 9
-    fail-closed. This directly falsifies the prior finding's attack.
+    The from-scratch forgery (no key, correct unkeyed decision_sha256) is refused
+    on the signed path with REF_VERIFY_SIGNATURE_INVALID, because it carries no
+    issuer signature.
     """
     priv, pub = _gate_keypair()
     interaction = _normalized_interaction(context={"exfil": "yes"})
@@ -206,10 +181,8 @@ def test_three_model_forge_refused_on_signed_path():
 
 def test_forge_with_unknown_key_id_refused():
     """
-    Canon section 9 fail-closed + artifact 05: a forge that fabricates an
-    issuer_key_id not in the target's pinned set (even with some bytes in
-    issuer_signature) is refused with REF_VERIFY_SIGNATURE_UNKNOWN_KEY before
-    any signature math.
+    A forgery naming an issuer_key_id the target has not pinned is refused with
+    REF_VERIFY_SIGNATURE_UNKNOWN_KEY before any signature is checked.
     """
     _, pub = _gate_keypair()
     interaction = _normalized_interaction()
@@ -224,9 +197,8 @@ def test_forge_with_unknown_key_id_refused():
 
 def test_forge_signed_with_wrong_key_refused():
     """
-    Canon section 9 + 8.2: an adversary who signs with their OWN Ed25519 key
-    but claims the gate's pinned key_id is refused - the signature does not
-    verify against the pinned public key. REF_VERIFY_SIGNATURE_INVALID.
+    An attacker who signs with their own Ed25519 key while claiming the issuer's
+    key id is refused: the signature does not verify against the pinned key.
     """
     _, gate_pub = _gate_keypair()
     attacker_priv = Ed25519PrivateKey.generate()
@@ -246,10 +218,10 @@ def test_forge_signed_with_wrong_key_refused():
 
 def test_tampered_signed_envelope_refused_on_signature():
     """
-    Canon section 9: tampering a signed envelope's request_context without
-    re-signing breaks the signature. Because the signature is checked before
-    reassert(), the verifier refuses with REF_VERIFY_SIGNATURE_INVALID (the
-    tamper also breaks decision_sha256/Row 2, but provenance is checked first).
+    Changing a signed receipt's request_context without re-signing breaks the
+    signature. The signature is checked first, so the refusal is
+    REF_VERIFY_SIGNATURE_INVALID rather than the integrity-check failure the
+    tamper would also cause.
     """
     priv, pub = _gate_keypair()
     interaction = _normalized_interaction()
@@ -263,23 +235,17 @@ def test_tampered_signed_envelope_refused_on_signature():
 
 
 # ---------------------------------------------------------------------------
-# Opt-in boundary: the unsigned path is unchanged (and still forgeable)
+# Unsigned mode: no key pinning, still forgeable
 # ---------------------------------------------------------------------------
 
 
 def test_verifier_unsigned_mode_accepts_forge_non_default():
     """
-    VL-047 characterization (NOT the gate's default behavior). The verifier's
-    UNSIGNED mode (verify_envelope with pinned_public_keys=None) still accepts a
-    from-scratch forge - that mode legitimately remains for the target-side
-    enforcement and A1-bypass demonstrations
-    (TESTS/adversarial/test_enforcement.py, TESTS/adversarial/test_bypass.py)
-    that use the unsigned verifier. It is no longer the GATE's default path: as
-    of the VL-047 cutover pep.py's default forward signs
-    (TESTS/test_pep.py::test_default_path_is_signed_and_forge_refused). This is
-    the renamed successor to the retired canary
-    test_unsigned_path_unchanged_forge_still_accepted; the fact it pins is
-    unchanged - only its framing (a non-default verifier mode, not the gate).
+    Characterizes unsigned mode, which is not protection: verify_envelope with
+    pinned_public_keys=None accepts a from-scratch forgery. Unsigned mode exists
+    for demonstrating what a target sees without key pinning (test_bypass.py).
+    The issuer always signs (gargoyle.issuer.issue), so a deployed target must
+    pin keys.
     """
     interaction = _normalized_interaction()
     forge = _construct_forge(interaction)
@@ -290,10 +256,8 @@ def test_verifier_unsigned_mode_accepts_forge_non_default():
 
 def test_genuine_signed_envelope_unsigned_path_still_honored():
     """
-    A genuinely signed envelope verified on the UNSIGNED path
-    (pinned_public_keys=None) is still honored: the extra issuer fields do not
-    disturb reassert() (they are in _HASH_EXCLUDED_KEYS) or the binding check.
-    Signing is additive; it never breaks an existing unsigned verifier.
+    A signed receipt checked in unsigned mode is still honored: the issuer fields
+    disturb neither the integrity check nor the binding check.
     """
     priv, _ = _gate_keypair()
     interaction = _normalized_interaction()

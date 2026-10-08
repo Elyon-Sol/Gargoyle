@@ -1,5 +1,9 @@
-"""Regression tests for the red-team fixes F1 (exact binding), F2 (decision_id
-backstop), F3 (skew-aware replay retention)."""
+"""
+Binding and replay hardening: exact binding of the request body (extra fields
+are refused), decision_id required on the signed path as the replay key, and
+replay records kept for not_after plus the clock-skew allowance so a receipt
+cannot be replayed inside the skew window.
+"""
 import json
 from datetime import datetime, timedelta, timezone
 
@@ -42,7 +46,7 @@ def client_for(env, cache=None):
 def post(client, env, body):
     return client.post("/target", json=body, headers={"X-Gargoyle-Envelope": json.dumps(env)})
 
-# ---- F1: exact binding ----
+# ---- exact binding ----
 def test_f1_extra_body_fields_rejected():
     env = signed()
     r = verify_envelope(env, {**inter(), "evil_cmd": "rm -rf /"}, TARGET,
@@ -54,7 +58,7 @@ def test_f1_exact_body_still_accepted():
     r = verify_envelope(env, inter(), TARGET, pinned_public_keys={KID: priv.public_key()})
     assert r["accepted"] is True
 
-# ---- F2: decision_id backstop ----
+# ---- decision_id required ----
 def test_f2_no_decision_id_fails_closed():
     env = signed(decision_id=None)
     r = post(client_for(env), env, inter())
@@ -67,7 +71,7 @@ def test_f2_control_decision_id_present_replay_caught():
     r2 = post(c, env, inter())
     assert r2.status_code == 403 and r2.json()["detail"]["reason"] == REF_VERIFY_REPLAY
 
-# ---- F3: skew-aware retention closes the replay window (retention principle) ----
+# ---- replay records outlive not_after by the skew allowance ----
 def test_f3_retention_closes_skew_window():
     now0 = datetime(2026,7,9,12,0,0,tzinfo=timezone.utc)
     na = now0 + timedelta(seconds=10)

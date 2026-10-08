@@ -1,6 +1,8 @@
-"""SES-8 regression: the enforcing target threads a monotonic serial high-water
-mark into the signed-record fetch, so a rolled-back (lower-serial) but still-fresh
-record is refused instead of honored inside its not_after window."""
+"""
+Rollback protection: the enforcing target passes its highest seen record
+serial into the signed-record fetch, so an older (lower-serial) record that
+is still inside its not_after window is refused instead of honored.
+"""
 import json
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from fastapi.testclient import TestClient

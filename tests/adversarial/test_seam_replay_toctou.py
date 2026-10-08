@@ -1,11 +1,9 @@
 """
-Replay-cache TOCTOU concurrency test (external-review hardening, 2026-07).
+Replay cache under contention.
 
-Reviewer seam: "a TOCTOU in the replay cache." InMemoryReplayCache.check_and_claim
-guards its prune+check+set with a threading.Lock (replay_cache.py R-01). The
-existing seam tests are all sequential and never prove the lock holds under real
-contention. This races many threads at ONE decision_id simultaneously and asserts
-EXACTLY ONE honor - the single-use property under concurrency.
+InMemoryReplayCache.check_and_claim holds a lock around prune, check and set.
+This races many threads at one decision_id at once and asserts exactly one is
+honored: single use holds under concurrency, not just sequentially.
 """
 import threading
 from concurrent.futures import ThreadPoolExecutor

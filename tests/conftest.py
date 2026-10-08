@@ -1,9 +1,8 @@
-"""Gargoyle staging fixtures.
+"""Shared test fixtures.
 
-Same contract as the original `gate_signing` fixture (an ephemeral Ed25519
-keypair per test, never written to disk) minus the gate module: the staged
-tree has no pep.py, so nothing is monkeypatched. Tests that need a key ask
-for `gate_signing` by name and sign with it directly.
+`gate_signing` gives a test an ephemeral Ed25519 issuer keypair, created per
+test and never written to disk. Tests that need a key request it by name and
+sign with it directly. The autouse fixture lets tests target loopback URLs.
 """
 
 import pytest

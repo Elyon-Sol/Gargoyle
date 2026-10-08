@@ -1,29 +1,14 @@
 """
-Reference enforcing-target tests for Elyon-Sol
-(docs/restructure/12_g5_transport_design.md step 4).
+Tests for gargoyle.reference_target, the deployable enforcing target.
 
-These exercise IMPLEMENTATION/reference_target.py - the standalone, deployable
-enforcing target that supersedes the target.py stub and promotes the in-process
-scaffolding of TESTS/adversarial/test_cross_host.py
-(_build_cross_host_target_app) and TESTS/adversarial/test_enforcement.py
-(build_enforcing_target_app) into a real service.
+The app is driven through TestClient with an injected config_provider (the
+out-of-band pins) and an injected fetch (the published-record request goes to
+a publisher TestClient), so the suite needs no network.
 
-The app is driven via TestClient with an injected config_provider (the
-out-of-band pins) and an injected fetch (the published-record hop wired through
-a publisher TestClient, so the suite stays deterministic and network-free; the
-genuinely-two-process, real-socket, real-env-config demonstration is the
-EVIDENCE runner EVIDENCE/proofs/g5_reference_target_001_runner.py).
-
-The gate signing keypair comes from the autouse `gate_signing` conftest fixture;
-envelopes are SIGNED with its private half because reference_target pins the gate
-key, which makes verify_envelope require a signature (the signed path; the
-production gate signs every default forward, VL-047).
-
-Per VL-039 constraint (i): no hash-value pinning; the anchor is derived live
-from the actual published_hashes.json bytes, and envelopes carry a pinned
-timestamp_utc.
-
-Ledger: VL-061 (T-G5-transport; artifact 12 step 4 reference enforcing target).
+The issuer keypair comes from the `gate_signing` conftest fixture. Receipts
+are signed with it because the reference target pins the issuer key, which
+makes verify_envelope require a signature. The anchor is computed from the
+committed published_hashes.json bytes, and receipts use a fixed timestamp_utc.
 """
 
 import json
@@ -56,7 +41,7 @@ PUBLISHED_HASHES_PATH = "EVIDENCE/published_hashes.json"
 
 
 # ---------------------------------------------------------------------------
-# Fixtures (self-contained, per the established adversarial-test precedent)
+# Fixtures
 # ---------------------------------------------------------------------------
 
 
@@ -66,7 +51,7 @@ def _published_bytes():
 
 
 def _pinned_root():
-    """The pinned anchor, derived live (constraint (i)): sha256 of the bytes."""
+    """The pinned anchor: the SHA-256 of the record bytes."""
     return anchor_sha256(_published_bytes())
 
 
@@ -82,7 +67,7 @@ def _normalized_interaction(ap=None, op=None, context=None):
 
 def _signed_envelope(gate_signing, interaction=None, target_url=TARGET_URL,
                      timestamp_utc="2026-06-08T00:00:00+00:00"):
-    """Build then SIGN an envelope with the conftest gate key."""
+    """Build and sign a receipt with the conftest issuer key."""
     if interaction is None:
         interaction = _normalized_interaction()
     env = build_envelope(
@@ -143,7 +128,7 @@ def _post(client, interaction, envelope=None):
 
 
 # ---------------------------------------------------------------------------
-# Honor: a valid, signed, current, bound routed call is honored and acted on.
+# Honor: a valid, signed, current, bound call is honored and acted on.
 # ---------------------------------------------------------------------------
 
 
@@ -164,8 +149,7 @@ def test_reference_target_honors_valid_signed_routed_call(gate_signing):
 
 
 def test_reference_target_refuses_absent_envelope_a1(gate_signing):
-    """A1: a direct, un-attested caller (no header) is refused by the target's
-    own policy, not by the gate."""
+    """A direct caller sending no receipt header is refused by the target itself."""
     app, client = _make_target(gate_signing)
     resp = _post(client, _normalized_interaction(), envelope=None)
     assert resp.status_code == 403
@@ -174,8 +158,10 @@ def test_reference_target_refuses_absent_envelope_a1(gate_signing):
 
 
 def test_reference_target_refuses_keyless_forge(gate_signing):
-    """The VL-039-follow-up-2 keyless forge: an envelope with the signature
-    stripped. The signed path (pinned key) rejects it."""
+    """
+    A receipt with its signature stripped, as a keyless attacker would send, is
+    refused because the target pins the issuer key.
+    """
     app, client = _make_target(gate_signing)
     env = _signed_envelope(gate_signing)
     forge = {k: v for k, v in env.items() if k != "issuer_signature"}
@@ -186,8 +172,10 @@ def test_reference_target_refuses_keyless_forge(gate_signing):
 
 
 def test_reference_target_refuses_tampered_signed_envelope_a2(gate_signing):
-    """A2: a signed envelope whose request_context is mutated after signing.
-    The mutation is inside the signed region, so signature verification fails."""
+    """
+    A signed receipt whose request_context is changed after signing is refused:
+    the edit is inside the signed region, so the signature fails.
+    """
     app, client = _make_target(gate_signing)
     env = _signed_envelope(gate_signing)
     env["request_context"]["AP"] = ["identity", "role", "admin"]  # tamper post-sign
@@ -198,8 +186,10 @@ def test_reference_target_refuses_tampered_signed_envelope_a2(gate_signing):
 
 
 def test_reference_target_refuses_replay_binding_mismatch_a3(gate_signing):
-    """A3: a genuine signed envelope for interaction X delivered alongside a
-    different live interaction Y. The binding check refuses."""
+    """
+    A genuine signed receipt for call X, delivered with a different call Y, is
+    refused by the binding check.
+    """
     app, client = _make_target(gate_signing)
     interaction_x = _normalized_interaction(ap=["identity", "role"])
     env = _signed_envelope(gate_signing, interaction=interaction_x)
@@ -211,8 +201,10 @@ def test_reference_target_refuses_replay_binding_mismatch_a3(gate_signing):
 
 
 def test_reference_target_refuses_target_url_swap(gate_signing):
-    """A signed envelope bound to a different target_url than this target
-    serves. target_url is inside the signed region; the binding refuses."""
+    """
+    A signed receipt bound to another target_url is refused: target_url is
+    inside the signed region and part of the binding.
+    """
     app, client = _make_target(gate_signing, target_url=TARGET_URL)
     env = _signed_envelope(gate_signing, target_url=OTHER_URL)
     resp = _post(client, _normalized_interaction(), env)
@@ -222,9 +214,11 @@ def test_reference_target_refuses_target_url_swap(gate_signing):
 
 
 def test_reference_target_refuses_record_failing_anchor(gate_signing):
-    """The publisher serves bytes that do not hash to the pinned anchor
-    (substituted / tampered record on the wire). fetch returns None -> the
-    target refuses before any currency check."""
+    """
+    The publisher serves bytes that do not hash to the pinned anchor, as a
+    substituted record would. The fetch returns None and the target refuses
+    before checking the receipt.
+    """
     tampered = _published_bytes().replace(b"manifest-subset/1", b"manifest-subset/9")
     assert tampered != _published_bytes()
     app, client = _make_target(gate_signing, serve_bytes=tampered)
@@ -236,8 +230,10 @@ def test_reference_target_refuses_record_failing_anchor(gate_signing):
 
 
 def test_reference_target_fails_closed_when_unconfigured(gate_signing):
-    """Incomplete out-of-band configuration -> the target fails closed per
-    request rather than acting on an unconfigured trust base."""
+    """
+    With incomplete out-of-band configuration the target refuses every call
+    rather than acting on a missing trust base.
+    """
     app = build_reference_target_app(
         config_provider=lambda: None,
         fetch=_fetch_via(_publisher_client(_published_bytes())),
@@ -251,10 +247,11 @@ def test_reference_target_fails_closed_when_unconfigured(gate_signing):
 
 
 def test_reference_target_received_endpoint_reflects_acted_count(gate_signing):
-    """The read-only /received observability endpoint reports the acted-on count:
-    0 before any honored call, 1 after one. This is what a multi-process /
-    real-transport runner reads to confirm an honor verdict over a real socket
-    without redelivering the envelope (it is not part of the admission policy)."""
+    """
+    The read-only /received endpoint reports how many calls the target acted on:
+    0 before any honored call, 1 after one. It lets an external test confirm an
+    honored call without resending the receipt; it plays no part in admission.
+    """
     app, client = _make_target(gate_signing)
     assert client.get("/received").json()["count"] == 0
     interaction = _normalized_interaction()
@@ -264,8 +261,10 @@ def test_reference_target_received_endpoint_reflects_acted_count(gate_signing):
 
 
 def test_reference_target_refuses_replay(gate_signing):
-    """Exactly-once over the freshness window: the SAME admitted envelope (same
-    decision_id) honored once, then refused on replay; acted exactly once."""
+    """
+    Single use: the same receipt (same decision_id) is honored once and refused
+    on replay; the target acts exactly once.
+    """
     app, client = _make_target(gate_signing)
     interaction = _normalized_interaction()
     env = _signed_envelope(gate_signing, interaction=interaction)
@@ -278,7 +277,10 @@ def test_reference_target_refuses_replay(gate_signing):
 
 
 def test_reference_target_decision_id_is_signed(gate_signing):
-    """decision_id is inside the signed region: mutating it breaks the signature."""
+    """
+    decision_id is inside the signed region, so changing it to dodge the replay
+    check breaks the signature.
+    """
     app, client = _make_target(gate_signing)
     interaction = _normalized_interaction()
     env = _signed_envelope(gate_signing, interaction=interaction)
@@ -290,9 +292,11 @@ def test_reference_target_decision_id_is_signed(gate_signing):
 
 
 def test_shared_replay_cache_cross_instance(gate_signing):
-    """B3 wired (VL-094): two target instances sharing one ReplayCache enforce exactly-once across
-    them - a decision_id honored on instance A is refused REF_VERIFY_REPLAY on instance B. (One
-    shared InMemoryReplayCache object is the in-process analog of a shared Redis store.)"""
+    """
+    Two target instances sharing one replay cache enforce single use across both:
+    a decision_id honored on instance A is refused REF_VERIFY_REPLAY on instance
+    B. One shared InMemoryReplayCache stands in for a shared Redis store.
+    """
     from gargoyle.replay_cache import InMemoryReplayCache
 
     shared = InMemoryReplayCache()
@@ -310,8 +314,10 @@ def test_shared_replay_cache_cross_instance(gate_signing):
 
 
 def test_reference_target_refuses_duplicate_envelope_header_p01(gate_signing):
-    """P-01: a VALID envelope presented as a DUPLICATE header is treated as absent
-    (fail closed), not first-wins honored. Fails if the envelope guard is reverted."""
+    """
+    A valid receipt sent in two duplicate headers is treated as absent and
+    refused, rather than honoring whichever header comes first.
+    """
     app, client = _make_target(gate_signing)
     interaction = _normalized_interaction()
     env = _signed_envelope(gate_signing, interaction=interaction)

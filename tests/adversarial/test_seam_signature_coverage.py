@@ -1,12 +1,10 @@
 """
-Signature field-coverage property test (external-review hardening, 2026-07).
+Signature coverage, field by field.
 
-Reviewer seam: "an envelope field the signature doesn't actually cover." The
-issuer signature covers canonical_json(envelope minus issuer_signature and
-timestamp_utc). This proves, field by field, that mutating ANY signed leaf
-causes signed-path verify_envelope to REJECT - and that the two deliberately
-excluded fields behave exactly as specified (timestamp_utc mutable without
-breaking; the signature bytes themselves break verification).
+The issuer signature covers canonical_json(receipt minus issuer_signature and
+timestamp_utc). Changing any other leaf must make signed-path verification
+refuse. The two excluded fields behave as specified: timestamp_utc can change
+without breaking verification, and changing the signature bytes breaks it.
 """
 import copy
 from datetime import datetime, timedelta, timezone

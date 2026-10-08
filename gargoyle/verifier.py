@@ -1,100 +1,33 @@
-"""
-Target-side admissibility-envelope verifier for Elyon-Sol.
+"""Target-side receipt verification.
 
-Built at VL-037 per docs/restructure/08_enforcement_design.md section 8
-step 1 (the delivery-agnostic, target-side verifier). This is the first
-G4 (non-bypassable enforcement) build increment. It wires nothing into
-pep.py; delivery (attaching an envelope to a call so a target actually
-receives it) is VL-038's domain (artifact 08 section 8 step 2). Verifier
-first, delivery later, mirrors the CCS sequencing (VL-025 built
-envelope.py with no caller; VL-029 wired pep.py to it).
+verify_envelope(envelope, interaction, target_url) decides whether a target
+should act on a call carrying a receipt. It returns
+{"accepted": bool, "reason": str} and checks, in order:
 
-==============================================================
-What this module does
-==============================================================
+  1. Structure: the receipt has the fields the later checks read.
+  2. Signature (when the target supplies trusted keys or a key-record view):
+     a known, unrevoked, in-window issuer key signed the receipt, and the
+     receipt's not_after has not passed. Checked before anything else, so a
+     forgery is refused on provenance before any further work.
+  3. Currency and integrity, via envelope.reassert(): decision_sha256
+     verifies and the receipt's policy pin matches the live pin.
+  4. Binding: the receipt's request_context and target_url match the call
+     being executed exactly. A genuine, current receipt for call X presented
+     with call Y passes reassert() and is refused here.
 
-verify_envelope(envelope, interaction, target_url) decides whether a
-target should honor an admissibility envelope for the interaction it is
-about to act on. It returns {"accepted": bool, "reason": str} and does
-two things, in order:
+The verifier is pure: it performs no action and keeps no state. Refusing a
+second use of the same receipt (REF_VERIFY_REPLAY) is the executing party's
+job, de-duplicating on the signed decision_id (see replay_cache).
 
-  1. Currency + integrity, via envelope.reassert(). The envelope's
-     pinned state hashes (canon, evaluator, manifest) must still match
-     live state, and decision_sha256 must verify. Any reassert() outcome
-     other than REASSERTED rejects. This closes forgery / tamper
-     (adversary A2) and detects state transitions (canon section 12.1 /
-     12.4); reassert() Row 2 returns INVALIDATED on a decision_sha256
-     mismatch (a fabricated or mutated envelope).
-  2. Interaction binding. The envelope's request_context (AP, OP,
-     context, expected_manifest_version, expected_manifest_sha256) and
-     its target_url must match the live interaction and target_url. A
-     genuine, current envelope for interaction X presented against a
-     different interaction Y reassert()s REASSERTED (no state
-     transition) but is rejected here. This closes same-state replay
-     (adversary A3), which reassert() alone does NOT close because
-     reassert() compares repository-state hashes and never compares
-     request_context against a live interaction (artifact 08 sections
-     4.2 and 7).
+A caller that never presents a receipt is only stopped if the target refuses
+unattested calls; this module makes attested calls checkable, it does not by
+itself force calls through the issuer.
 
-Canon basis: section 13 ("Eligibility does not persist across state
-transitions without revalidation") is the revalidation that reassert()
-performs; the binding check operationalizes section 13's coverage of
-the exact interaction and the section 11.1 interaction identity
-I = (A, S, C, t). No new canonical invariant is introduced: this is an
-application of existing constructs (artifact 08 section 5).
-
-==============================================================
-What this module does NOT do (canon section 14)
-==============================================================
-
-The verifier is non-executing: it computes an accept / reject decision
-and performs no action and no I/O beyond reassert()'s file reads. It
-does not replace an identity system; it is identity-agnostic. It is
-target-side code a target runs by its own policy; it is not the gate.
-
-==============================================================
-Deployment precondition: G5 (durable published hash source)
-==============================================================
-
-reassert() reads its comparison hashes from LOCAL disk
-(CANON/canon.lock, IMPLEMENTATION/evaluator.py, the live manifest).
-That is valid for this in-repo, co-located build and its tests. A real
-target on a different host needs an authentic, current, PUBLISHED
-source for those hashes; that durable source is gap G5 (artifact 08
-section 6, Decision E1). G5 is NAMED here as the deployment
-precondition and is NOT built in this module.
-
-The A1 adversary (a caller that never routes through the gate) is
-closeable only by a target-side policy that refuses un-attested calls,
-not by this verifier (artifact 08 section 4.4). Every mechanism here is
-therefore necessary-but-not-sufficient for full non-bypassability: it
-makes routed calls verifiable and forge / replay resistant, while A1
-remains a separate, target-policy sub-problem.
-
-==============================================================
-Normalization parity
-==============================================================
-
-Canon section 11.5 / 11.6 define AP and OP as sets, so the binding
-check compares them as sets. The verifier normalizes BOTH sides with
-the same rule the PEP applied (request_validator._normalize_set_field:
-sorted(set(...))) before comparing: the live interaction's AP / OP and
-the envelope's recorded AP / OP. In production build_envelope records
-the already-PEP-normalized lists, so the envelope side is already
-sorted/deduped; normalizing it again is a no-op there but keeps the
-comparison correct for a target-side verifier handling envelopes it did
-not construct, and a caller passing an unsorted or duplicated AP / OP
-does not cause a false reject. context is compared by canonical_json
-equality (reusing envelope.canonical_json) for consistency with the
-envelope's hashing discipline; target_url and the manifest-pinning
-fields are compared by string equality.
-
-The context-equality choice is an [INFERENCE] (artifact 08 gap
-candidate 1: artifact 08 does not pin equality semantics for the
-free-form canon section 11.1 C). canonical_json equality is the chosen
-default; for two dict values it is behaviorally equivalent to Python
-value equality, and it stays consistent with the decision_sha256
-canonicalization. A later spec edit may pin this explicitly.
+Comparison rules: AP and OP are sets, so both sides are de-duplicated and
+sorted before comparing, and an unsorted or duplicated list never causes a
+false refusal. context is compared by canonical_json equality, the same
+serialization the receipt hash uses. target_url and the manifest-pin fields
+are compared as exact strings.
 """
 
 from typing import Any, Dict
@@ -110,11 +43,8 @@ from gargoyle.envelope import (
 
 
 # ---------------------------------------------------------------------------
-# Reject reason vocabulary (REF_VERIFY_* layer; parallels
-# request_validator.py's REF_SCHEMA_* convention). Closed set: one code
-# per reassert() non-REASSERTED outcome, one presence code, one binding
-# code. The reassert() outcome set is itself closed (REASSERTED,
-# INVALIDATED, RE-EVALUATE-REQUIRED) per envelope.py.
+# Refusal codes. This module is the home of every REF_VERIFY_* code, including
+# the ones other modules emit.
 # ---------------------------------------------------------------------------
 
 REF_VERIFY_ENVELOPE_ABSENT = "REF_VERIFY_ENVELOPE_ABSENT"
@@ -124,50 +54,36 @@ REF_VERIFY_BINDING_MISMATCH = "REF_VERIFY_BINDING_MISMATCH"
 REF_VERIFY_SIGNATURE_INVALID = "REF_VERIFY_SIGNATURE_INVALID"
 REF_VERIFY_SIGNATURE_UNKNOWN_KEY = "REF_VERIFY_SIGNATURE_UNKNOWN_KEY"
 REF_VERIFY_SIGNATURE_EXPIRED = "REF_VERIFY_SIGNATURE_EXPIRED"
-# Executor-layer replay defense (VL-066): emitted by an enforcing target that
-# de-dups decision_id over the freshness window. verify_envelope stays pure and
-# does NOT emit this; anti-replay is the acting party's stateful concern.
+# Emitted by an executor that de-duplicates decision_id, never by
+# verify_envelope (replay defense needs state; the verifier has none).
 REF_VERIFY_REPLAY = "REF_VERIFY_REPLAY"
 
-# B-prime-2 key-record codes (VL-042). verifier.py is the canonical REF_VERIFY_*
-# home (mirroring request_validator.py owning REF_SCHEMA_* even for codes other
-# modules emit). RECORD_INVALID / RECORD_STALE are EMITTED by
-# key_record_source.py (the reader) and imported there from here;
-# UNKNOWN / REVOKED / OUT_OF_WINDOW are emitted by verify_envelope's trust-view
-# lookup below.
+# Key records. RECORD_INVALID / RECORD_STALE are emitted by key_record_source;
+# UNKNOWN / REVOKED / OUT_OF_WINDOW by the key lookup in verify_envelope.
 REF_VERIFY_KEY_RECORD_INVALID = "REF_VERIFY_KEY_RECORD_INVALID"
 REF_VERIFY_KEY_RECORD_STALE = "REF_VERIFY_KEY_RECORD_STALE"
 REF_VERIFY_KEY_UNKNOWN = "REF_VERIFY_KEY_UNKNOWN"
 REF_VERIFY_KEY_REVOKED = "REF_VERIFY_KEY_REVOKED"
 REF_VERIFY_KEY_OUT_OF_WINDOW = "REF_VERIFY_KEY_OUT_OF_WINDOW"
-# Role separation, the reverse of approver_trust's: a key whose SIGNED record
-# role is anything but "issuer" (e.g. an R1 approver key) never signs an
-# envelope. Role-less keys (pre-VL-119 records, the gate key) remain issuers.
+# Role separation: a key whose signed record names any role other than
+# "issuer" (an approver key, for example) never signs a receipt. A key with no
+# role recorded is treated as an issuer key.
 REF_VERIFY_KEY_ROLE_NOT_ISSUER = "REF_VERIFY_KEY_ROLE_NOT_ISSUER"
 
-# B-prime-3 root-record codes (VL-044). Same canonical home. ROOT_RECORD_INVALID /
-# ROOT_RECORD_STALE are EMITTED by root_record_source.py (the root reader) and
-# imported there from here; ROOT_RETIRED / ROOT_REVOKED are emitted by
-# key_record_source.py's cross-record status gate. verify_envelope's logic is
-# unchanged by VL-044 (constants only); the root status check lives at the reader
-# layer (11_root_record_spec.md sections 1, 8).
+# Root records, which vouch for key records. ROOT_RECORD_INVALID /
+# ROOT_RECORD_STALE are emitted by the root reader; ROOT_RETIRED /
+# ROOT_REVOKED / ROOT_OUT_OF_WINDOW by key_record_source's cross-record check.
 REF_VERIFY_ROOT_RECORD_INVALID = "REF_VERIFY_ROOT_RECORD_INVALID"
 REF_VERIFY_ROOT_RECORD_STALE = "REF_VERIFY_ROOT_RECORD_STALE"
 REF_VERIFY_ROOT_RETIRED = "REF_VERIFY_ROOT_RETIRED"
 REF_VERIFY_ROOT_REVOKED = "REF_VERIFY_ROOT_REVOKED"
-# Per-root validity window (2026-10-07, VL-154 open item): the analog of
-# KEY_OUT_OF_WINDOW one layer up, emitted by key_record_source.py's cross-record
-# gate when the signing root's [not_before, not_after) window (skew-widened)
+# The signing root's [not_before, not_after) window, widened by clock skew,
 # does not cover `now` or the key record's issued_at.
 REF_VERIFY_ROOT_OUT_OF_WINDOW = "REF_VERIFY_ROOT_OUT_OF_WINDOW"
 
-# B-prime-1 signed published-record codes (VL-074, B1; A3b sub-case b). Same
-# canonical home. PUBLISHED_RECORD_INVALID / PUBLISHED_RECORD_STALE are EMITTED
-# by published_record_source.py (the signed published-hashes reader) and imported
-# there from here. Build-then-wire: the byte-anchor reader published_source.py
-# (B-prime-1 original) and the default reassert() / verify_envelope() path are
-# byte-unchanged; record-freshness enforcement (now < not_after + monotonic
-# serial) lives in the new signed reader, mirroring key_record_source.py.
+# Signed published records (the policy pin a remote target checks against).
+# Emitted by published_record_source, which enforces record freshness
+# (now < not_after) and a monotonic serial.
 REF_VERIFY_PUBLISHED_RECORD_INVALID = "REF_VERIFY_PUBLISHED_RECORD_INVALID"
 REF_VERIFY_PUBLISHED_RECORD_STALE = "REF_VERIFY_PUBLISHED_RECORD_STALE"
 
@@ -175,9 +91,8 @@ REF_VERIFY_PUBLISHED_RECORD_STALE = "REF_VERIFY_PUBLISHED_RECORD_STALE"
 ACCEPT_REASSERTED_AND_BOUND = "REASSERTED_AND_BOUND"
 
 
-# Top-level envelope keys the verifier requires before it can run
-# reassert() and the binding check. Absence of any of these means the
-# object is unusable as a decision artifact -> REF_VERIFY_ENVELOPE_ABSENT.
+# Top-level receipt keys the later checks read. Missing any of them makes
+# the object unusable as a receipt -> REF_VERIFY_ENVELOPE_ABSENT.
 _REQUIRED_ENVELOPE_KEYS = (
     "policy",
     "request_context",
@@ -185,8 +100,7 @@ _REQUIRED_ENVELOPE_KEYS = (
     "target_url",
 )
 
-# request_context sub-keys the binding check compares (the five fields
-# build_envelope records from the normalized interaction).
+# request_context fields the binding check compares.
 _REQUEST_CONTEXT_KEYS = (
     "AP",
     "OP",
@@ -195,20 +109,14 @@ _REQUEST_CONTEXT_KEYS = (
     "expected_manifest_sha256",
 )
 
-# SES-7: interaction_type is an OPTIONAL bound field (typed-impact). Not
-# required-present (flat manifests omit it), but when present it is bound - the
-# envelope and the live interaction must agree, and it is allowed past the
-# exact-binding check without opening the door to other unbound fields.
+# interaction_type is optional (untyped manifests omit it), but when either
+# side carries it, both must agree: it selected the required sets, so it is
+# part of what was decided.
 _OPTIONAL_REQUEST_CONTEXT_KEYS = ("interaction_type",)
 
 
 def _normalize_set_field(value: Any) -> list:
-    """
-    Mirror request_validator._normalize_set_field: deduplicate (set
-    semantics, canon section 11.5 / 11.6) and sort, so the binding check
-    compares AP / OP under the same normalization the PEP applied before
-    build_envelope recorded them.
-    """
+    """De-duplicate and sort, so AP / OP compare as sets."""
     return sorted(set(value))
 
 
@@ -221,23 +129,16 @@ def _accept(reason: str = ACCEPT_REASSERTED_AND_BOUND) -> Dict[str, Any]:
 
 
 def not_after_valid(not_after_raw, now=None, clock_skew=timedelta(0)):
-    """
-    Shared validity-window check for a signed `not_after` instant (VL-041
-    semantics, factored out at VL-114 so the decision-freshness check in
-    verify_envelope and the approval-grant freshness check in approval.py
-    ([FIX H7]) use ONE implementation, not two).
+    """The one validity-window check for a signed not_after, shared by receipt
+    expiry here and approval-grant expiry in approval.py.
 
     Returns True iff the instant is acceptable:
-      - `None` (absent) -> True: no expiry was stamped (the issuer's choice;
-        a caller may additionally require presence by policy - approval.py
-        does, for grants).
-      - a malformed or tz-NAIVE ISO-8601 string -> False (fail closed,
-        canon section 9).
-      - a tz-aware instant -> True iff now < not_after + clock_skew (strict;
-        clock_skew default 0 reproduces the pre-VL-114 strict comparison).
+      - None (absent): True. No expiry was stamped; a caller may require
+        presence itself (approval.py does, for grants).
+      - a malformed or timezone-naive ISO-8601 string: False (fail closed).
+      - a timezone-aware instant: True iff now < not_after + clock_skew.
 
-    `now` is injectable for deterministic tests; it defaults to
-    datetime.now(timezone.utc).
+    `now` defaults to datetime.now(timezone.utc) and is injectable for tests.
     """
     if not_after_raw is None:
         return True
@@ -261,74 +162,47 @@ def verify_envelope(
     key_record_view: Dict[str, Any] = None,
     clock_skew: timedelta = timedelta(0),
 ) -> Dict[str, Any]:
-    """
-    Decide whether a target should honor an admissibility envelope for
-    the live interaction it is about to act on.
+    """Decide whether to act on `interaction` at `target_url` given `envelope`.
 
     Args:
-        envelope: The admissibility envelope as produced by
-            envelope.build_envelope() and delivered to the target. May
-            be None or malformed if the caller declined to attest
-            (adversary A1) or fabricated a non-envelope.
-        interaction: The live interaction the target is about to act on,
-            in the normalized shape request_validator.validate_request()
-            returns (AP, OP, context, expected_manifest_version,
-            expected_manifest_sha256). AP / OP need not be pre-sorted;
-            the verifier normalizes them before comparison.
-        target_url: The live target_url the interaction is addressed to.
-        record_source: Optional fetched published record (VL-039
-            cross-host); None uses local-disk currency (unchanged default).
-        pinned_public_keys: Optional {key_id: public_key} map (VL-040).
-            When supplied, the issuer signature is REQUIRED and verified
-            fail-closed (REF_VERIFY_SIGNATURE_INVALID /
-            REF_VERIFY_SIGNATURE_UNKNOWN_KEY) before reassert(). None
-            (default) is the unsigned path, byte-behavior-unchanged.
-        key_record_view: Optional validated B-prime-2 trust view (VL-042)
-            from key_record_source.load_key_record_from_bytes, shape
-            {key_id: {"public_key", "revoked", "not_before", "not_after"}}.
-            When supplied it is the SOLE issuer-key trust source (record-
-            exclusive, decision 3); pinned_public_keys is ignored. The issuer
-            key_id must be present, not revoked, and in-window
-            (REF_VERIFY_KEY_UNKNOWN / _REVOKED / _OUT_OF_WINDOW) before the
-            signature is verified against the record-sourced key. Appended last
-            to preserve positional-call compatibility.
-        clock_skew: Optional non-negative tolerance (timedelta, default
-            timedelta(0)) for cross-host clock divergence (VL-075, B2; spec
-            15_clock_skew_tolerance_spec.md). Widens BOTH time windows this
-            verifier enforces, symmetrically: the issuer-key validity window
-            (step 1.5) becomes not_before - clock_skew <= now < not_after +
-            clock_skew, and the decision not_after (step 1.5b) becomes
-            now < not_after + clock_skew. Default 0 is byte-behavior-identical
-            to the strict pre-VL-075 checks. A negative value would narrow the
-            window (a config error) and raises ValueError. Appended last to
-            preserve positional-call compatibility.
+        envelope: The receipt presented with the call. May be None or
+            malformed (an unattested or fabricated call).
+        interaction: The call about to be executed, in the shape the issuer
+            signed (AP, OP, context, expected_manifest_version,
+            expected_manifest_sha256, optional interaction_type). AP / OP
+            need not be sorted.
+        target_url: The target the call is addressed to.
+        record_source: A fetched published record whose policy pin replaces
+            the local one in reassert(). None uses the local policy.
+        pinned_public_keys: {key_id: public_key}. When given, a valid issuer
+            signature from one of these keys is required.
+        key_record_view: A validated key-record view from
+            key_record_source.load_key_record_from_bytes, shape
+            {key_id: {"public_key", "revoked", "not_before", "not_after",
+            "role"?}}. When given it is the ONLY source of trusted issuer keys
+            and pinned_public_keys is ignored: the key must be present,
+            unrevoked, an issuer key, and inside its validity window.
+        clock_skew: Non-negative tolerance for clock divergence between
+            hosts. Widens both time checks symmetrically: the key window
+            becomes not_before - skew <= now < not_after + skew, and receipt
+            expiry becomes now < not_after + skew. A negative value raises
+            ValueError.
 
     Returns:
-        {"accepted": bool, "reason": str}. On accept, reason is
-        ACCEPT_REASSERTED_AND_BOUND. On reject, reason is one of the
-        four REF_VERIFY_* codes.
+        {"accepted": bool, "reason": str}; reason is
+        ACCEPT_REASSERTED_AND_BOUND on accept, a REF_VERIFY_* code otherwise.
 
-    Steps (artifact 08 section 8 step 1):
-        1. Structural presence guard. A non-dict, or a dict missing a
-           required key, is unusable -> REF_VERIFY_ENVELOPE_ABSENT. This
-           also guards reassert()'s key accesses so a malformed envelope
-           rejects cleanly rather than raising.
-        2. reassert() currency / integrity. INVALIDATED ->
-           REF_VERIFY_REASSERT_INVALIDATED; RE-EVALUATE-REQUIRED ->
-           REF_VERIFY_REASSERT_RE_EVALUATE_REQUIRED.
-        3. Interaction binding. Any request_context or target_url
-           mismatch -> REF_VERIFY_BINDING_MISMATCH.
-        4. Accept.
+    With neither pinned_public_keys nor key_record_view, the signature step
+    is skipped: such a target trusts any receipt whose hash verifies, which
+    anyone can compute. Only use that path when transport alone
+    authenticates the issuer.
     """
-    # ----- Step 0: clock-skew config guard (VL-075) -----
-    # A negative skew would narrow the honored window (stricter than the issuer
-    # intended) - a configuration error, not an adversary path. Fail loud at the
-    # boundary (parity with sign_envelope's naive-not_after refusal). Default
-    # timedelta(0) leaves every time check byte-behavior-identical.
+    # A negative skew would narrow the honored window: a configuration error,
+    # so fail loudly instead of refusing every call.
     if clock_skew < timedelta(0):
         raise ValueError("clock_skew must be non-negative")
 
-    # ----- Step 1: structural presence guard -----
+    # ----- Structure -----
     if not isinstance(envelope, dict):
         return _reject(REF_VERIFY_ENVELOPE_ABSENT)
     for key in _REQUIRED_ENVELOPE_KEYS:
@@ -341,28 +215,18 @@ def verify_envelope(
         if key not in rc:
             return _reject(REF_VERIFY_ENVELOPE_ABSENT)
 
-    # ----- Step 1.5: issuer signature (VL-040..042; signed or record path) -----
-    # Runs when the target supplies pinned_public_keys OR a key_record_view
-    # (the signature-required / record path; VL-042 added the record path).
-    # With both None the unsigned path is byte-behavior-unchanged.
-    # Fail-closed (canon section 9): a
-    # missing / malformed / unverifiable signature, or an unknown key_id, is
-    # a REFUSE, never a downgrade to the unsigned path. Checked BEFORE
-    # reassert() so a forgery is rejected on provenance before any currency
-    # work. Duck-typed: verifier.py does not import cryptography; the pinned
-    # public key object supplies .verify(signature, message) (e.g. an
-    # Ed25519PublicKey). Closes the VL-039 follow-up 2 forgery finding on the
-    # signed path: an unkeyed decision_sha256 recompute is no longer
-    # sufficient; the envelope must carry a signature from a pinned issuer.
+    # ----- Signature -----
+    # Required whenever the target configured trusted keys. A missing,
+    # malformed or unverifiable signature, or an unknown key, is a refusal,
+    # never a fall-back to the unsigned path. Duck-typed: the public key
+    # object supplies .verify(signature, message) (e.g. Ed25519PublicKey).
     if pinned_public_keys is not None or key_record_view is not None:
         key_id = envelope.get("issuer_key_id")
         signature_hex = envelope.get("issuer_signature")
         if not isinstance(key_id, str) or not isinstance(signature_hex, str):
             return _reject(REF_VERIFY_SIGNATURE_INVALID)
-        # VL-042: key_record_view is RECORD-EXCLUSIVE when present (decision 3);
-        # the static map is not consulted. The record vouches for the KEY's
-        # provenance (present / not revoked / in-window); the envelope must
-        # STILL be signed by it (the signature check below).
+        # The key record vouches for the key (present, unrevoked, issuer
+        # role, in window); the receipt must still be signed by that key.
         if key_record_view is not None:
             entry = key_record_view.get(key_id)
             if entry is None:
@@ -374,8 +238,6 @@ def verify_envelope(
             current = now if now is not None else datetime.now(timezone.utc)
             key_not_before = entry.get("not_before")
             key_not_after = entry.get("not_after")
-            # VL-075: widen the validity window symmetrically by clock_skew
-            # (default 0 -> the strict pre-VL-075 window).
             if (key_not_before is None or key_not_after is None
                     or not (key_not_before - clock_skew <= current
                             < key_not_after + clock_skew)):
@@ -398,32 +260,16 @@ def verify_envelope(
         except Exception:
             return _reject(REF_VERIFY_SIGNATURE_INVALID)
 
-        # ----- Step 1.5b: issuer-key validity window (VL-041; signed-path) -----
-        # not_after, when present, is inside the signed region (verified just
-        # above), so it is tamper-proof: an adversary cannot extend a captured
-        # envelope's lifetime without breaking the signature. Absence means no
-        # expiry (VL-040 byte-behavior; bounding validity is the issuer's
-        # choice, a target may additionally require presence by policy - a
-        # later knob). Fail-closed (canon section 9): a malformed or naive
-        # not_after, or a current time at/after not_after, is a REFUSE. The
-        # comparison is strict (valid iff now < not_after). `now` is injectable
-        # for deterministic tests; it defaults to datetime.now(timezone.utc).
-        # This is the time-bounded answer to the VL-040 follow-up 2 decisive
-        # failure (compromised key): it bounds a leaked key's usefulness
-        # without depending on detecting the leak.
-        # VL-114: the decision-freshness check is now the shared not_after_valid()
-        # primitive (below), so the approval-grant freshness check
-        # (IMPLEMENTATION/approval.py, [FIX H7]) REUSES the exact same logic
-        # rather than re-implementing it. Behavior is byte-identical to the
-        # prior inline VL-041/VL-075 block: absent not_after = no expiry; a
-        # malformed or tz-naive value, or now >= not_after + clock_skew, is a
-        # REFUSE (REF_VERIFY_SIGNATURE_EXPIRED).
+        # ----- Receipt expiry -----
+        # not_after is inside the signed region, so it cannot be extended
+        # without breaking the signature. Expiry bounds how long a leaked
+        # signing key stays useful without anyone having to detect the leak.
         if not not_after_valid(envelope.get("not_after"), now=now, clock_skew=clock_skew):
             return _reject(REF_VERIFY_SIGNATURE_EXPIRED)
 
-    # ----- Step 2: currency + integrity via reassert() -----
-    # Fail closed on any structural surprise reassert() trips over that
-    # the guard above did not catch (e.g. canon present but not a dict).
+    # ----- Currency and integrity -----
+    # Any structural surprise reassert() trips over (e.g. a policy block that
+    # is not a dict) fails closed.
     try:
         outcome = reassert(envelope, record_source=record_source)["outcome"]
     except Exception:
@@ -434,34 +280,24 @@ def verify_envelope(
     if outcome == RE_EVALUATE_REQUIRED:
         return _reject(REF_VERIFY_REASSERT_RE_EVALUATE_REQUIRED)
     if outcome != REASSERTED:
-        # Defensive: reassert()'s outcome set is closed. An unrecognized
-        # outcome fails closed rather than falling through to accept.
+        # The outcome set is closed; anything unrecognized fails closed.
         return _reject(REF_VERIFY_REASSERT_INVALIDATED)
 
-    # ----- Step 3: interaction binding -----
+    # ----- Binding -----
     if not isinstance(interaction, dict):
         return _reject(REF_VERIFY_BINDING_MISMATCH)
 
-    # F1 fix: binding is EXACT - reject any live-interaction field beyond the
-    # bound set (else a valid-token holder smuggles unbound body data past the check).
+    # Binding is exact: any field in the live call beyond the bound set is a
+    # refusal, or a receipt holder could smuggle unbound data past the check.
     if set(interaction.keys()) - set(_REQUEST_CONTEXT_KEYS) - set(_OPTIONAL_REQUEST_CONTEXT_KEYS):
         return _reject(REF_VERIFY_BINDING_MISMATCH)
 
-    # target_url: plain string equality (the schema does no target_url
-    # normalization; request_validator only checks absolute-URL syntax).
+    # target_url: exact string equality, no URL normalization.
     if envelope["target_url"] != target_url:
         return _reject(REF_VERIFY_BINDING_MISMATCH)
 
-    # AP / OP: symmetric normalized-set comparison. Canon section
-    # 11.5 / 11.6 define AP and OP as sets, so the binding comparison is
-    # set equality, not list-order equality. In production
-    # build_envelope records the already-PEP-normalized lists (sorted +
-    # deduped via request_validator._normalize_set_field), but
-    # normalizing BOTH the envelope side and the live side keeps the
-    # comparison correct regardless of an envelope's internal ordering -
-    # which matters for a target-side verifier handling envelopes it did
-    # not itself construct. A missing or non-list AP / OP on either side
-    # is a binding failure, not an envelope-structure failure.
+    # AP / OP: set equality on both sides. A missing or non-list value on
+    # either side is a binding failure.
     try:
         env_ap = _normalize_set_field(rc["AP"])
         env_op = _normalize_set_field(rc["OP"])
@@ -474,24 +310,21 @@ def verify_envelope(
     if env_op != live_op:
         return _reject(REF_VERIFY_BINDING_MISMATCH)
 
-    # Manifest-pinning fields: string equality.
+    # Manifest-pin fields: exact string equality.
     if rc["expected_manifest_version"] != interaction.get("expected_manifest_version"):
         return _reject(REF_VERIFY_BINDING_MISMATCH)
     if rc["expected_manifest_sha256"] != interaction.get("expected_manifest_sha256"):
         return _reject(REF_VERIFY_BINDING_MISMATCH)
 
-    # context: canonical_json equality [INFERENCE] (artifact 08 gap
-    # candidate 1). A missing live context is a binding failure.
+    # context: canonical_json equality. A missing live context is a mismatch.
     if "context" not in interaction:
         return _reject(REF_VERIFY_BINDING_MISMATCH)
     if canonical_json(rc["context"]) != canonical_json(interaction["context"]):
         return _reject(REF_VERIFY_BINDING_MISMATCH)
 
-    # SES-7: interaction_type binding. Both absent (flat) is fine; both present must
-    # be equal; a one-sided declaration is a mismatch. Binds the load-bearing
-    # eligibility input the gate used into what the target independently verifies.
+    # interaction_type: both absent, or both present and equal. A one-sided
+    # declaration is a mismatch.
     if rc.get("interaction_type") != interaction.get("interaction_type"):
         return _reject(REF_VERIFY_BINDING_MISMATCH)
 
-    # ----- Step 4: accept -----
     return _accept()

@@ -1,18 +1,11 @@
-"""
-Canon/spec-derived tests for approver provenance + role (Feature 1, residual R1).
-Repo path: TESTS/adversarial/test_approver_trust.py.
+"""Approver trust comes from the signed key record, by role.
 
-Covers IMPLEMENTATION/approver_trust.py (the [FIX H5] LOAD-BEARING half) against
-docs/design/governance_layer_design.md section 1.4 [FIX H5]. The resolver turns a
-VALIDATED signed key-record trust view into the {key_id: public_key} approver map
-verify_grant() consumes, enforcing SoD as ROLE-DISTINCTNESS in the SIGNED record
-(only role=="approver", non-revoked, in-window, key_id != gate_key_id).
-
-Records are built inline (the same construction test_key_record.py uses) so the
-signed region is canonical_json(record minus publisher_signature): the per-key
-`role` is therefore signature-covered. Each test drives the REAL chain
-(load_key_record_from_bytes) and, where end-to-end, the REAL grant verifier
-(verify_grant) - never a stub. Run from the repo root, per sandbox discipline.
+resolve_approver_keys() turns a validated key-record trust view into the
+{key_id: public_key} map verify_grant() uses. Only keys whose signed role is
+"approver", not revoked, inside their window, and not sharing the issuer's
+key id are included. Records are built and signed inline, so each key's
+role is covered by the publisher signature, and every test runs the real
+loader and, where end to end, the real grant verifier.
 """
 
 import base64
@@ -114,7 +107,7 @@ def test_role_surfaced_into_trust_view():
 
 
 def test_roleless_key_surfaces_role_none():
-    # A pre-VL-119 record (no role field) loads with role None -> never approver.
+    # A record entry with no role field loads with role None and is never an approver.
     root = Ed25519PrivateKey.generate()
     appr = Ed25519PrivateKey.generate()
     nb, na = _window()
@@ -178,7 +171,7 @@ def test_not_yet_valid_approver_excluded():
 
 
 def test_gate_key_id_belt_and_braces():
-    # Even a well-formed approver-role key is excluded if it shares the gate id.
+    # Even a well-formed approver-role key is excluded if it shares the issuer's key id.
     root = Ed25519PrivateKey.generate()
     appr = Ed25519PrivateKey.generate()
     nb, na = _window()
@@ -188,23 +181,23 @@ def test_gate_key_id_belt_and_braces():
 
 
 # --------------------------------------------------------------------------
-# Revert-catcher (the design's core for R1): an ISSUER-role key, presented as
-# the approver, must NOT release a held decision. With role-distinctness it is
-# excluded -> verify_grant -> REF_APPROVAL_KEY_UNKNOWN. If the resolver ignored
-# role (the revert), the issuer key would be in the map and the grant would be
-# GRANT_VALID - a gate-minted self-approval. That contrast is asserted here.
+# An issuer-role key presented as an approver must not release a held decision.
+# The role check excludes it, so verify_grant refuses with
+# REF_APPROVAL_KEY_UNKNOWN. The test also shows that ignoring the role would
+# accept the grant: a self-approval by the issuer. That contrast proves the role
+# check is what stops it.
 # --------------------------------------------------------------------------
 
 def test_issuer_role_cannot_authorize_revert_catcher():
     root = Ed25519PrivateKey.generate()
-    issuer = Ed25519PrivateKey.generate()  # the gate's own key
+    issuer = Ed25519PrivateKey.generate()  # the issuer's own key
     nb, na = _window()
-    # The issuer key carries role "issuer"; the gate signs a grant with it.
+    # The issuer key carries role "issuer"; the issuer signs a grant with it.
     tv = _trust_view(root, [_key_entry("gate-issuer", issuer.public_key(), nb, na,
                                        role="issuer")])
     grant = _signed_grant(issuer, "gate-issuer")
 
-    # Role-distinctness (the build): issuer key is not an approver -> excluded.
+    # The issuer key is not an approver, so it is excluded.
     resolved = resolve_approver_keys(tv, gate_key_id=GATE_KEY_ID, now=NOW)
     assert resolved == {}
     verdict = verify_grant(
@@ -218,7 +211,7 @@ def test_issuer_role_cannot_authorize_revert_catcher():
     assert verdict["accepted"] is False
     assert verdict["reason"] == REF_APPROVAL_KEY_UNKNOWN
 
-    # The revert (ignore role) WOULD honor the gate's self-minted approval:
+    # Ignoring the role would honor the issuer's self-minted approval:
     reverted = {kid: info["public_key"] for kid, info in tv.items()}
     bad = verify_grant(
         grant,
@@ -228,11 +221,11 @@ def test_issuer_role_cannot_authorize_revert_catcher():
         gate_key_id=GATE_KEY_ID,
         now=NOW,
     )
-    assert bad["accepted"] is True  # proves role-distinctness is load-bearing
+    assert bad["accepted"] is True  # the role check is what refuses it
 
 
 # --------------------------------------------------------------------------
-# Provenance: trust flows ONLY from the validated signed chain
+# Approver trust comes only from the validated signed record
 # --------------------------------------------------------------------------
 
 def test_tampered_record_yields_no_approver():
@@ -277,7 +270,7 @@ def test_key_not_in_signed_record_is_unknown():
 
 
 # --------------------------------------------------------------------------
-# Positive composition proof: signed chain -> resolve -> verify_grant GREEN
+# End to end: signed record -> resolve -> verify_grant accepts
 # --------------------------------------------------------------------------
 
 def test_end_to_end_approver_grant_accepted():
@@ -329,7 +322,7 @@ def test_negative_clock_skew_rejected():
 
 def test_clock_skew_widens_window():
     # An approver key that expired 10s ago is honored within a 30s skew window,
-    # mirroring verify_envelope's VL-075 issuer-key widening.
+    # the same widening verify_envelope applies to issuer keys.
     root = Ed25519PrivateKey.generate()
     appr = Ed25519PrivateKey.generate()
     tv = _trust_view(root, [_key_entry("appr-1", appr.public_key(),

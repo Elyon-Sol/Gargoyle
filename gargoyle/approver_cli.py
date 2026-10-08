@@ -1,18 +1,15 @@
-"""
-Approver CLI - the minimal human surface for governance Feature 1 ([FIX H5]).
+"""Approver CLI: the human side of an approval hold.
 
-The whole point of the approval grant is that it is produced OUT-OF-BAND, by a
-human, with a key the gate cannot reach. This is that surface, deliberately
-minimal: it shows the human exactly what they are releasing (the decision the
-gate held) and, on their action, emits a signed grant the gate will verify.
+A grant only separates duties if a human produces it out of band, with a key
+the issuing service cannot reach. This is that tool, kept minimal: it shows
+the human exactly which held decision they are releasing and, on
+confirmation, emits a signed grant.
 
-It is a SEPARATE process holding the approver PRIVATE key (never the gate's, and
-never in the repo). The gate holds only the approver public key. make_grant() is
-the testable core; main() is the thin CLI around it.
-
-reuse, not re-implement: the grant is built and signed by gargoyle.approval
-(the same Ed25519 + binding the gate verifies), so a grant this CLI emits is
-exactly what verify_grant accepts.
+Run it as a separate process that holds the approver private key; the
+issuing service holds only the approver public key. make_grant() is the
+testable core and main() the thin CLI around it. Grants are built and signed
+by gargoyle.approval, so what this emits is exactly what verify_grant
+accepts.
 """
 
 import argparse
@@ -35,10 +32,9 @@ def make_grant(
     grant_id: Optional[str] = None,
     now: Optional[datetime] = None,
 ) -> Dict[str, Any]:
-    """Build + sign an approval grant for a held decision. The private key is
-    supplied as hex (Ed25519 raw private bytes) and used only here; it is never
-    returned or logged. grant_id defaults to a fresh uuid (mandatory single-use
-    key, [FIX H3])."""
+    """Build and sign an approval grant for a held decision. The private key
+    is raw Ed25519 bytes in hex, used only here and never returned or logged.
+    grant_id defaults to a fresh uuid; it is the grant's single-use key."""
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
     signing_key = Ed25519PrivateKey.from_private_bytes(bytes.fromhex(approver_private_hex))
@@ -53,9 +49,9 @@ def make_grant(
 
 
 def main(argv=None) -> int:
-    """Read a gate 202 PENDING_APPROVAL response (JSON: approval_request_id +
-    decision_sha256) from --pending (a file) or stdin, show the human what they
-    are releasing, and on confirmation emit the signed grant JSON to stdout.
+    """Read a pending-approval hold (JSON with approval_request_id and
+    decision_sha256) from --pending or stdin, show the human what they are
+    releasing, and on confirmation print the signed grant JSON to stdout.
 
     The approver key comes from the environment (GARGOYLE_APPROVER_KEY_HEX +
     GARGOYLE_APPROVER_KEY_ID) so it is never passed on the command line. --yes

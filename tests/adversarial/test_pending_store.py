@@ -1,19 +1,10 @@
-"""
-Shared pending-approval-set seam tests (Feature 1 residual R2; [FIX H4]/[FIX H3]).
-Repo path: TESTS/adversarial/test_pending_store.py.
+"""Pending-approval stores: a hold is consumed exactly once, only for its own
+decision, and only before it expires.
 
-Exercise IMPLEMENTATION/pending_store.py - the seam that lets the gate-side 202
-pending set (approval_request_id -> decision_sha256, consumed once) be backed by a
-cross-instance store instead of pep's per-process dict. Mirrors
-test_shared_replay_cache.py: two "instances" are two call sites that share - or do
-not share - a store.
-
-Load-bearing properties:
-- InMemoryPendingApprovals is behavior-identical to pep's pre-R2 _PendingApprovals.
-- Two SEPARATE in-memory sets MISS a cross-instance consume (the gap); ONE SHARED
-  store CATCHES it.
-- compare-AND-delete: a wrong-decision consume returns False and burns nothing.
-- pending_store_from_env reuses the R-02 declare-or-fail guard.
+Two issuing-service instances are modeled as two call sites that do or do not
+share a store. A wrong-decision consume returns False and burns nothing, so
+a probe cannot destroy a legitimate hold. A multi-instance deployment without
+a shared store refuses to start.
 """
 
 from datetime import datetime, timezone, timedelta
@@ -34,7 +25,7 @@ DS_B = "decision-sha-B"
 
 
 # ---------------------------------------------------------------------------
-# InMemoryPendingApprovals: behavior-identical to pep's pre-R2 _PendingApprovals
+# InMemoryPendingApprovals
 # ---------------------------------------------------------------------------
 
 def test_in_memory_consume_once_then_unknown():
@@ -58,15 +49,15 @@ def test_in_memory_wrong_decision_refused_and_not_consumed():
 
 
 # ---------------------------------------------------------------------------
-# The gap and the seam: separate sets MISS, a shared store CATCHES
+# Separate sets miss a cross-instance consume; a shared store catches it
 # ---------------------------------------------------------------------------
 
 def test_separate_in_memory_sets_miss_cross_instance():
-    # A 202 issued on instance A is unknown to instance B's own set.
+    # A hold issued on instance A is unknown to instance B's own set.
     a = InMemoryPendingApprovals()
     b = InMemoryPendingApprovals()
     a.issue("r1", DS_A)
-    assert b.check_and_consume("r1", DS_A) is False     # B never saw it: the gap
+    assert b.check_and_consume("r1", DS_A) is False     # B never saw it
 
 
 def test_shared_in_memory_set_catches_cross_instance():
@@ -76,12 +67,12 @@ def test_shared_in_memory_set_catches_cross_instance():
 
 
 # ---------------------------------------------------------------------------
-# ExternalStorePendingApprovals: the cross-process adapter + a fake shared store
+# ExternalStorePendingApprovals over a fake shared store
 # ---------------------------------------------------------------------------
 
 class FakePendingStore:
     """In-memory stand-in for a cross-process store. One instance shared by every
-    ExternalStorePendingApprovals models a single backend behind N gate processes.
+    ExternalStorePendingApprovals models a single backend behind N processes.
     consume_if_matches is compare-AND-delete (a mismatch deletes nothing)."""
 
     def __init__(self):
@@ -114,8 +105,8 @@ def test_external_store_consume_once_then_unknown():
 
 def test_external_store_shared_catches_cross_instance():
     store = FakePendingStore()
-    a = ExternalStorePendingApprovals(store)            # gate process A
-    b = ExternalStorePendingApprovals(store)            # gate process B
+    a = ExternalStorePendingApprovals(store)            # process A
+    b = ExternalStorePendingApprovals(store)            # process B
     a.issue("r1", DS_A)
     assert b.check_and_consume("r1", DS_A) is True      # shared -> visible
     assert a.check_and_consume("r1", DS_A) is False     # single-use across both
@@ -142,7 +133,7 @@ def test_external_store_failure_propagates_fail_closed():
 class _FakeRedis:
     """Minimal in-memory Redis stand-in: SET (with optional ex) + EVAL of the
     compare-and-delete Lua (GET==ARGV -> DEL). One instance shared by N stores
-    models a single Redis behind N gate processes."""
+    models a single Redis behind N processes."""
 
     def __init__(self):
         self._d = {}
@@ -200,7 +191,7 @@ def test_redis_store_ttl_derived_from_not_after():
 
 
 # ---------------------------------------------------------------------------
-# Structural: implementations satisfy the seam contracts
+# Implementations satisfy the protocols
 # ---------------------------------------------------------------------------
 
 def test_implementations_satisfy_protocols():
@@ -210,7 +201,7 @@ def test_implementations_satisfy_protocols():
 
 
 # ---------------------------------------------------------------------------
-# pending_store_from_env: default + the R-02 declare-or-fail guard (revert-catcher)
+# pending_store_from_env: default, and refusal to start multi-instance without a shared store
 # ---------------------------------------------------------------------------
 
 def test_from_env_defaults_to_in_memory(monkeypatch):
@@ -220,8 +211,8 @@ def test_from_env_defaults_to_in_memory(monkeypatch):
 
 
 def test_from_env_multi_instance_without_store_fails_closed(monkeypatch):
-    # R-02 revert-catcher: a declared multi-instance gate with no shared pending
-    # store must REFUSE at startup, not hand back a per-process set.
+    # A declared multi-instance deployment with no shared pending store must
+    # refuse at startup, not hand back a per-process set.
     monkeypatch.delenv("GARGOYLE_PENDING_REDIS_URL", raising=False)
     monkeypatch.setenv("GARGOYLE_REPLAY_MULTI_INSTANCE", "1")
     with pytest.raises(RuntimeError):
@@ -232,8 +223,7 @@ def test_from_env_multi_instance_with_store_ok(monkeypatch):
     # With a shared store declared, the guard passes and a shared adapter is built.
     monkeypatch.setenv("GARGOYLE_PENDING_REDIS_URL", "redis://localhost:6379/0")
     monkeypatch.setenv("GARGOYLE_REPLAY_MULTI_INSTANCE", "1")
-    # from_url imports redis lazily; guard precedes it, so just assert no RuntimeError
-    # by stubbing RedisPendingStore.from_url.
+    # from_url imports redis lazily; stub it, since only the guard is under test.
     import gargoyle.pending_store as ps
     monkeypatch.setattr(ps.RedisPendingStore, "from_url",
                         classmethod(lambda cls, url: object()))
@@ -242,8 +232,8 @@ def test_from_env_multi_instance_with_store_ok(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Hold TTL (VL-154 open item): an unexpired hold is honored, an expired one is
-# refused and dropped, and expired holds are pruned so the set stays bounded.
+# Hold TTL: an unexpired hold is honored, an expired one is refused and dropped,
+# and expired holds are pruned so the set stays bounded.
 # ---------------------------------------------------------------------------
 
 def test_in_memory_expired_hold_refused_and_dropped():
@@ -263,8 +253,8 @@ def test_in_memory_unexpired_hold_honored_once():
 
 
 def test_in_memory_issue_prunes_expired_holds():
-    """Each unanswered 202 is one entry; without pruning the set grows by one
-    per unauthenticated request forever. Issuing prunes everything expired."""
+    """Each unanswered hold is one entry; without pruning, anyone able to
+    trigger holds grows the set forever. Issuing prunes everything expired."""
     p = InMemoryPendingApprovals()
     t0 = datetime(2026, 1, 1, tzinfo=timezone.utc)
     for i in range(50):

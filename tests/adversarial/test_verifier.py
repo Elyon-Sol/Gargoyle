@@ -1,32 +1,15 @@
 """
-Canon-derived tests for IMPLEMENTATION/verifier.py.
+Tests for verifier.verify_envelope, the target-side receipt check.
 
-The verifier (VL-037) is the first G4 build increment per
-docs/restructure/08_enforcement_design.md section 8 step 1. These tests
-derive from canon section 13 (revalidation; eligibility does not
-persist) and canon section 11.1 (interaction identity I = (A, S, C, t)),
-plus artifact 08 sections 4.2 (the Q5 authenticity-vs-binding split),
-4.4 (the A1 floor), 7 (the reassert() replay/binding gap), and 8 (the
-named test set). Each test docstring cites its source.
+The verifier combines two checks:
+  - envelope.reassert() for integrity and currency (decision_sha256 verifies,
+    and the receipt's policy pin matches the live pin), and
+  - a binding check that the receipt's request_context and target_url match
+    the call the target is about to execute, which reassert() does not do.
 
-The verifier composes two existing pieces and adds one new check:
-  - envelope.reassert() (canon section 13; artifact 05 reassertion
-    protocol) for currency + integrity, and
-  - a request_context-vs-live-interaction binding check (canon section
-    11.1; artifact 08 sections 4.2 / 7) that reassert() does not perform.
-
-Fixtures duplicate the build_envelope helpers from test_envelope.py /
-test_ccs_canonical.py per the established self-contained adversarial
-test-file precedent. _rehash_decision_sha256 is used by the
-reassert-row tests that forge a non-decision_sha256 field, so the
-forgery does not trip Row 2 (decision_sha256 verification) before
-reaching the row under test.
-
-Per VL-037 opener constraint (i): no hash-value pinning; the expected
-manifest sha is computed live via manifest_sha256(), and envelopes are
-built with a pinned timestamp_utc for determinism.
-
-Ledger: VL-037 (target-side verifier; first G4 build increment).
+_rehash_decision_sha256 lets a test change a pinned field without tripping
+the integrity check first, so the check under test is the one that fires.
+Receipts use a fixed timestamp_utc; the manifest hash is computed live.
 """
 
 import hashlib
@@ -59,10 +42,8 @@ TARGET_URL = "http://127.0.0.1:9000/target"
 
 def _normalized_interaction(ap=None, op=None, context=None):
     """
-    A normalized_interaction matching validate_request()'s return shape.
-    AP/OP default to the manifest-satisfying sets, already sorted (as
-    validate_request would leave them). expected_manifest_sha256 is
-    computed live.
+    A call in normalized form: AP and OP default to the sets the reference
+    manifest requires, already sorted; expected_manifest_sha256 is computed live.
     """
     return {
         "AP": ["identity", "role"] if ap is None else ap,
@@ -75,7 +56,7 @@ def _normalized_interaction(ap=None, op=None, context=None):
 
 def _build_valid_envelope(interaction=None, target_url=TARGET_URL,
                           timestamp_utc="2026-05-21T00:00:00+00:00"):
-    """Build an envelope against current repo state with all flags true."""
+    """Build a receipt under the current reference policy."""
     if interaction is None:
         interaction = _normalized_interaction()
     return build_envelope(
@@ -89,10 +70,8 @@ def _build_valid_envelope(interaction=None, target_url=TARGET_URL,
 
 def _rehash_decision_sha256(envelope):
     """
-    Re-compute decision_sha256 over the envelope minus decision_sha256
-    and timestamp_utc (matching build_envelope's exclusions), so a
-    forged non-decision_sha256 field stays internally consistent and the
-    intended reassert() row fires instead of Row 2.
+    Recompute decision_sha256 after a test edits a field, so the integrity check
+    passes and the check under test is the one that fires.
     """
     hashable = {
         k: v
@@ -112,14 +91,9 @@ def _rehash_decision_sha256(envelope):
 
 def test_verify_accepts_valid_current_bound_envelope():
     """
-    Canon section 13: "Eligibility does not persist across state
-    transitions without revalidation." REASSERTED is the only state in
-    which a past ELIGIBLE may be honored without re-evaluation; combined
-    with the section 11.1 interaction-identity binding (the envelope is
-    about this exact interaction), the verifier accepts.
-
-    A valid envelope built against current state, presented with the
-    matching live interaction and target_url, is accepted.
+    A receipt issued under the current policy, presented with the matching call
+    and target_url, is accepted. REASSERTED plus a matching binding is the only
+    way a past ELIGIBLE is honored without asking the policy again.
     """
     interaction = _normalized_interaction()
     env = _build_valid_envelope(interaction=interaction)
@@ -129,21 +103,15 @@ def test_verify_accepts_valid_current_bound_envelope():
 
 
 # ---------------------------------------------------------------------------
-# reassert() currency/integrity rejects (closes A2 + state transitions)
+# Integrity and policy-pin rejects
 # ---------------------------------------------------------------------------
 
 
 def test_verify_rejects_forged_envelope_tamper():
     """
-    Artifact 08 section 4.2: envelope authenticity is closed by the
-    mechanism; a fabricated/mutated envelope fails decision_sha256 and
-    reassert() Row 2 returns INVALIDATED (canon section 12.3/12.4
-    fail-closed, operationalized via artifact-05-layer tamper
-    detection). This is adversary A2 (forgery).
-
-    Mutate a request_context field WITHOUT re-hashing decision_sha256:
-    the stored hash no longer matches the body, so reassert() returns
-    INVALIDATED and the verifier rejects.
+    Forgery by editing: changing request_context without re-hashing makes
+    decision_sha256 stale, reassert() returns INVALIDATED, and the verifier
+    refuses.
     """
     env = _build_valid_envelope()
     env["request_context"]["AP"] = ["identity", "role", "admin"]
@@ -177,17 +145,14 @@ def test_verify_rejects_policy_config_change_re_evaluate():
 
 
 # ---------------------------------------------------------------------------
-# Presence rejects (no usable decision artifact)
+# Presence rejects (no usable receipt)
 # ---------------------------------------------------------------------------
 
 
 def test_verify_rejects_absent_envelope():
     """
-    Artifact 08 section 8 (named test: "rejects an absent envelope").
-    Canon section 13: with no decision artifact there is nothing to
-    revalidate. A None envelope rejects with REF_VERIFY_ENVELOPE_ABSENT.
-    This is the verifier-side face of adversary A1 (a call arriving with
-    no attestation).
+    A call arriving with no receipt is refused with REF_VERIFY_ENVELOPE_ABSENT:
+    there is nothing to check.
     """
     result = verify_envelope(None, _normalized_interaction(), TARGET_URL)
     assert result["accepted"] is False
@@ -196,13 +161,9 @@ def test_verify_rejects_absent_envelope():
 
 def test_verify_rejects_malformed_envelope_without_raising():
     """
-    Artifact 08 section 8 (named test: "rejects an absent envelope" -
-    extended here to malformed). A dict missing the required structure
-    must reject cleanly via the presence guard, NOT raise from inside
-    reassert()'s key accesses.
-
-    An empty dict and a partially-structured dict both reject with
-    REF_VERIFY_ENVELOPE_ABSENT.
+    A dict missing required structure is refused cleanly with
+    REF_VERIFY_ENVELOPE_ABSENT by the presence check, never by an exception from
+    deeper key access. Both an empty dict and a partial one are covered.
     """
     result_empty = verify_envelope({}, _normalized_interaction(), TARGET_URL)
     assert result_empty["accepted"] is False
@@ -221,24 +182,16 @@ def test_verify_rejects_malformed_envelope_without_raising():
 
 
 # ---------------------------------------------------------------------------
-# Binding rejects (closes A3 - replay across interactions / target)
+# Binding rejects (reuse for another call or target)
 # ---------------------------------------------------------------------------
 
 
 def test_verify_rejects_replay_binding_mismatch():
     """
-    THE load-bearing A3 case. Artifact 08 section 7: reassert() checks
-    repository-state currency, not interaction binding, so a genuine,
-    current envelope for interaction X REASSERTS even when presented
-    alongside a different interaction Y. Canon section 13's
-    per-interaction non-persistence is broader than reassert()'s
-    hash-based transition detection; the binding check (canon section
-    11.1 interaction identity) is what closes the gap.
-
-    Build a genuine envelope for interaction X (AP = identity, role),
-    then verify it against live interaction Y (AP additionally includes
-    admin). reassert() would REASSERT (no state change), but the binding
-    check rejects with REF_VERIFY_BINDING_MISMATCH.
+    Reuse for a different call: a genuine, current receipt for call X reasserts
+    fine, because reassert() only checks integrity and the policy pin. The
+    binding check is what refuses it when presented with call Y (AP adds
+    "admin"): REF_VERIFY_BINDING_MISMATCH.
     """
     interaction_x = _normalized_interaction(ap=["identity", "role"])
     env = _build_valid_envelope(interaction=interaction_x)
@@ -250,12 +203,8 @@ def test_verify_rejects_replay_binding_mismatch():
 
 def test_verify_rejects_target_url_mismatch():
     """
-    Artifact 08 section 4.2: target_url is inside the signed region and
-    part of the binding obligation. A genuine, current envelope issued
-    for target_url X, presented for a forward to target_url Y, REASSERTS
-    but fails the binding check.
-
-    Same interaction, mismatched target_url -> REF_VERIFY_BINDING_MISMATCH.
+    Rebinding to another target: a genuine receipt issued for one target_url,
+    presented at another, fails the binding check.
     """
     interaction = _normalized_interaction()
     env = _build_valid_envelope(interaction=interaction, target_url=TARGET_URL)
@@ -266,16 +215,8 @@ def test_verify_rejects_target_url_mismatch():
 
 def test_verify_accepts_under_ap_op_normalization():
     """
-    Normalization parity (artifact 08 gap candidate 2 / VL-037 opener
-    constraint (f)). request_validator._normalize_set_field sorts and
-    deduplicates AP/OP; build_envelope records the normalized lists. The
-    verifier must normalize the live interaction the same way so a caller
-    presenting an unsorted or duplicated AP/OP does not cause a false
-    reject.
-
-    The envelope is built from the normalized interaction; the live
-    interaction passes the same sets unsorted and with a duplicate. The
-    verifier accepts.
+    AP and OP are compared as sets: a call that presents the same tokens unsorted
+    or with a duplicate is not falsely refused.
     """
     env_interaction = _normalized_interaction(
         ap=["identity", "role"], op=["request", "session"]
@@ -292,14 +233,9 @@ def test_verify_accepts_under_ap_op_normalization():
 
 def test_verify_context_binding():
     """
-    Canon section 11.1 C (context) is part of the interaction identity;
-    artifact 08 section 4.2 includes context in the binding obligation.
-    The verifier compares context by canonical_json equality (artifact
-    08 gap candidate 1 [INFERENCE]).
-
-    Equal context accepts; differing context rejects with
-    REF_VERIFY_BINDING_MISMATCH (the envelope admitted a different
-    interaction).
+    context is part of what the receipt binds and is compared by canonical JSON:
+    the same values in another key order are accepted, a different value is
+    refused with REF_VERIFY_BINDING_MISMATCH.
     """
     ctx = {"purpose": "demo", "tier": 1}
     interaction = _normalized_interaction(context=ctx)
