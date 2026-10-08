@@ -1,0 +1,13 @@
+{
+  "version": "1.0",
+  "interaction_type": "default",
+  "AR": [
+    "identity",
+    "role"
+  ],
+  "R": [
+    "session",
+    "request"
+  ],
+  "HIGH_IMPACT": []
+}

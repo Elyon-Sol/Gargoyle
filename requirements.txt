@@ -1,0 +1,9 @@
+# Runtime dependencies for the gate / target / publisher / sidecar services.
+# Pinned to the versions the suite and proof runners pass on (Python 3.14,
+# 2026-09-27). cryptography is pinned by VL-040; bump deliberately, then re-run
+# the suite + runners. redis is only needed for the shared-store overlays.
+cryptography==44.0.0
+fastapi==0.141.1
+uvicorn==0.54.0
+requests==2.34.2
+redis
