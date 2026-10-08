@@ -32,8 +32,9 @@ import uuid
 from fastapi import FastAPI, Response
 from fastapi.testclient import TestClient
 
+from gargoyle.policy import ManifestPolicy
 from gargoyle.envelope import build_envelope, canonical_json, sign_envelope
-from gargoyle.evaluator import load_manifest, manifest_sha256
+from gargoyle.policy import load_manifest, manifest_sha256
 from gargoyle.published_source import anchor_sha256, load_record_from_bytes
 from gargoyle.reference_target import (
     REF_TARGET_ANCHOR_MISMATCH,
@@ -85,13 +86,10 @@ def _signed_envelope(gate_signing, interaction=None, target_url=TARGET_URL,
     if interaction is None:
         interaction = _normalized_interaction()
     env = build_envelope(
+        policy_pin=ManifestPolicy().pin(),
         decision="ELIGIBLE",
         target_url=target_url,
         normalized_interaction=interaction,
-        manifest=load_manifest(),
-        ac3=True,
-        t26=True,
-        manifest_integrity=True,
         timestamp_utc=timestamp_utc,
     )
     return sign_envelope(env, gate_signing["private_key"], gate_signing["key_id"],
@@ -227,7 +225,7 @@ def test_reference_target_refuses_record_failing_anchor(gate_signing):
     """The publisher serves bytes that do not hash to the pinned anchor
     (substituted / tampered record on the wire). fetch returns None -> the
     target refuses before any currency check."""
-    tampered = _published_bytes().replace(b"0.9.8.4", b"6.6.6.6")
+    tampered = _published_bytes().replace(b"manifest-subset/1", b"manifest-subset/9")
     assert tampered != _published_bytes()
     app, client = _make_target(gate_signing, serve_bytes=tampered)
     env = _signed_envelope(gate_signing)

@@ -22,6 +22,7 @@ from datetime import datetime, timedelta, timezone
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
+from gargoyle.policy import ManifestPolicy
 from gargoyle.envelope import build_envelope, sign_envelope, canonical_json
 from gargoyle.key_record_source import load_key_record_from_bytes
 from gargoyle.verifier import (
@@ -61,13 +62,10 @@ def _interaction():
 def _signed_envelope(issuer_private, key_id, not_after=None):
     interaction = _interaction()
     env = build_envelope(
+        policy_pin=ManifestPolicy().pin(),
         decision="ELIGIBLE",
         target_url=TARGET_URL,
         normalized_interaction=interaction,
-        manifest={"version": "0.9.8.4"},
-        ac3=True,
-        t26=True,
-        manifest_integrity=True,
     )
     signed = sign_envelope(env, issuer_private, key_id, not_after=not_after)
     return signed, interaction
@@ -316,13 +314,10 @@ def test_unsigned_path_unchanged():
     # reassert + binding pass on a freshly built envelope -> accepts.
     interaction = _interaction()
     env = build_envelope(
+        policy_pin=ManifestPolicy().pin(),
         decision="ELIGIBLE",
         target_url=TARGET_URL,
         normalized_interaction=interaction,
-        manifest={"version": "0.9.8.4"},
-        ac3=True,
-        t26=True,
-        manifest_integrity=True,
     )
     result = verify_envelope(env, interaction, TARGET_URL)
     assert result["accepted"] is True

@@ -31,6 +31,7 @@ Ledger: VL-037 (target-side verifier; first G4 build increment).
 
 import hashlib
 
+from gargoyle.policy import ManifestPolicy
 from gargoyle.envelope import (
     INVALIDATED,
     REASSERTED,
@@ -38,7 +39,7 @@ from gargoyle.envelope import (
     build_envelope,
     canonical_json,
 )
-from gargoyle.evaluator import load_manifest, manifest_sha256
+from gargoyle.policy import load_manifest, manifest_sha256
 from gargoyle.verifier import (
     ACCEPT_REASSERTED_AND_BOUND,
     REF_VERIFY_BINDING_MISMATCH,
@@ -78,13 +79,10 @@ def _build_valid_envelope(interaction=None, target_url=TARGET_URL,
     if interaction is None:
         interaction = _normalized_interaction()
     return build_envelope(
+        policy_pin=ManifestPolicy().pin(),
         decision="ELIGIBLE",
         target_url=target_url,
         normalized_interaction=interaction,
-        manifest=load_manifest(),
-        ac3=True,
-        t26=True,
-        manifest_integrity=True,
         timestamp_utc=timestamp_utc,
     )
 
@@ -154,53 +152,24 @@ def test_verify_rejects_forged_envelope_tamper():
     assert result["reason"] == REF_VERIFY_REASSERT_INVALIDATED
 
 
-def test_verify_rejects_canon_change_invalidated():
-    """
-    Canon section 12.1 (a state transition is any change in the pinned
-    state) + 12.4 (invalid transition without revalidation -> CCS = 0).
-    A canon hash that no longer matches live canon means the envelope
-    predates the current rules; reassert() Row 1 returns INVALIDATED.
-
-    Forge canon_sha256 and re-hash decision_sha256 (so Row 2 does not
-    fire first); the verifier rejects with the INVALIDATED reason.
-    """
+def test_verify_rejects_policy_logic_change_re_evaluate():
+    """A receipt issued under another policy_id (different decision logic)
+    is not honored: reassert() returns RE-EVALUATE-REQUIRED and the verifier
+    refuses with REF_VERIFY_REASSERT_RE_EVALUATE_REQUIRED. decision_sha256 is
+    re-hashed so the integrity check does not fire first."""
     env = _build_valid_envelope()
-    env["canon"]["canon_sha256"] = "0" * 64
-    _rehash_decision_sha256(env)
-    result = verify_envelope(env, _normalized_interaction(), TARGET_URL)
-    assert result["accepted"] is False
-    assert result["reason"] == REF_VERIFY_REASSERT_INVALIDATED
-
-
-def test_verify_rejects_evaluator_change_re_evaluate():
-    """
-    Canon section 12.4: a changed evaluator hash is a decision-logic
-    transition; reassert() Row 3 returns RE-EVALUATE-REQUIRED. The
-    verifier surfaces it as REF_VERIFY_REASSERT_RE_EVALUATE_REQUIRED.
-
-    Forge evaluator_sha256 and re-hash decision_sha256; the verifier
-    rejects.
-    """
-    env = _build_valid_envelope()
-    env["evaluator"]["evaluator_sha256"] = "0" * 64
+    env["policy"]["policy_id"] = "some-other-policy/2"
     _rehash_decision_sha256(env)
     result = verify_envelope(env, _normalized_interaction(), TARGET_URL)
     assert result["accepted"] is False
     assert result["reason"] == REF_VERIFY_REASSERT_RE_EVALUATE_REQUIRED
 
 
-def test_verify_rejects_manifest_change_re_evaluate():
-    """
-    Canon section 11.9 (manifest is versioned + integrity-verifiable) +
-    12.4 (governing manifest version change is an invalid transition).
-    A changed manifest hash triggers reassert() Row 4
-    RE-EVALUATE-REQUIRED.
-
-    Forge evaluated_against.manifest_sha256 and re-hash decision_sha256;
-    the verifier rejects.
-    """
+def test_verify_rejects_policy_config_change_re_evaluate():
+    """A receipt issued under another policy_sha256 (the manifest changed)
+    is not honored: RE-EVALUATE-REQUIRED."""
     env = _build_valid_envelope()
-    env["evaluated_against"]["manifest_sha256"] = "0" * 64
+    env["policy"]["policy_sha256"] = "0" * 64
     _rehash_decision_sha256(env)
     result = verify_envelope(env, _normalized_interaction(), TARGET_URL)
     assert result["accepted"] is False
@@ -241,9 +210,7 @@ def test_verify_rejects_malformed_envelope_without_raising():
 
     # request_context present but missing its sub-keys.
     partial = {
-        "canon": {},
-        "evaluator": {},
-        "evaluated_against": {},
+        "policy": {},
         "request_context": {"AP": ["identity"]},
         "decision_sha256": "0" * 64,
         "target_url": TARGET_URL,

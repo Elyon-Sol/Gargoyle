@@ -44,17 +44,30 @@ replay, issuance_log, envelope_inspector, governance_wiring, request_validator.
    created PRIVATE; visibility is decided with the license at step 7.
    NOT done: docstrings still cite Elyon-Sol paths, VL entries and canon sections;
    rewrite them alongside steps 2-4, which change the code they describe.
-2. Replace evaluator.py's subset check with a decision interface:
-   decide(call) -> (ELIGIBLE|REFUSE, reason) supplied by the integrator / policy
-   engine. Keep ONLY the manifest/policy hash pinning so a receipt self-invalidates
-   when the policy it was issued under changes. Drop AC^3/T^26/CCS vocabulary.
+2. DONE (2026-10-08). gargoyle/policy.py defines the interface: Decision(outcome,
+   reason, requires_approval) and Policy with pin() -> {policy_id, policy_sha256}
+   and decide(target_url, interaction). The old subset check survives only as
+   ManifestPolicy, the reference policy (plain names: authority_covered,
+   coverage_covered, manifest_pin_matches; reasons AUTHORITY_MISSING etc.).
+   gargoyle/issuer.py issue() replaces the deleted gate's decide-and-sign: every
+   receipt gets a decision_id and a not_after (default 300 s, no unbounded receipts);
+   a policy that raises or returns junk is a refusal. Receipts pin ONE policy block
+   {policy_id, policy_sha256}; the evaluator-file hash, manifest hash, per-condition
+   booleans and the canon pin are gone (canon removal pulled forward from step 4).
+   reassert(): bad decision_sha256 -> INVALIDATED, pin differs -> RE-EVALUATE-REQUIRED,
+   else REASSERTED. Published record shape is now {policy_id, policy_sha256}.
+   Receipt format version: "gargoyle/1". Suite: 249 pass.
+   Open from this step: the MCP server's interaction_for() still rebuilds AP/OP from
+   the manifest, so the consumer side is tied to ManifestPolicy - fix with step 3,
+   which replaces AP/OP binding with tool + args + principal. requires_approval is not
+   in the signed receipt, so a target cannot tell a held call from a free one.
 3. Bind caller identity: today AP/OP are caller-asserted strings and nothing at the
    gate ties them to who sent the request. The receipt must carry an authenticated
    principal (mTLS peer, bearer subject, or integrator-supplied id) and the verifier
    must check it.
-4. Remove the hard-coded CANON/canon.lock and EVIDENCE/published_hashes.json paths
-   from envelope.reassert() and mcp_server; pin the policy hash and the issuer key
-   id only. Delete CANON/ and EVIDENCE/ from the tree once done.
+4. Remove the remaining hard-coded paths: the default MANIFEST/manifest.json behind
+   ManifestPolicy() and envelope.live_pin(), and EVIDENCE/published_hashes.json in
+   mcp_server. Then delete EVIDENCE/ (CANON/ is already gone).
 5. Write the wire spec as a standalone document (envelope fields, canonical JSON
    rules, signature coverage, replay semantics, grant format) so the format is not
    defined by one Python file.

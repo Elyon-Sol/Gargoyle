@@ -34,17 +34,19 @@ Ledger: VL-040 (issuer signing; opt-in).
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
+from gargoyle.policy import ManifestPolicy
 from gargoyle.envelope import (
     REASSERTED,
     build_envelope,
     canonical_json,
     reassert,
     sign_envelope,
+    ENVELOPE_VERSION,
     _HASH_EXCLUDED_KEYS,
     _SIGNATURE_EXCLUDED_KEYS,
     _sha256_text,
 )
-from gargoyle.evaluator import load_manifest, manifest_sha256
+from gargoyle.policy import load_manifest, manifest_sha256
 from gargoyle.verifier import (
     ACCEPT_REASSERTED_AND_BOUND,
     REF_VERIFY_SIGNATURE_INVALID,
@@ -77,13 +79,10 @@ def _build_unsigned_envelope(interaction=None,
     if interaction is None:
         interaction = _normalized_interaction()
     return build_envelope(
+        policy_pin=ManifestPolicy().pin(),
         decision="ELIGIBLE",
         target_url=TARGET_URL,
         normalized_interaction=interaction,
-        manifest=load_manifest(),
-        ac3=True,
-        t26=True,
-        manifest_integrity=True,
         timestamp_utc=timestamp_utc,
     )
 
@@ -102,14 +101,10 @@ def _construct_forge(interaction):
     and NO issuer signature. This is exactly what the unsigned path accepts.
     """
     forge = {
-        "envelope_version": "1.0",
+        "envelope_version": ENVELOPE_VERSION,
         "decision": "ELIGIBLE",
         "target_url": TARGET_URL,
-        "canon": {"version": "0.9.8.4", "canon_sha256": _live_canon_sha256()},
-        "evaluated_against": {
-            "manifest_version": "1.0",
-            "manifest_sha256": manifest_sha256(),
-        },
+        "policy": ManifestPolicy().pin(),
         "request_context": {
             "AP": interaction["AP"],
             "OP": interaction["OP"],
@@ -117,24 +112,11 @@ def _construct_forge(interaction):
             "expected_manifest_version": "1.0",
             "expected_manifest_sha256": manifest_sha256(),
         },
-        "evaluator": {"version": "0.9.8.4", "evaluator_sha256": _live_evaluator_sha256()},
-        "condition_results": {"ac3": True, "t26": True,
-                              "manifest_integrity": True, "ccs": None},
         "timestamp_utc": "2026-05-31T00:00:00+00:00",
     }
     hashable = {k: v for k, v in forge.items() if k not in _HASH_EXCLUDED_KEYS}
     forge["decision_sha256"] = _sha256_text(canonical_json(hashable))
     return forge
-
-
-def _live_canon_sha256():
-    from gargoyle.envelope import _read_canon_lock
-    return _read_canon_lock()
-
-
-def _live_evaluator_sha256():
-    from gargoyle.envelope import _evaluator_sha256
-    return _evaluator_sha256()
 
 
 # ---------------------------------------------------------------------------

@@ -13,8 +13,9 @@ from datetime import datetime, timedelta, timezone
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
+from gargoyle.policy import ManifestPolicy
 from gargoyle.envelope import build_envelope, sign_envelope
-from gargoyle.evaluator import load_manifest, manifest_sha256
+from gargoyle.policy import load_manifest, manifest_sha256
 from gargoyle.verifier import verify_envelope
 
 TARGET_URL = "http://127.0.0.1:9000/target"
@@ -33,13 +34,10 @@ def _interaction():
 
 def _signed(priv, not_after=None, decision_id=None):
     env = build_envelope(
+        policy_pin=ManifestPolicy().pin(),
         decision="ELIGIBLE",
         target_url=TARGET_URL,
         normalized_interaction=_interaction(),
-        manifest=load_manifest(),
-        ac3=True,
-        t26=True,
-        manifest_integrity=True,
         timestamp_utc="2026-07-09T00:00:00+00:00",
     )
     return sign_envelope(env, priv, KEY_ID, not_after=not_after, decision_id=decision_id)

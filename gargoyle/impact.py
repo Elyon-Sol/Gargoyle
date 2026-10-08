@@ -19,7 +19,7 @@ keeps the G(I) boundary clean. It reuses evaluator.safe_set (no re-implement).
 Build-then-wire: NO caller on the default pep.py path in this increment.
 """
 
-from gargoyle.evaluator import safe_set
+from gargoyle.policy import safe_set
 
 
 def safe_high_impact(manifest):

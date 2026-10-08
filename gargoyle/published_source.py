@@ -75,9 +75,8 @@ from gargoyle.transport import get_published
 # The three pin keys the record carries (parity with
 # EVIDENCE/published_hashes_gen.py's output and build_envelope's pins).
 _REQUIRED_RECORD_KEYS = (
-    "canon_sha256",
-    "evaluator_sha256",
-    "manifest_sha256",
+    "policy_id",
+    "policy_sha256",
 )
 
 

@@ -31,7 +31,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from gargoyle.envelope import canonical_json
-from gargoyle.evaluator import manifest_sha256, load_manifest, resolve_required_sets
+from gargoyle.policy import manifest_sha256, load_manifest, resolve_required_sets
 from gargoyle.published_source import anchor_sha256, load_record_from_bytes
 from gargoyle.replay_cache import InMemoryReplayCache
 from gargoyle.reference_target import (

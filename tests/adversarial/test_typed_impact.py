@@ -14,11 +14,12 @@ revert-catchers (RED if the per-type selection or a fail-closed guard is
 reverted).
 """
 
+import json
 import pytest
 
-from gargoyle import evaluator as ev
-from gargoyle.evaluator import (
-    safe_manifest, resolve_required_sets, ac3_valid, t26_valid, evaluate,
+from gargoyle.policy import (
+    REQUIRED_SETS_UNRESOLVED, ManifestPolicy, safe_manifest, resolve_required_sets,
+    authority_covered, coverage_covered,
 )
 from gargoyle.impact import safe_high_impact, requires_approval
 
@@ -131,39 +132,43 @@ def test_benign_type_would_be_refused_without_per_type_selection():
     """Proves the mechanism matters: against the top-level (union) R, the benign
     read caller is NOT eligible (OP={session} does not cover {session,request}).
     Per-type selection is exactly what admits it."""
-    assert t26_valid(BENIGN_CTX, TYPED["R"]) is False           # union view: refused
-    assert t26_valid(BENIGN_CTX, ["session"]) is True           # per-type view: eligible
+    assert coverage_covered(BENIGN_CTX, TYPED["R"]) is False           # union view: refused
+    assert coverage_covered(BENIGN_CTX, ["session"]) is True           # per-type view: eligible
 
 
-def test_benign_eligible_and_low_impact(monkeypatch):
-    """A benign-type mint is ELIGIBLE and forwards (requires_approval False).
-    This is the state the flat model cannot express."""
-    monkeypatch.setattr(ev, "load_manifest", lambda: TYPED)
-    monkeypatch.setattr(ev, "manifest_sha256", lambda *a, **k: "sha-typed")
-    ctx = dict(BENIGN_CTX, expected_manifest_version="1.1",
-               expected_manifest_sha256="sha-typed")
-    assert evaluate(ctx, TYPED) == "ELIGIBLE"
+def _typed_policy(tmp_path):
+    path = tmp_path / "typed.json"
+    path.write_text(json.dumps(TYPED))
+    policy = ManifestPolicy(str(path))
+    return policy, policy.pin()["policy_sha256"]
+
+
+def test_benign_eligible_and_low_impact(tmp_path):
+    """A benign-type call is ELIGIBLE and not held: the state a flat manifest
+    cannot express."""
+    policy, sha = _typed_policy(tmp_path)
+    ctx = dict(BENIGN_CTX, expected_manifest_version="1.1", expected_manifest_sha256=sha)
+    d = policy.decide("https://t.example.com", ctx)
+    assert d.outcome == "ELIGIBLE" and d.requires_approval is False
     assert requires_approval(ctx, TYPED) is False
 
 
-def test_sensitive_eligible_and_high_impact_holds(monkeypatch):
-    """A sensitive-type mint is ELIGIBLE and holds for a human (requires_approval
-    True) - the same manifest, a different type."""
-    monkeypatch.setattr(ev, "load_manifest", lambda: TYPED)
-    monkeypatch.setattr(ev, "manifest_sha256", lambda *a, **k: "sha-typed")
-    ctx = dict(SENSITIVE_CTX, expected_manifest_version="1.1",
-               expected_manifest_sha256="sha-typed")
-    assert evaluate(ctx, TYPED) == "ELIGIBLE"
+def test_sensitive_eligible_and_high_impact_holds(tmp_path):
+    """Same manifest, a sensitive type: ELIGIBLE and held for a human."""
+    policy, sha = _typed_policy(tmp_path)
+    ctx = dict(SENSITIVE_CTX, expected_manifest_version="1.1", expected_manifest_sha256=sha)
+    d = policy.decide("https://t.example.com", ctx)
+    assert d.outcome == "ELIGIBLE" and d.requires_approval is True
     assert requires_approval(ctx, TYPED) is True
 
 
-def test_unknown_type_refused_end_to_end(monkeypatch):
-    monkeypatch.setattr(ev, "load_manifest", lambda: TYPED)
-    monkeypatch.setattr(ev, "manifest_sha256", lambda *a, **k: "sha-typed")
+def test_unknown_type_refused_end_to_end(tmp_path):
+    policy, sha = _typed_policy(tmp_path)
     ctx = {"interaction_type": "delete", "AP": ["identity", "role"],
            "OP": ["session", "request"], "expected_manifest_version": "1.1",
-           "expected_manifest_sha256": "sha-typed"}
-    assert evaluate(ctx, TYPED) == "REFUSE"
+           "expected_manifest_sha256": sha}
+    d = policy.decide("https://t.example.com", ctx)
+    assert (d.outcome, d.reason) == ("REFUSE", REQUIRED_SETS_UNRESOLVED)
 
 
 # --------------------------------------------------------------------------

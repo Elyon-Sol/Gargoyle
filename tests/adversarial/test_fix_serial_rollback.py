@@ -5,8 +5,9 @@ import json
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from fastapi.testclient import TestClient
 
+from gargoyle.policy import ManifestPolicy
 from gargoyle.envelope import build_envelope, sign_envelope
-from gargoyle.evaluator import load_manifest, manifest_sha256
+from gargoyle.policy import load_manifest, manifest_sha256
 from gargoyle.reference_target import build_reference_target_app
 from gargoyle.replay_cache import InMemoryReplayCache
 from gargoyle.verifier import REF_VERIFY_PUBLISHED_RECORD_STALE
@@ -20,15 +21,13 @@ def inter():
             "expected_manifest_version": "1.0", "expected_manifest_sha256": manifest_sha256()}
 
 def signed_env(did):
-    e = build_envelope(decision="ELIGIBLE", target_url=TARGET, normalized_interaction=inter(),
-                       manifest=load_manifest(), ac3=True, t26=True, manifest_integrity=True,
+    e = build_envelope(
+        policy_pin=ManifestPolicy().pin(),decision="ELIGIBLE", target_url=TARGET, normalized_interaction=inter(),
                        timestamp_utc="2026-07-11T00:00:00+00:00")
     return sign_envelope(e, priv, KID, decision_id=did)
 
 _e0 = signed_env("d0")
-PINS = {"canon_sha256": _e0["canon"]["canon_sha256"],
-        "evaluator_sha256": _e0["evaluator"]["evaluator_sha256"],
-        "manifest_sha256": _e0["evaluated_against"]["manifest_sha256"]}
+PINS = dict(_e0["policy"])
 
 def make():
     cfg = {"target_url": TARGET, "publisher_url": "http://pub", "pinned_root_sha256": "x",

@@ -1,0 +1,85 @@
+"""Issue receipts: ask the policy, and sign the answer if it is ELIGIBLE.
+
+    result = issue(policy, target_url, interaction,
+                   signing_key=key, key_id="issuer-1")
+    if result.envelope is None:
+        ...                                  # refused: result.decision.reason
+    elif result.decision.requires_approval:
+        ...                                  # hold for a human grant (gargoyle.approval)
+    else:
+        send(call, headers={ENVELOPE_HEADER: json.dumps(result.envelope)})
+
+Every receipt carries a fresh decision_id, so an executor can refuse a
+second use, and a not_after, so a receipt that is never used still dies.
+A policy that raises is a refusal, never an issuance.
+"""
+
+import uuid
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
+from typing import Any, Mapping, Optional
+
+from gargoyle.envelope import build_envelope, sign_envelope
+from gargoyle.policy import ELIGIBLE, POLICY_INTERNAL, Decision, Policy, refuse, valid_pin
+
+ENVELOPE_HEADER = "X-Gargoyle-Envelope"
+DEFAULT_TTL_SECONDS = 300
+
+ISSUE_POLICY_ERROR = "ISSUE_POLICY_ERROR"  # decide() or pin() returned something malformed
+ISSUE_UNBINDABLE_CALL = "ISSUE_UNBINDABLE_CALL"  # eligible, but the call lacks the fields a receipt binds
+
+
+@dataclass(frozen=True)
+class IssueResult:
+    decision: Decision
+    envelope: Optional[dict] = None
+
+
+def issue(
+    policy: Policy,
+    target_url: str,
+    interaction: Mapping[str, Any],
+    *,
+    signing_key: Any,
+    key_id: str,
+    ttl_seconds: int = DEFAULT_TTL_SECONDS,
+    now: Optional[datetime] = None,
+) -> IssueResult:
+    """Decide and, on ELIGIBLE, return a signed receipt for exactly this
+    call. `ttl_seconds` must be positive; there is no unbounded receipt."""
+    if not isinstance(ttl_seconds, int) or isinstance(ttl_seconds, bool) or ttl_seconds <= 0:
+        raise ValueError("ttl_seconds must be a positive integer")
+    if signing_key is None or not key_id:
+        raise ValueError("a signing key and key id are required")
+
+    try:
+        decision = policy.decide(target_url, interaction)
+        if not isinstance(decision, Decision):
+            return IssueResult(refuse(ISSUE_POLICY_ERROR))
+        if decision.outcome != ELIGIBLE:
+            return IssueResult(decision)
+        pin = policy.pin()
+        if not valid_pin(pin):
+            return IssueResult(refuse(ISSUE_POLICY_ERROR))
+    except Exception:
+        return IssueResult(refuse(POLICY_INTERNAL))
+
+    issued_at = now or datetime.now(timezone.utc)
+    try:
+        envelope = build_envelope(
+            decision=ELIGIBLE,
+            target_url=target_url,
+            normalized_interaction=dict(interaction),
+            policy_pin=pin,
+            timestamp_utc=issued_at.isoformat(),
+        )
+    except (KeyError, TypeError, ValueError):
+        return IssueResult(refuse(ISSUE_UNBINDABLE_CALL))
+    signed = sign_envelope(
+        envelope,
+        signing_key,
+        key_id,
+        not_after=issued_at + timedelta(seconds=ttl_seconds),
+        decision_id=str(uuid.uuid4()),
+    )
+    return IssueResult(decision, signed)

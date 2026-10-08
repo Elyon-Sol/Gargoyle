@@ -66,9 +66,8 @@ _REQUIRED_RECORD_KEYS = (
 # The three currency pins the record must carry (parity with
 # EVIDENCE/published_hashes_gen.py and build_envelope's pins).
 _REQUIRED_PIN_KEYS = (
-    "canon_sha256",
-    "evaluator_sha256",
-    "manifest_sha256",
+    "policy_id",
+    "policy_sha256",
 )
 
 

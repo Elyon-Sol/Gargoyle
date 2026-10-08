@@ -7,8 +7,9 @@ import pytest
 from fastapi.testclient import TestClient
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
+from gargoyle.policy import ManifestPolicy
 from gargoyle.envelope import build_envelope, sign_envelope
-from gargoyle.evaluator import load_manifest, manifest_sha256
+from gargoyle.policy import load_manifest, manifest_sha256
 from gargoyle.verifier import verify_envelope, REF_VERIFY_BINDING_MISMATCH, REF_VERIFY_REPLAY
 from gargoyle.reference_target import build_reference_target_app, REF_TARGET_NO_DECISION_ID
 from gargoyle.replay_cache import InMemoryReplayCache
@@ -22,15 +23,13 @@ def inter():
             "expected_manifest_version": "1.0", "expected_manifest_sha256": manifest_sha256()}
 
 def signed(decision_id="d1", not_after=None):
-    e = build_envelope(decision="ELIGIBLE", target_url=TARGET, normalized_interaction=inter(),
-                       manifest=load_manifest(), ac3=True, t26=True, manifest_integrity=True,
+    e = build_envelope(
+        policy_pin=ManifestPolicy().pin(),decision="ELIGIBLE", target_url=TARGET, normalized_interaction=inter(),
                        timestamp_utc="2026-07-09T00:00:00+00:00")
     return sign_envelope(e, priv, KID, not_after=not_after, decision_id=decision_id)
 
 def record_for(env):
-    return {"canon_sha256": env["canon"]["canon_sha256"],
-            "evaluator_sha256": env["evaluator"]["evaluator_sha256"],
-            "manifest_sha256": env["evaluated_against"]["manifest_sha256"]}
+    return dict(env["policy"])
 
 def client_for(env, cache=None):
     cfg = {"target_url": TARGET, "publisher_url": "http://pub", "pinned_root_sha256": "anchor",

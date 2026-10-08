@@ -14,7 +14,7 @@ approval branch (design 1.3 / 1c) is a later increment.
 """
 
 from gargoyle.impact import safe_high_impact, requires_approval
-from gargoyle.evaluator import t26_valid, ac3_valid
+from gargoyle.policy import coverage_covered, authority_covered
 
 
 # A well-formed high-impact manifest: every HIGH_IMPACT token is a required
@@ -83,7 +83,7 @@ def test_h2_eligible_and_low_impact_by_omission_is_impossible_REVERT_CATCHER():
     AR u R) is the escape vector: a caller need not declare it, so without
     [FIX H2] it could be coverage-eligible AND classified low-impact. With the
     fix the out-of-band selector is a manifest error -> fail closed -> approval
-    required, so (t26_valid AND not requires_approval) is unreachable.
+    required, so (coverage_covered AND not requires_approval) is unreachable.
     Reverting the subset check makes requires_approval here return False -> RED.
     """
     manifest = {
@@ -95,12 +95,12 @@ def test_h2_eligible_and_low_impact_by_omission_is_impossible_REVERT_CATCHER():
     R = manifest["R"]
     ctx = {"AP": ["auth_admin"], "OP": ["op_read"]}  # eligible, omits the token
 
-    assert t26_valid(ctx, R) is True
-    assert ac3_valid(ctx, manifest["AR"]) is True
+    assert coverage_covered(ctx, R) is True
+    assert authority_covered(ctx, manifest["AR"]) is True
     # With [FIX H2]: out-of-band selector -> fail closed -> approval required.
     # Without it: requires_approval would be False (escape) while eligible.
     assert requires_approval(ctx, manifest) is True
-    assert not (t26_valid(ctx, R) and not requires_approval(ctx, manifest))
+    assert not (coverage_covered(ctx, R) and not requires_approval(ctx, manifest))
 
 
 # --------------------------------------------------------------------------
@@ -139,5 +139,5 @@ def test_authority_token_high_impact_matches_AP():
     }
     assert safe_high_impact(manifest) == {"auth_root"}
     ctx = {"AP": ["auth_root"], "OP": ["op_read"]}
-    assert ac3_valid(ctx, manifest["AR"]) is True
+    assert authority_covered(ctx, manifest["AR"]) is True
     assert requires_approval(ctx, manifest) is True

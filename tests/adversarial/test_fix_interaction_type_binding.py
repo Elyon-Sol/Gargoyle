@@ -4,9 +4,10 @@ receipt is now self-consistent (re-evaluation from request_context reproduces th
 gate's typed verdict)."""
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
+from gargoyle.policy import ManifestPolicy
 from gargoyle.envelope import build_envelope, sign_envelope
-from gargoyle.evaluator import (load_manifest, manifest_sha256, safe_manifest,
-                                      resolve_required_sets, ac3_valid, t26_valid)
+from gargoyle.policy import (load_manifest, manifest_sha256, safe_manifest,
+                                      resolve_required_sets, authority_covered, coverage_covered)
 from gargoyle.verifier import (verify_envelope, REF_VERIFY_BINDING_MISMATCH,
                                      ACCEPT_REASSERTED_AND_BOUND)
 
@@ -22,8 +23,8 @@ def inter(it=None):
     return d
 
 def env_for(it=None):
-    return build_envelope(decision="ELIGIBLE", target_url=TARGET, normalized_interaction=inter(it),
-                          manifest=load_manifest(), ac3=True, t26=True, manifest_integrity=True,
+    return build_envelope(
+        policy_pin=ManifestPolicy().pin(),decision="ELIGIBLE", target_url=TARGET, normalized_interaction=inter(it),
                           timestamp_utc="2026-07-11T00:00:00+00:00")
 
 # ---- bound into the envelope ----
@@ -72,11 +73,11 @@ def test_receipt_reproduces_typed_verdict():
     sm = safe_manifest(mfst); assert sm is not None
     def eligible(ctx):
         AR, R = resolve_required_sets(sm, ctx)
-        return AR is not None and R is not None and ac3_valid(ctx, AR) and t26_valid(ctx, R)
+        return AR is not None and R is not None and authority_covered(ctx, AR) and coverage_covered(ctx, R)
     ctx = {"AP":["identity"],"OP":["session"],"context":{},"interaction_type":"readonly",
            "expected_manifest_version":"1.0","expected_manifest_sha256":"0"*64}
-    e = build_envelope(decision="ELIGIBLE", target_url=TARGET, normalized_interaction=ctx,
-                       manifest=sm, ac3=True, t26=True, manifest_integrity=True,
+    e = build_envelope(
+        policy_pin=ManifestPolicy().pin(),decision="ELIGIBLE", target_url=TARGET, normalized_interaction=ctx,
                        timestamp_utc="2026-07-11T00:00:00+00:00")
     assert eligible(ctx) is True
     # BEFORE the fix this was False (receipt dropped interaction_type -> self-inconsistent):

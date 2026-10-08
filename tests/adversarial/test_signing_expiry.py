@@ -22,10 +22,10 @@ from gargoyle.verifier import (
     REF_VERIFY_SIGNATURE_EXPIRED, REF_VERIFY_SIGNATURE_INVALID,
 )
 
-C, E, M = "a" * 64, "b" * 64, "c" * 64
+P, M = "b" * 64, "c" * 64
 TARGET = "https://target.example/act"
 NOW = datetime(2026, 6, 2, 12, 0, 0, tzinfo=timezone.utc)
-REC = {"canon_sha256": C, "evaluator_sha256": E, "manifest_sha256": M}
+REC = {"policy_id": "test-policy/1", "policy_sha256": P}
 INTER = {"AP": ["role", "identity"], "OP": ["request", "session"],
          "context": {"k": "v"}, "expected_manifest_version": "1.0",
          "expected_manifest_sha256": M}
@@ -33,14 +33,11 @@ INTER = {"AP": ["role", "identity"], "OP": ["request", "session"],
 
 def _env():
     env = {
-        "envelope_version": "1.0", "decision": "ELIGIBLE", "target_url": TARGET,
-        "canon": {"version": "0.9.8.4", "canon_sha256": C},
-        "evaluated_against": {"manifest_version": "1.0", "manifest_sha256": M},
+        "envelope_version": "gargoyle/1", "decision": "ELIGIBLE", "target_url": TARGET,
+        "policy": dict(REC),
         "request_context": {"AP": ["identity", "role"], "OP": ["session", "request"],
                             "context": {"k": "v"}, "expected_manifest_version": "1.0",
                             "expected_manifest_sha256": M},
-        "evaluator": {"version": "0.9.8.4", "evaluator_sha256": E},
-        "condition_results": {"ac3": True, "t26": True, "manifest_integrity": True, "ccs": None},
         "timestamp_utc": "2026-06-02T00:00:00+00:00",
     }
     hashable = {k: v for k, v in env.items() if k not in _HASH_EXCLUDED_KEYS}

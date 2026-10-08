@@ -32,6 +32,7 @@ import json
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.testclient import TestClient
 
+from gargoyle.policy import ManifestPolicy
 from gargoyle.envelope import (
     REASSERTED,
     RE_EVALUATE_REQUIRED,
@@ -39,7 +40,7 @@ from gargoyle.envelope import (
     canonical_json,
     reassert,
 )
-from gargoyle.evaluator import load_manifest, manifest_sha256
+from gargoyle.policy import MANIFEST_POLICY_ID, load_manifest, manifest_sha256
 from gargoyle.published_source import (
     anchor_sha256,
     fetch_published_record,
@@ -97,13 +98,10 @@ def _build_valid_envelope(interaction=None, target_url=TARGET_URL,
     if interaction is None:
         interaction = _normalized_interaction()
     return build_envelope(
+        policy_pin=ManifestPolicy().pin(),
         decision="ELIGIBLE",
         target_url=target_url,
         normalized_interaction=interaction,
-        manifest=load_manifest(),
-        ac3=True,
-        t26=True,
-        manifest_integrity=True,
         timestamp_utc=timestamp_utc,
     )
 
@@ -194,12 +192,12 @@ def test_reassert_currency_comes_from_record_not_local_disk(monkeypatch):
 
     # Target's local disk diverges from the publisher (mutated evaluator).
     monkeypatch.setattr(
-        "gargoyle.envelope._evaluator_sha256", lambda *a, **k: "0" * 64
+        "gargoyle.policy.ManifestPolicy.pin",
+        lambda self: {"policy_id": MANIFEST_POLICY_ID, "policy_sha256": "0" * 64},
     )
 
     # Cross-host: currency from the authentic record -> REASSERTED.
     assert reassert(env, record_source=record)["outcome"] == REASSERTED
-    assert reassert(env, record_source=record)["ccs"] is True
 
     # VL-038-style local-disk path on the same divergent disk -> not honored.
     assert reassert(env)["outcome"] == RE_EVALUATE_REQUIRED
@@ -218,7 +216,8 @@ def test_verify_envelope_honors_valid_despite_divergent_local_disk(monkeypatch):
     record = _published_record()
 
     monkeypatch.setattr(
-        "gargoyle.envelope._evaluator_sha256", lambda *a, **k: "0" * 64
+        "gargoyle.policy.ManifestPolicy.pin",
+        lambda self: {"policy_id": MANIFEST_POLICY_ID, "policy_sha256": "0" * 64},
     )
 
     bound = verify_envelope(env, interaction, TARGET_URL, record_source=record)
@@ -243,7 +242,8 @@ def test_verify_envelope_refuses_forged_despite_divergent_local_disk(monkeypatch
     env["request_context"]["AP"] = ["identity", "role", "admin"]  # tamper, no rehash
     record = _published_record()
     monkeypatch.setattr(
-        "gargoyle.envelope._evaluator_sha256", lambda *a, **k: "0" * 64
+        "gargoyle.policy.ManifestPolicy.pin",
+        lambda self: {"policy_id": MANIFEST_POLICY_ID, "policy_sha256": "0" * 64},
     )
     result = verify_envelope(env, _normalized_interaction(), TARGET_URL, record_source=record)
     assert result["accepted"] is False
@@ -263,7 +263,7 @@ def test_anchor_accepts_authentic_record_bytes():
     """
     record = load_record_from_bytes(_published_bytes(), _pinned_root())
     assert isinstance(record, dict)
-    assert record["evaluator_sha256"] == _published_record()["evaluator_sha256"]
+    assert record["policy_sha256"] == _published_record()["policy_sha256"]
 
 
 def test_anchor_refuses_wrong_pinned_root():
@@ -283,7 +283,7 @@ def test_anchor_refuses_tampered_record_bytes():
     provides (A5-class tampering on the record hop; artifact 08 threat
     model).
     """
-    tampered = _published_bytes().replace(b"0.9.8.4", b"9.9.9.9")
+    tampered = _published_bytes().replace(b"manifest-subset/1", b"manifest-subset/9")
     assert tampered != _published_bytes()
     assert load_record_from_bytes(tampered, _pinned_root()) is None
 
@@ -337,7 +337,7 @@ def test_cross_host_target_refuses_when_fetched_record_fails_anchor():
     with REF_TARGET_ANCHOR_MISMATCH and does not act, before any envelope
     currency check.
     """
-    forged_record_bytes = _published_bytes().replace(b"0.9.8.4", b"6.6.6.6")
+    forged_record_bytes = _published_bytes().replace(b"manifest-subset/1", b"manifest-subset/9")
     pub_client = TestClient(_build_publisher_app(forged_record_bytes))
 
     def fetch_via_testclient(url, pinned_root):

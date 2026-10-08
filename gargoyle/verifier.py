@@ -179,9 +179,7 @@ ACCEPT_REASSERTED_AND_BOUND = "REASSERTED_AND_BOUND"
 # reassert() and the binding check. Absence of any of these means the
 # object is unusable as a decision artifact -> REF_VERIFY_ENVELOPE_ABSENT.
 _REQUIRED_ENVELOPE_KEYS = (
-    "canon",
-    "evaluator",
-    "evaluated_against",
+    "policy",
     "request_context",
     "decision_sha256",
     "target_url",
