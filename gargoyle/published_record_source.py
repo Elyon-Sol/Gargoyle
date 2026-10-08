@@ -35,7 +35,7 @@ from gargoyle.verifier import (
 # Shared with the signing side so both canonicalize identically.
 from gargoyle.envelope import canonical_json
 
-PUBLISHED_RECORD_FORMAT = "elyon-sol-published-record"
+PUBLISHED_RECORD_FORMAT = "gargoyle-published-record"
 _SIGNATURE_FIELD = "publisher_signature"
 
 # Structural keys the signed record must carry.

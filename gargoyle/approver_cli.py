@@ -60,7 +60,7 @@ def main(argv=None) -> int:
 
     parser = argparse.ArgumentParser(
         prog="approver_cli",
-        description="Emit a signed approval grant for a gate-held decision.",
+        description="Emit a signed approval grant for a held decision.",
     )
     parser.add_argument("--pending", help="file with the 202 JSON; default stdin")
     parser.add_argument("--ttl", type=int, default=300, help="grant lifetime (s)")

@@ -170,12 +170,12 @@ class RedisPendingStore:
         "then return redis.call('DEL', KEYS[1]) else return 0 end"
     )
 
-    def __init__(self, client: Any, key_prefix: str = "elyon:pending:") -> None:
+    def __init__(self, client: Any, key_prefix: str = "gargoyle:pending:") -> None:
         self._client = client
         self._prefix = key_prefix
 
     @classmethod
-    def from_url(cls, url: str, key_prefix: str = "elyon:pending:") -> "RedisPendingStore":
+    def from_url(cls, url: str, key_prefix: str = "gargoyle:pending:") -> "RedisPendingStore":
         import redis  # lazy: not a hard dependency
 
         return cls(redis.Redis.from_url(url), key_prefix=key_prefix)

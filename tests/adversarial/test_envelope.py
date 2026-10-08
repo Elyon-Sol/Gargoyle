@@ -157,7 +157,7 @@ def test_live_pin_prefers_record_then_policy_then_default():
 def test_canonical_json_sorted_compact_ascii():
     assert canonical_json({"b": 2, "a": 1, "c": {"y": 20, "x": 10}}) == canonical_json(
         {"a": 1, "c": {"x": 10, "y": 20}, "b": 2})
-    s = canonical_json({"b": 2, "a": {"k": "café"}})
+    s = canonical_json({"b": 2, "a": {"k": "caf\u00e9"}})
     assert " " not in s and "\n" not in s
-    assert "\\u00e9" in s and "é" not in s
-    assert json.loads(s) == {"a": {"k": "café"}, "b": 2}
+    assert "\\u00e9" in s and "\u00e9" not in s
+    assert json.loads(s) == {"a": {"k": "caf\u00e9"}, "b": 2}

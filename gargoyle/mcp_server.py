@@ -24,6 +24,7 @@ from gargoyle.published_source import anchor_sha256, load_record_from_bytes
 from gargoyle.replay_cache import InMemoryReplayCache
 from gargoyle.reference_target import (
     REF_TARGET_ANCHOR_MISMATCH,
+    REF_TARGET_NO_DECISION_ID,
     REF_TARGET_NOT_CONFIGURED,
 )
 from gargoyle.verifier import verify_envelope, REF_VERIFY_REPLAY
@@ -169,14 +170,12 @@ def gate_tool_call(state: ServerState, params: Dict[str, Any]) -> (bool, str):
         return False, result["reason"]
 
     # Exactly once over the validity window. decision_id is signed, so it cannot
-    # be altered. NOTE: a receipt with no decision_id skips this claim here,
-    # unlike ExecutorGate, which refuses it.
+    # be altered; a receipt without one cannot be single-used and is refused.
     decision_id = envelope.get("decision_id")
-    if decision_id is not None:
-        if not state.replay_cache.check_and_claim(
-            decision_id, _parse_not_after(envelope)
-        ):
-            return False, REF_VERIFY_REPLAY
+    if not isinstance(decision_id, str) or not decision_id:
+        return False, REF_TARGET_NO_DECISION_ID
+    if not state.replay_cache.check_and_claim(decision_id, _parse_not_after(envelope)):
+        return False, REF_VERIFY_REPLAY
 
     state.executed.append({"tool": name, "args": args})  # THE side effect
     return True, result["reason"]

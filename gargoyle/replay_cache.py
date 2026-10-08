@@ -135,12 +135,12 @@ class RedisReplayStore:
     after now). A None expiry sets no EX, matching InMemoryReplayCache keeping
     such entries."""
 
-    def __init__(self, client: Any, key_prefix: str = "elyon:replay:") -> None:
+    def __init__(self, client: Any, key_prefix: str = "gargoyle:replay:") -> None:
         self._client = client
         self._prefix = key_prefix
 
     @classmethod
-    def from_url(cls, url: str, key_prefix: str = "elyon:replay:") -> "RedisReplayStore":
+    def from_url(cls, url: str, key_prefix: str = "gargoyle:replay:") -> "RedisReplayStore":
         import redis  # lazy: not a hard dependency
 
         return cls(redis.Redis.from_url(url), key_prefix=key_prefix)

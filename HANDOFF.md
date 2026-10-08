@@ -57,6 +57,11 @@ replay, issuance_log, envelope_inspector, governance_wiring, request_validator.
    reassert(): bad decision_sha256 -> INVALIDATED, pin differs -> RE-EVALUATE-REQUIRED,
    else REASSERTED. Published record shape is now {policy_id, policy_sha256}.
    Receipt format version: "gargoyle/1". Suite: 249 pass.
+   Follow-up (same day): docstrings/comments rewritten without Elyon-Sol provenance
+   (comment-only, guarded by /elyon/gargoyle-tools/docguard.py); brand strings in code
+   renamed (record format gargoyle-published-record, Redis prefixes gargoyle:*); the MCP
+   server now refuses a receipt without decision_id (it was executable and replayable).
+   Suite: 251 pass.
    Open from this step: the MCP server's interaction_for() still rebuilds AP/OP from
    the manifest, so the consumer side is tied to ManifestPolicy - fix with step 3,
    which replaces AP/OP binding with tool + args + principal. requires_approval is not
@@ -77,6 +82,13 @@ replay, issuance_log, envelope_inspector, governance_wiring, request_validator.
 8. Re-run the suite after each step; the 253 tests are the regression floor.
 
 ## Known weaknesses carried over (fix or document)
+- verify_envelope() with no trusted keys (no pinned_public_keys, no key-record view)
+  accepts any receipt whose decision_sha256 verifies, and anyone can compute that
+  hash. Only the signed path authenticates the issuer. Consider making trusted keys
+  mandatory (refuse when none are configured) - a code change, not yet made.
+- Test names still carry old labels (_a1/_a2/_a3, _p01, _REVERT_CATCHER,
+  test_three_model_forge_refused_on_signed_path); docstrings are clean. Rename freely.
+- executor_sdk.Decision (honored, reason) shares its name with policy.Decision.
 - Replay cache scope and restart behavior are per-store; the shared (Redis) variant
   is opt-in.
 - "Currently valid" depends on knobs with non-default wiring (expiry, clock skew).
