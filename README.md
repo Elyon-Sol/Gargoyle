@@ -14,7 +14,10 @@ that decision with a key the issuing service does not have.
 
 Gargoyle does not decide whether a call is allowed. It makes an allow
 decision portable, verifiable, bound to one call by one caller, and
-spendable once.
+spendable once. The decision comes from your policy engine (an OPA adapter
+is included); the caller is authenticated by your transport (the
+proxy-verified client certificate, by default); Gargoyle sits in front of
+your MCP server and lets through only what both agreed to.
 
 Status: pre-release (`0.1.0.dev0`). The wire format is `gargoyle/1` and may
 still change before the first release; it is specified in [SPEC.md](SPEC.md).
@@ -35,8 +38,9 @@ still change before the first release; it is specified in [SPEC.md](SPEC.md).
 - **Currency.** The receipt pins the policy that decided. If the policy
   changes, outstanding receipts stop being honored and the call must be
   decided again.
-- **Holds.** A decision that requires approval is held until a human signs
-  a grant for that decision, under their own key, on their own device.
+- **Holds.** A decision that requires approval is flagged inside the signed
+  receipt. The target will not run it without a grant a human signed for
+  that exact decision, under their own key, on their own device.
 
 ## Install
 
@@ -73,9 +77,27 @@ else:
     send(call, headers={ENVELOPE_HEADER: json.dumps(result.envelope)})
 ```
 
-`gargoyle.policy.ManifestPolicy` is a reference policy for tests and
-examples (token-subset checks against a JSON manifest). Put a real policy
-engine behind the interface for anything else.
+**Open Policy Agent.** `gargoyle.opa.OpaPolicy` asks OPA's data API and
+pins the exact set of policy modules OPA holds, so editing a policy
+invalidates every outstanding receipt until the call is decided again.
+
+```python
+from gargoyle.opa import OpaPolicy
+policy = OpaPolicy("http://127.0.0.1:8181", "gargoyle/decision")
+```
+
+```rego
+package gargoyle
+default decision := {"allow": false, "reason": "DEFAULT_DENY"}
+decision := {"allow": true, "requires_approval": input.tool == "transfer_funds"} {
+    input.principal == "spiffe://example.org/agents/payments"
+    input.tool in {"read_balance", "transfer_funds"}
+}
+```
+
+OPA unreachable, an undefined document, or a result in no recognized shape
+is a refusal, never an issuance. Any other engine goes behind the same
+two-method interface. `gargoyle.policy.ManifestPolicy` is a test fixture.
 
 ## Checking a receipt
 
@@ -104,7 +126,10 @@ else:
 `peer_identity` is who *you* authenticated as the caller (an mTLS peer, a
 bearer token's subject, an identity a trusted proxy asserted). It is never
 read from the request. A consumer refuses to be built without issuer-key
-trust, so an unsigned receipt is never honored.
+trust, and the verifier refuses to run without it, so an unsigned receipt is
+never honored. For a flagged receipt, pass the human's grant as
+`grant=`; the consumer verifies it against the receipt's own decision and
+hold, claims it once, and only then claims the receipt.
 
 For a live pin that can be reissued, give the consumer a record source
 (a publisher-signed record with a serial and an expiry) instead of
@@ -113,10 +138,15 @@ record source. Both are consulted on every check and fail closed.
 
 ## Two shipped consumers
 
-**MCP server** (`python -m gargoyle.mcp_server`): a stdio MCP server that
-executes a `tools/call` only when `params._meta["gargoyle/envelope"]`
-carries a valid receipt for that tool, those arguments and the principal
-the server serves. Configuration is by environment:
+**MCP middleware** (`python -m gargoyle.mcp_server -- <upstream command>`):
+a stdio MCP server you put in front of any other stdio MCP server. The
+handshake, `tools/list` and everything else are relayed. A `tools/call` is
+forwarded only when `params._meta["gargoyle/envelope"]` carries a valid
+receipt for that tool, those arguments and the principal the server serves
+(and `params._meta["gargoyle/grant"]` a grant, when the receipt is
+flagged); a refused call is answered here and never reaches the upstream.
+Without an upstream command it runs a built-in demo executor.
+Configuration is by environment:
 
 | Variable | Meaning |
 |---|---|
@@ -124,36 +154,47 @@ the server serves. Configuration is by environment:
 | `GARGOYLE_MCP_TARGET_ID` | the target identity receipts bind to |
 | `GARGOYLE_MCP_PRINCIPAL` | the client this server serves |
 | `GARGOYLE_MCP_RECORD_PATH` | the published policy record |
+| `GARGOYLE_MCP_APPROVER_KEY_ID`, `GARGOYLE_MCP_APPROVER_PUBLIC_KEY_HEX` | the approver key whose grants release flagged calls (optional, both or neither) |
 
 **Reference HTTP target** (`uvicorn gargoyle.consumer:app`): a FastAPI
-service that authenticates the caller (an injected resolver, or a header a
-trusted front proxy sets), reads `{"tool", "args"}` from the body and the
-receipt from `X-Gargoyle-Envelope`, and acts only on a verdict. Its
-environment variables are listed at the top of `gargoyle/consumer.py`.
+service that authenticates the caller by transport, reads `{"tool", "args"}`
+from the body, the receipt from `X-Gargoyle-Envelope` and a grant from
+`X-Gargoyle-Grant`, and acts only on a verdict. The default principal source
+is the client certificate the TLS-terminating proxy verified, read from
+Envoy's `X-Forwarded-Client-Cert` (URI SAN, else Subject); set
+`GARGOYLE_PRINCIPAL_SOURCE=header` and `GARGOYLE_PRINCIPAL_HEADER` for a
+proxy-set identity header instead, or inject a resolver. In every mode the
+proxy must strip any client-supplied copy of the header. Its environment
+variables are listed at the top of `gargoyle/consumer.py`.
 
 ## Approval holds
 
-When `result.decision.requires_approval` is true, the issuing service holds
-the receipt and records an `approval_request_id` bound to its
-`decision_sha256` (`gargoyle.pending_store`). A human runs
-`gargoyle-approver` on a machine that holds the approver private key; it
-shows the held decision and emits a signed grant (`gargoyle.approval`). The
-service verifies the grant (provenance, separation of duties, binding to
-the decision and the request, expiry), consumes the hold once, and only
-then releases the receipt. Approver keys should come from a signed key
-record where the key's role is `approver` (`gargoyle.approver_trust`), so
-an issuer-controlled key can never approve.
+When the policy's decision carries `requires_approval`, the receipt is
+issued with `requires_approval: true` and a signed `approval_request_id`.
+No target will run it on its own: the consumer demands a grant for exactly
+that decision and hold, verifies it (provenance, separation of duties,
+binding, expiry), claims it once, and only then claims the receipt. A human
+runs `gargoyle-approver` on a machine that holds the approver private key;
+given the receipt it shows the tool, argument hash, principal, target and
+policy that are inside the issuer's signature, and emits the grant. The
+agent presents receipt and grant together. Approver keys should come from a
+signed key record where the key's role is `approver`
+(`gargoyle.approver_trust`), so an issuer-controlled key can never approve.
+An issuer that prefers to hold flagged receipts until the grant exists can
+do that too (`gargoyle.pending_store`); the target's check does not depend
+on it.
 
 ## Modules
 
 | Module | Role |
 |---|---|
 | `policy` | the decision interface and the reference manifest policy |
+| `opa` | the Open Policy Agent adapter |
 | `issuer` | ask the policy, sign the receipt |
 | `envelope` | receipt construction, hash region, signature region, currency check |
 | `verifier` | the pure target-side check and every refusal code |
 | `consumer` | `Consumer` (pin, keys, verify, claim) and the reference HTTP target |
-| `mcp_server` | the stdio MCP server |
+| `mcp_server` | the stdio MCP middleware (and demo executor) |
 | `replay_cache`, `pending_store` | single use for receipts and holds; in-memory or Redis |
 | `approval`, `approver_cli`, `approver_trust` | grants, the human's tool, approver key trust |
 | `published_source`, `published_record_source` | the live policy pin, anchored or signed |
@@ -165,7 +206,8 @@ an issuer-controlled key can never approve.
 - It does not decide. The policy does, and the receipt is only as good as
   that decision.
 - It does not authenticate principals. The issuer and the target each
-  authenticate the caller themselves; Gargoyle compares the two results.
+  authenticate the caller themselves (by default, the target trusts the
+  client certificate its proxy verified); Gargoyle compares the two results.
 - It cannot stop a caller that never asks for a receipt. Only a target that
   refuses unattested calls can.
 - It does not distribute trust material. Issuer keys, record anchors, root

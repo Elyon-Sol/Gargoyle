@@ -1,13 +1,21 @@
-"""An MCP server that executes a tool call only when it carries a valid receipt.
+"""MCP middleware: a stdio MCP server that lets a tool call through only when
+it carries a valid receipt.
 
-JSON-RPC 2.0 over stdio: initialize, tools/list, tools/call. This server is
-the executor, not the issuer. An agent obtains a signed receipt from the
-issuer (gargoyle.issuer.issue) and sends it in tools/call params._meta under
-"gargoyle/envelope". The server rebuilds the call from the actual tool name
-and arguments plus the principal it serves and asks a gargoyle.consumer
-.Consumer (signature, policy pin, binding, expiry, then the single-use
-claim on decision_id). The tool fires only after a positive verdict; every
-other path leaves it unfired.
+JSON-RPC 2.0 over stdio. Put it in front of any stdio MCP server:
+
+    python -m gargoyle.mcp_server -- python -m some_vendor.mcp_server
+
+The client talks to Gargoyle; Gargoyle talks to the upstream. initialize,
+tools/list and every other method are relayed as-is. tools/call is gated:
+the receipt rides in params._meta["gargoyle/envelope"] (and a grant, for a
+flagged call, in params._meta["gargoyle/grant"]); the server rebuilds the
+call from the actual tool name and arguments plus the principal it serves
+and asks a gargoyle.consumer.Consumer (signature, policy pin, binding,
+expiry, grant, the single-use claims). Only a call the consumer honored is
+forwarded, with the gargoyle keys stripped from its _meta; a refused call
+is answered here with isError and never reaches the upstream. Without an
+upstream command the server runs a built-in demo executor that records
+honored calls instead of forwarding them.
 
 The principal: a stdio server has exactly one client, the process that
 spawned it, and that client's identity is established by whoever wired the
@@ -20,7 +28,9 @@ Run as a stdio MCP server:  python3 -m gargoyle.mcp_server
 """
 
 import json
+import subprocess
 import sys
+import threading
 from typing import Any, Dict, List, Optional
 
 from gargoyle.consumer import REF_TARGET_NOT_CONFIGURED, Consumer
@@ -35,6 +45,7 @@ SERVER_INFO = {"name": "gargoyle", "version": "0.1.0"}
 # The _meta key the receipt rides under in tools/call params (the MCP
 # counterpart of the HTTP X-Gargoyle-Envelope header).
 ENVELOPE_META_KEY = "gargoyle/envelope"
+GRANT_META_KEY = "gargoyle/grant"
 EXECUTED_META_KEY = "gargoyle/executed"
 REASON_META_KEY = "gargoyle/reason"
 
@@ -58,6 +69,70 @@ ENV_GATE_PUBLIC_KEY_HEX = "GARGOYLE_MCP_GATE_PUBLIC_KEY_HEX"
 ENV_TARGET_ID = "GARGOYLE_MCP_TARGET_ID"
 ENV_RECORD_PATH = "GARGOYLE_MCP_RECORD_PATH"
 ENV_PRINCIPAL = "GARGOYLE_MCP_PRINCIPAL"
+ENV_APPROVER_KEY_ID = "GARGOYLE_MCP_APPROVER_KEY_ID"
+ENV_APPROVER_PUBLIC_KEY_HEX = "GARGOYLE_MCP_APPROVER_PUBLIC_KEY_HEX"
+
+
+JSONRPC_INTERNAL_ERROR = -32603
+
+
+class StdioUpstream:
+    """The MCP server this one fronts, spawned as a child on its own stdio.
+    send() writes one message and, for a request, reads until the matching
+    response, dropping anything else the upstream emits meanwhile (its
+    notifications are not relayed). One message in flight at a time."""
+
+    def __init__(self, command: List[str]) -> None:
+        if not command:
+            raise ValueError("upstream command must not be empty")
+        self.command = list(command)
+        self._proc = subprocess.Popen(
+            self.command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+            text=True, bufsize=1,
+        )
+        self._lock = threading.Lock()
+
+    def send(self, msg: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        with self._lock:
+            self._proc.stdin.write(json.dumps(msg) + "\n")
+            self._proc.stdin.flush()
+            if "id" not in msg:
+                return None
+            while True:
+                line = self._proc.stdout.readline()
+                if not line:
+                    raise RuntimeError("upstream closed its stdout")
+                try:
+                    reply = json.loads(line)
+                except (json.JSONDecodeError, ValueError):
+                    continue
+                if isinstance(reply, dict) and reply.get("id") == msg["id"]:
+                    return reply
+
+    def close(self) -> None:
+        for stream in (self._proc.stdin, self._proc.stdout):
+            try:
+                stream.close()
+            except Exception:
+                pass
+        try:
+            self._proc.terminate()
+            self._proc.wait(timeout=5)
+        except Exception:
+            self._proc.kill()
+
+
+def _without_gargoyle_meta(params: Dict[str, Any]) -> Dict[str, Any]:
+    """The tools/call params as the upstream should see them: the receipt
+    and grant are Gargoyle's business, not the tool's."""
+    forwarded = dict(params)
+    meta = {k: v for k, v in (params.get("_meta") or {}).items()
+            if k not in (ENVELOPE_META_KEY, GRANT_META_KEY)}
+    if meta:
+        forwarded["_meta"] = meta
+    else:
+        forwarded.pop("_meta", None)
+    return forwarded
 
 
 def call_for(tool: str, args: Any, principal: str) -> Dict[str, Any]:
@@ -77,8 +152,10 @@ class ServerState:
         self,
         config: Optional[Dict[str, Any]],
         replay_cache: Optional[InMemoryReplayCache] = None,
+        upstream: Optional[StdioUpstream] = None,
     ) -> None:
         self.config = config
+        self.upstream = upstream
         self.consumer: Optional[Consumer] = None
         if config is not None and valid_principal(config.get("principal")):
             self.consumer = Consumer(
@@ -87,6 +164,7 @@ class ServerState:
                 record_bytes=config["record_bytes"],
                 pinned_root=config["pinned_root"],
                 replay_cache=replay_cache,
+                approver_public_keys=config.get("approver_public_keys"),
             )
         self.executed: List[Dict[str, Any]] = []
         self.initialized = False
@@ -103,8 +181,10 @@ def gate_tool_call(state: ServerState, params: Dict[str, Any]) -> (bool, str):
     args = params.get("arguments", {})
     meta = params.get("_meta") or {}
     envelope = meta.get(ENVELOPE_META_KEY)
+    grant = meta.get(GRANT_META_KEY)
 
-    verdict = state.consumer.check(envelope, call_for(name, args, state.config["principal"]))
+    verdict = state.consumer.check(envelope, call_for(name, args, state.config["principal"]),
+                                   grant=grant)
     if not verdict.honored:
         return False, verdict.reason
 
@@ -128,6 +208,9 @@ def handle_message(state: ServerState, msg: Dict[str, Any]) -> Optional[Dict[str
     is_notification = "id" not in msg
     params = msg.get("params") or {}
 
+    if state.upstream is not None and method in ("initialize", "tools/list"):
+        return _relay(state, msg)
+
     if method == "initialize":
         # The handshake completes when the client sends notifications/initialized;
         # tools are served only after that.
@@ -142,6 +225,11 @@ def handle_message(state: ServerState, msg: Dict[str, Any]) -> Optional[Dict[str
 
     if method == "notifications/initialized":
         state.initialized = True
+        if state.upstream is not None:
+            try:
+                state.upstream.send(msg)
+            except Exception:
+                pass
         return None
 
     if method == "ping":
@@ -163,6 +251,20 @@ def handle_message(state: ServerState, msg: Dict[str, Any]) -> Optional[Dict[str
 
     if method == "tools/call":
         executed, reason = gate_tool_call(state, params)
+        if executed and state.upstream is not None:
+            # Honored: the upstream runs it. Its answer is the answer, plus
+            # the verdict in _meta.
+            forwarded = dict(msg)
+            forwarded["params"] = _without_gargoyle_meta(params)
+            try:
+                reply = state.upstream.send(forwarded)
+            except Exception as exc:
+                return _error(msg_id, JSONRPC_INTERNAL_ERROR, "upstream unavailable: %s" % exc)
+            if isinstance(reply, dict) and isinstance(reply.get("result"), dict):
+                meta = dict(reply["result"].get("_meta") or {})
+                meta.update({EXECUTED_META_KEY: True, REASON_META_KEY: reason})
+                reply["result"]["_meta"] = meta
+            return reply
         text = ("executed %s" % params.get("name")) if executed else ("refused: %s" % reason)
         result = {
             "content": [{"type": "text", "text": text}],
@@ -171,9 +273,22 @@ def handle_message(state: ServerState, msg: Dict[str, Any]) -> Optional[Dict[str
         }
         return _success(msg_id, result)
 
+    if state.upstream is not None:
+        return _relay(state, msg)
     if is_notification:
         return None
     return _error(msg_id, JSONRPC_METHOD_NOT_FOUND, "method not found: %s" % method)
+
+
+def _relay(state: ServerState, msg: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Pass a message to the upstream unchanged and return its answer; an
+    upstream failure is a JSON-RPC error, never a silent drop."""
+    try:
+        return state.upstream.send(msg)
+    except Exception as exc:
+        if "id" not in msg:
+            return None
+        return _error(msg.get("id"), JSONRPC_INTERNAL_ERROR, "upstream unavailable: %s" % exc)
 
 
 def config_from_env() -> Optional[Dict[str, Any]]:
@@ -184,7 +299,9 @@ def config_from_env() -> Optional[Dict[str, Any]]:
     GARGOYLE_MCP_PRINCIPAL is the client this server serves (see the module
     docstring); the published record (the live policy pin) is read from
     GARGOYLE_MCP_RECORD_PATH and anchored on its own bytes. All five are
-    required; there is no default record."""
+    required; there is no default record. GARGOYLE_MCP_APPROVER_KEY_ID and
+    GARGOYLE_MCP_APPROVER_PUBLIC_KEY_HEX, both or neither, pin the approver
+    key whose grants release flagged receipts."""
     import os
 
     key_id = os.environ.get(ENV_GATE_KEY_ID)
@@ -194,10 +311,18 @@ def config_from_env() -> Optional[Dict[str, Any]]:
     record_path = os.environ.get(ENV_RECORD_PATH)
     if not (key_id and key_hex and target_id and principal and record_path):
         return None
+    ap_key_id = os.environ.get(ENV_APPROVER_KEY_ID)
+    ap_key_hex = os.environ.get(ENV_APPROVER_PUBLIC_KEY_HEX)
+    if bool(ap_key_id) != bool(ap_key_hex):
+        return None
     try:
         from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
         public_key = Ed25519PublicKey.from_public_bytes(bytes.fromhex(key_hex))
+        approver_keys = (
+            {ap_key_id: Ed25519PublicKey.from_public_bytes(bytes.fromhex(ap_key_hex))}
+            if ap_key_id else None
+        )
         with open(record_path, "rb") as f:
             record_bytes = f.read()
     except Exception:
@@ -208,6 +333,7 @@ def config_from_env() -> Optional[Dict[str, Any]]:
         "pinned_root": anchor_sha256(record_bytes),
         "target_id": target_id,
         "principal": principal,
+        "approver_public_keys": approver_keys,
     }
 
 
@@ -233,5 +359,19 @@ def serve_stdio(state: ServerState, stdin=None, stdout=None) -> None:
             stdout.flush()
 
 
+def upstream_from_argv(argv: List[str]) -> Optional[StdioUpstream]:
+    """`-- <command...>` names the upstream MCP server to front; nothing
+    after `--` (or no `--`) means the built-in demo executor."""
+    if "--" not in argv:
+        return None
+    command = argv[argv.index("--") + 1:]
+    return StdioUpstream(command) if command else None
+
+
 if __name__ == "__main__":
-    serve_stdio(ServerState(config_from_env()))
+    _upstream = upstream_from_argv(sys.argv[1:])
+    try:
+        serve_stdio(ServerState(config_from_env(), upstream=_upstream))
+    finally:
+        if _upstream is not None:
+            _upstream.close()

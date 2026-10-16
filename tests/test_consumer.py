@@ -66,7 +66,7 @@ def test_requires_exactly_one_pin_source():
 
 
 def test_requires_issuer_key_trust():
-    """No keys at all would put verify_envelope on its unsigned path."""
+    """No keys at all: there is nothing to check provenance against."""
     with pytest.raises(ValueError):
         Consumer(target_id=TARGET, record=PIN)
     with pytest.raises(ValueError):
@@ -212,3 +212,120 @@ def test_shared_high_water_and_replay_cache_span_consumers():
     env = receipt()
     assert a.check(env, call(), now=NOW).honored is True
     assert b.check(env, call(), now=NOW) == (False, REF_VERIFY_REPLAY)
+
+
+# ---- flagged receipts: the human-held key is required at execution ----
+
+from gargoyle.approval import (  # noqa: E402
+    REF_APPROVAL_BINDING_MISMATCH, REF_APPROVAL_REPLAY, REF_APPROVAL_SOD, REF_APPROVAL_KEY_UNKNOWN,
+    build_grant, sign_grant,
+)
+from gargoyle.consumer import REF_TARGET_APPROVAL_REQUIRED, REF_TARGET_NO_APPROVER_TRUST  # noqa: E402
+from gargoyle.verifier import REF_VERIFY_SIGNATURE_INVALID as _SIG_INVALID  # noqa: E402
+
+approver = Ed25519PrivateKey.generate(); AKID = "approver-alice"
+
+
+class FlagAll(AllowAll):
+    def decide(self, target_url, interaction):
+        return Decision(ELIGIBLE, requires_approval=True)
+
+
+def flagged():
+    return issue(FlagAll(), TARGET, call(), signing_key=priv, key_id=KID, now=NOW).envelope
+
+
+def grant_for(env, signer=approver, kid=AKID, grant_id="g-1", decision_sha256=None):
+    g = build_grant(decision_sha256=decision_sha256 or env["decision_sha256"],
+                    approval_request_id=env["approval_request_id"], grant_id=grant_id,
+                    not_after=NOW + timedelta(minutes=10))
+    return sign_grant(g, signer, kid)
+
+
+def approving_consumer(**over):
+    return consumer(approver_public_keys={AKID: approver.public_key()}, **over)
+
+
+def test_flagged_receipt_is_issued_with_a_signed_hold():
+    env = flagged()
+    assert env["requires_approval"] is True and env["approval_request_id"]
+    free = receipt()
+    assert free["requires_approval"] is False and "approval_request_id" not in free
+
+
+def test_flagged_receipt_needs_a_grant():
+    c = approving_consumer()
+    env = flagged()
+    assert c.check(env, call(), now=NOW) == (False, REF_TARGET_APPROVAL_REQUIRED)
+    assert c.check(env, call(), grant=grant_for(env), now=NOW).honored is True
+
+
+def test_flagged_receipt_without_approver_trust_is_never_honored():
+    c = consumer()                        # no approver keys at all
+    env = flagged()
+    assert c.check(env, call(), grant=grant_for(env), now=NOW) == (False, REF_TARGET_NO_APPROVER_TRUST)
+
+
+def test_hold_cannot_be_stripped_from_a_flagged_receipt():
+    """requires_approval is inside the signature: flipping it, or dropping
+    the hold id, breaks provenance before the hold is even considered."""
+    env = flagged()
+    stripped = dict(env); stripped["requires_approval"] = False
+    assert approving_consumer().check(stripped, call(), now=NOW) == (False, _SIG_INVALID)
+    unnamed = dict(env); del unnamed["approval_request_id"]
+    assert approving_consumer().check(unnamed, call(), grant=grant_for(env), now=NOW).reason == "REF_VERIFY_ENVELOPE_ABSENT"
+
+
+def test_grant_must_name_this_decision_and_hold():
+    c = approving_consumer()
+    env = flagged()
+    other = issue(FlagAll(), TARGET, call(principal="agent-8"), signing_key=priv, key_id=KID, now=NOW).envelope
+    wrong_decision = grant_for(env, decision_sha256=other["decision_sha256"])
+    assert c.check(env, call(), grant=wrong_decision, now=NOW) == (False, REF_APPROVAL_BINDING_MISMATCH)
+    reissued = flagged()                  # same decision, another hold id
+    assert c.check(reissued, call(), grant=grant_for(env), now=NOW).reason == "REF_APPROVAL_REQUEST_MISMATCH"
+
+
+def test_issuer_cannot_approve_its_own_receipt():
+    c = consumer(approver_public_keys={KID: pub, AKID: approver.public_key()})
+    env = flagged()
+    self_signed = grant_for(env, signer=priv, kid=KID)
+    assert c.check(env, call(), grant=self_signed, now=NOW) == (False, REF_APPROVAL_SOD)
+    stranger = Ed25519PrivateKey.generate()
+    assert c.check(env, call(), grant=grant_for(env, signer=stranger, kid="nobody"), now=NOW) == (False, REF_APPROVAL_KEY_UNKNOWN)
+
+
+def test_grant_is_single_use_and_a_refused_grant_leaves_the_receipt_unspent():
+    c = approving_consumer()
+    env1, env2 = flagged(), flagged()
+    g = grant_for(env1)
+    # A grant for env1 presented with env2 is refused, and env2 stays spendable.
+    assert c.check(env2, call(), grant=g, now=NOW).honored is False
+    assert c.check(env2, call(), grant=grant_for(env2, grant_id="g-2"), now=NOW).honored is True
+    # The honored grant g-1 cannot release a third hold even if it matched.
+    assert c.check(env1, call(), grant=g, now=NOW).honored is True
+    env3 = flagged()
+    g_replayed = grant_for(env3, grant_id="g-1")
+    assert c.check(env3, call(), grant=g_replayed, now=NOW) == (False, REF_APPROVAL_REPLAY)
+
+
+def test_approver_keys_come_from_the_key_record_when_one_is_in_use():
+    """With a key record, only its approver-role keys can approve; a pinned
+    approver map is ignored, and an issuer-role key in the record cannot."""
+    view = {
+        KID: {"public_key": pub, "revoked": False, "role": "issuer",
+              "not_before": NOW - timedelta(days=1), "not_after": NOW + timedelta(days=1)},
+        AKID: {"public_key": approver.public_key(), "revoked": False, "role": "approver",
+               "not_before": NOW - timedelta(days=1), "not_after": NOW + timedelta(days=1)},
+    }
+    c = consumer(pinned_public_keys=None, key_record_view=view)
+    env = flagged()
+    assert c.check(env, call(), grant=grant_for(env), now=NOW).honored is True
+    pinned_only = Ed25519PrivateKey.generate()
+    c2 = consumer(pinned_public_keys=None, key_record_view=view,
+                  approver_public_keys={"pinned": pinned_only.public_key()})
+    env2 = flagged()
+    assert c2.check(env2, call(), grant=grant_for(env2, signer=pinned_only, kid="pinned"), now=NOW) == (False, REF_APPROVAL_KEY_UNKNOWN)
+    no_approver_role = {KID: view[KID]}
+    c3 = consumer(pinned_public_keys=None, key_record_view=no_approver_role)
+    assert c3.check(flagged(), call(), grant=grant_for(env), now=NOW) == (False, REF_TARGET_NO_APPROVER_TRUST)

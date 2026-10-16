@@ -120,3 +120,45 @@ def test_signed_receipt_without_decision_id_is_refused():
     for _ in range(2):
         assert gate_tool_call(state, _params(env)) == (False, REF_TARGET_NO_DECISION_ID)
     assert state.executed == []
+
+
+def test_flagged_receipt_executes_only_with_a_grant_in_meta():
+    from datetime import datetime, timedelta, timezone
+    from gargoyle.approval import build_grant, sign_grant
+    from gargoyle.consumer import REF_TARGET_APPROVAL_REQUIRED
+    from gargoyle.mcp_server import GRANT_META_KEY
+    from gargoyle.policy import Decision, ELIGIBLE
+
+    class FlagAll:
+        def pin(self): return reference_policy().pin()
+        def decide(self, target_url, interaction): return Decision(ELIGIBLE, requires_approval=True)
+
+    key = Ed25519PrivateKey.generate(); approver = Ed25519PrivateKey.generate()
+    state = _state(key)
+    state.consumer.approver_public_keys = {"approver-alice": approver.public_key()}
+    env = issue(FlagAll(), TARGET_ID, call_for("transfer", {"amount": 5}, PRINCIPAL),
+                signing_key=key, key_id="k1").envelope
+    assert gate_tool_call(state, _params(env)) == (False, REF_TARGET_APPROVAL_REQUIRED)
+    grant = sign_grant(build_grant(decision_sha256=env["decision_sha256"],
+                                   approval_request_id=env["approval_request_id"], grant_id="g-1",
+                                   not_after=datetime.now(timezone.utc) + timedelta(minutes=5)),
+                       approver, "approver-alice")
+    params = _params(env); params["_meta"][GRANT_META_KEY] = grant
+    assert gate_tool_call(state, params)[0] is True
+    assert state.executed == [{"tool": "transfer", "args": {"amount": 5}}]
+
+
+def test_config_from_env_approver_key_both_or_neither(monkeypatch, tmp_path):
+    from gargoyle.mcp_server import ENV_APPROVER_KEY_ID, ENV_APPROVER_PUBLIC_KEY_HEX
+    key = Ed25519PrivateKey.generate(); approver = Ed25519PrivateKey.generate()
+    record = tmp_path / "record.json"; record.write_bytes(reference_record_bytes())
+    monkeypatch.setenv(ENV_GATE_KEY_ID, "k1")
+    monkeypatch.setenv(ENV_GATE_PUBLIC_KEY_HEX, key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw).hex())
+    monkeypatch.setenv(ENV_TARGET_ID, TARGET_ID); monkeypatch.setenv(ENV_PRINCIPAL, PRINCIPAL)
+    monkeypatch.setenv(ENV_RECORD_PATH, str(record))
+    monkeypatch.delenv(ENV_APPROVER_KEY_ID, raising=False); monkeypatch.delenv(ENV_APPROVER_PUBLIC_KEY_HEX, raising=False)
+    assert config_from_env()["approver_public_keys"] is None
+    monkeypatch.setenv(ENV_APPROVER_KEY_ID, "approver-alice")
+    assert config_from_env() is None                       # id without key: a partial pin refuses
+    monkeypatch.setenv(ENV_APPROVER_PUBLIC_KEY_HEX, approver.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw).hex())
+    assert set(config_from_env()["approver_public_keys"]) == {"approver-alice"}

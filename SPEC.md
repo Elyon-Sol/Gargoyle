@@ -72,6 +72,7 @@ signature region (section 5).
 |---|---|---|---|---|
 | `envelope_version` | string | yes | yes | `"gargoyle/1"` |
 | `decision` | string | yes | yes | `"ELIGIBLE"`; a receipt is only ever issued for an eligible call |
+| `requires_approval` | boolean | yes | yes | the policy flagged the call for a human; the receipt is honored only with a grant (section 8) |
 | `target_url` | string | yes | yes | the target the call is addressed to; compared as an exact string, no normalization |
 | `policy.policy_id` | string | yes | yes | the policy's logic and version, e.g. `opa:payments/3` |
 | `policy.policy_sha256` | 64 hex | yes | yes | the policy configuration the decision ran on |
@@ -83,6 +84,7 @@ signature region (section 5).
 | `issuer_key_id` | string | no | yes | names the issuer key in the target's trust material |
 | `not_after` | timestamp | no | yes | expiry; the issuer always sets one (default 300 s) |
 | `decision_id` | string | no | yes | the single-use id; unique per issuance (the issuer uses a UUID4) |
+| `approval_request_id` | string | no | yes | present iff `requires_approval` is true: the hold a grant must name; unique per issuance |
 | `issuer_signature` | 128 hex | no | - | section 5 |
 
 `request_context` contains exactly the three members listed. Nothing the
@@ -93,13 +95,15 @@ is about to run and compares.
 
 A receipt is **unusable** (refused `REF_VERIFY_ENVELOPE_ABSENT`) unless it is
 an object carrying `policy`, `request_context` (an object with all three
-members), `decision_sha256` and `target_url`.
+members), `decision_sha256`, `target_url` and a boolean `requires_approval`,
+and, when that is true, a non-empty string `approval_request_id`.
 
 ## 4. decision_sha256
 
 ```
 hash_region   = receipt minus {decision_sha256, timestamp_utc, issuer_key_id,
-                               issuer_signature, not_after, decision_id}
+                               issuer_signature, not_after, decision_id,
+                               approval_request_id}
 decision_sha256 = sha256(canonical_json(hash_region))
 ```
 
@@ -123,8 +127,9 @@ issuer_signature = hex(ed25519_sign(issuer_private_key,
                                     utf8(canonical_json(signed_region))))
 ```
 
-The signature therefore covers `not_after` and `decision_id`: a captured
-receipt cannot have its lifetime extended or its replay id swapped.
+The signature therefore covers `not_after`, `decision_id`,
+`approval_request_id` and `requires_approval`: a captured receipt cannot
+have its lifetime extended, its replay id swapped, or its hold removed.
 `timestamp_utc` carries no security weight and may change freely.
 
 ## 6. Verification
@@ -135,18 +140,20 @@ target authenticated for the presenting party; it is never taken from the
 request body or from the receipt. The checks run in this order and the first
 failure is the result.
 
-Before any check, the target must hold a live policy pin: either a fetched
-published record (section 9) or the policy object itself. Having neither is
-a configuration error, not a verdict; the reference verifier raises.
+Before any check, the target must hold a live policy pin (a fetched
+published record, section 9, or the policy object itself) and trusted
+issuer keys (a pinned key map or a key record view, section 10). Lacking
+either is a configuration error, not a verdict; the reference verifier
+raises. There is no unsigned mode: a verifier without trusted keys could
+only check a hash anyone can compute, so it is not offered.
 
 1. **Structure.** The receipt is usable (section 3). Else
    `REF_VERIFY_ENVELOPE_ABSENT`.
-2. **Provenance.** Runs whenever the target has trusted issuer keys (a
-   pinned map or a key record view; deployed targets always do).
+2. **Provenance.**
    - `issuer_key_id` and `issuer_signature` are strings, else
      `REF_VERIFY_SIGNATURE_INVALID`.
    - With a pinned map: the key id is present, else
-     `REF_VERIFY_SIGNATURE_UNKNOWN_KEY`.
+     `REF_VERIFY_SIGNATURE_UNKNOWN_KEY` (an empty map trusts nobody).
    - With a key record view (which, when present, is the only key source):
      the key is listed (`REF_VERIFY_KEY_UNKNOWN`), not revoked
      (`REF_VERIFY_KEY_REVOKED`), has role `issuer` or no role
@@ -177,16 +184,15 @@ a configuration error, not a verdict; the reference verifier raises.
      `sha256(canonical_json(call.args))`. Else `REF_VERIFY_BINDING_MISMATCH`.
 
 On success the result is `REASSERTED_AND_BOUND`. The verifier is pure; the
-replay claim (section 7) is the executing party's next step.
+replay claim (section 7) and, for a flagged receipt, the grant check
+(section 8) are the executing party's next steps.
 
 `skew` is a non-negative tolerance for clock divergence (default 0) that
 widens every time check symmetrically. A negative value is a configuration
 error and raises.
 
-**Unsigned mode.** A verifier given no trusted keys skips step 2 and accepts
-any receipt whose hash recomputes, which anyone can produce. It exists to
-show what a target sees without key material; a deployed target must pin
-issuer keys. A `Consumer` refuses to be built without them.
+A `Consumer` refuses to be built without issuer-key trust, and the verifier
+refuses to run without it.
 
 ## 7. Replay semantics
 
@@ -216,10 +222,11 @@ without anyone having to detect the leak; single use bounds it to one call.
 
 ## 8. The approval grant
 
-When the policy's decision carries `requires_approval`, the issuer holds the
-receipt and records an `approval_request_id` bound to its
-`decision_sha256`. A human approver, with their own key on their own
-device, signs a grant:
+When the policy's decision carries `requires_approval`, the issuer sets the
+receipt's `requires_approval` to true and gives it a signed
+`approval_request_id`. The target will not honor such a receipt without a
+grant, so the issuer may hand it out at once (or hold it, section 8.2). A
+human approver, with their own key on their own device, signs a grant:
 
 | Field | Type | Signed | Meaning |
 |---|---|---|---|
@@ -247,14 +254,42 @@ Verification (`verify_grant`), first failure wins:
 8. `not_after` present and `now < not_after + skew`, else
    `REF_APPROVAL_EXPIRED`.
 
-Single use is the holder's job, after verification: claim `grant_id` in a
-replay store (refuse `REF_APPROVAL_REPLAY`) and consume
-`approval_request_id` from the pending set by compare-and-delete against
-`decision_sha256` (refuse `REF_APPROVAL_REQUEST_UNKNOWN` when unknown,
-expired or bound to another decision). The approver map should come from a
-signed key record (section 10) where the key's role is exactly `approver`;
-a key-id comparison alone cannot stop an issuer-controlled key published
-under another id.
+### 8.1 At the target
+
+The grant is presented alongside the receipt (section 12). After the
+receipt verifies (section 6) and has a `decision_id`, a consumer that finds
+`requires_approval` true:
+
+1. refuses `REF_TARGET_APPROVAL_REQUIRED` if no grant was presented;
+2. refuses `REF_TARGET_NO_APPROVER_TRUST` if it trusts no approver key. The
+   approver map comes from the key record's `approver`-role keys when a key
+   record is in use (unrevoked, in window, and never the issuer's key id),
+   else from a pinned approver map;
+3. runs `verify_grant` with the receipt's own `decision_sha256` and
+   `approval_request_id` as the expected values and the receipt's
+   `issuer_key_id` as the separation-of-duties id, refusing with its
+   reason;
+4. claims `grant_id` in the replay store under its own namespace, retained
+   until the grant's `not_after + skew` (refuse `REF_APPROVAL_REPLAY`);
+5. then claims `decision_id` as in section 7.
+
+The grant is checked and claimed before the receipt is claimed, so a
+refused grant leaves the receipt unspent. Because `requires_approval` and
+`approval_request_id` are inside the issuer's signature, a caller cannot
+strip the hold from a flagged receipt.
+
+### 8.2 At the issuer (optional)
+
+An issuer that prefers not to release a flagged receipt until the grant
+exists records the hold in a pending set keyed by `approval_request_id` and
+consumes it by compare-and-delete against `decision_sha256` when the grant
+arrives (refuse `REF_APPROVAL_REQUEST_UNKNOWN` when unknown, expired or
+bound to another decision). This is defense in depth; the target's check
+in 8.1 does not depend on it.
+
+The approver map should come from a signed key record (section 10) where
+the key's role is exactly `approver`; a key-id comparison alone cannot stop
+an issuer-controlled key published under another id.
 
 ## 9. The published policy record
 
@@ -339,33 +374,34 @@ checking only.
 Call: `{"tool": "transfer_funds", "args": {"amount": 250, "to": "acct-9"}, "principal": "agent-7"}`
 at `https://tools.example.com/target`, policy pin
 `{"policy_id": "opa:payments/3", "policy_sha256": "aaaa...a" (64 a's)}`,
-built at `2026-10-16T12:00:00+00:00`, signed under key id `issuer-2026-10`
-with `not_after` `2026-10-16T12:05:00+00:00` and `decision_id`
-`5b6b0c7e-6f1e-4d5b-9c3a-1e2f3a4b5c6d`.
+flagged (`requires_approval` true), built at `2026-10-16T12:00:00+00:00`,
+signed under key id `issuer-2026-10` with `not_after`
+`2026-10-16T12:05:00+00:00`, `decision_id`
+`5b6b0c7e-6f1e-4d5b-9c3a-1e2f3a4b5c6d` and `approval_request_id` `req-0001`.
 
 ```
 args_sha256      = e2363d59384e0a154faccbcc375337c59cc9c5fefa843519e0d5d311cf32bab7
-decision_sha256  = 9ca3811ce3307aa21bfea4346f051850a35f6f639d5059467f418e4b7c6a6a40
-issuer_signature = c51c20b0b335a0d71426b356230938a331c9c69609e1e8e7f9b7173a1acd0facf930bdbbf8795196afee54bb6c79b1fc286f4957a38c35a467bc8ad79d807401
+decision_sha256  = 6bc00001da83d7e81d6b2702558e447a0418a7140ad727571dadfd734492b272
+issuer_signature = 4f07d720213fe6e31eb4b73769e8d9fc810119808b608edf20ddbb3f8840716416525ee66ad92aab6ad3b708aca49d2a59f9ee55048889b6dbbc50e96b411b09
 ```
 
 Hash region bytes (section 4):
 
 ```
-{"decision":"ELIGIBLE","envelope_version":"gargoyle/1","policy":{"policy_id":"opa:payments/3","policy_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"request_context":{"args_sha256":"e2363d59384e0a154faccbcc375337c59cc9c5fefa843519e0d5d311cf32bab7","principal":"agent-7","tool":"transfer_funds"},"target_url":"https://tools.example.com/target"}
+{"decision":"ELIGIBLE","envelope_version":"gargoyle/1","policy":{"policy_id":"opa:payments/3","policy_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"request_context":{"args_sha256":"e2363d59384e0a154faccbcc375337c59cc9c5fefa843519e0d5d311cf32bab7","principal":"agent-7","tool":"transfer_funds"},"requires_approval":true,"target_url":"https://tools.example.com/target"}
 ```
 
 Signed region bytes (section 5):
 
 ```
-{"decision":"ELIGIBLE","decision_id":"5b6b0c7e-6f1e-4d5b-9c3a-1e2f3a4b5c6d","decision_sha256":"9ca3811ce3307aa21bfea4346f051850a35f6f639d5059467f418e4b7c6a6a40","envelope_version":"gargoyle/1","issuer_key_id":"issuer-2026-10","not_after":"2026-10-16T12:05:00+00:00","policy":{"policy_id":"opa:payments/3","policy_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"request_context":{"args_sha256":"e2363d59384e0a154faccbcc375337c59cc9c5fefa843519e0d5d311cf32bab7","principal":"agent-7","tool":"transfer_funds"},"target_url":"https://tools.example.com/target"}
+{"approval_request_id":"req-0001","decision":"ELIGIBLE","decision_id":"5b6b0c7e-6f1e-4d5b-9c3a-1e2f3a4b5c6d","decision_sha256":"6bc00001da83d7e81d6b2702558e447a0418a7140ad727571dadfd734492b272","envelope_version":"gargoyle/1","issuer_key_id":"issuer-2026-10","not_after":"2026-10-16T12:05:00+00:00","policy":{"policy_id":"opa:payments/3","policy_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"request_context":{"args_sha256":"e2363d59384e0a154faccbcc375337c59cc9c5fefa843519e0d5d311cf32bab7","principal":"agent-7","tool":"transfer_funds"},"requires_approval":true,"target_url":"https://tools.example.com/target"}
 ```
 
 Grant releasing that decision for hold `req-0001`, `grant_id` `grant-0001`,
 `not_after` `2026-10-16T12:10:00+00:00`, under key id `approver-alice`:
 
 ```
-approver_signature = 39a1decfc5118b4b71e592d56108163da57963b915ffe22296c8faa03ba007d304f12a89a87cd26e082b17f2b40c546f243db6fe6d119f759d0bf4e69f8c6600
+approver_signature = 32d80613c5776bbd12b8170f2fb5254db14405e81bef3aec56cfcdf42f111a54e69f83e72dfb1dd9ed85eb0d84c02eaa6bc563010a0ea204ca09e2f6d86b3d09
 ```
 
 The complete objects are in `tests/fixtures/wire_vectors.json`.
@@ -373,21 +409,29 @@ The complete objects are in `tests/fixtures/wire_vectors.json`.
 ## 12. Transport and versioning
 
 - HTTP: the receipt travels as JSON in the `X-Gargoyle-Envelope` request
-  header. Two copies of the header are ambiguous and count as no receipt.
+  header and a grant, when one is needed, in `X-Gargoyle-Grant`. Two copies
+  of either header are ambiguous and count as absent.
   The reference target's body is exactly `{"tool", "args"}`; the principal
-  comes from the target's own authentication (an injected resolver, or a
-  header a trusted front proxy sets and strips from client input). The
+  comes from the target's own authentication: by default the client
+  certificate the TLS-terminating proxy verified, read from the last element
+  of `X-Forwarded-Client-Cert` (its `URI` SAN, else its `Subject`), or a
+  proxy-set identity header, or an injected resolver. In every mode the
+  proxy must strip any client-supplied copy of the header. The
   target refuses every call while its out-of-band configuration is missing
   (`REF_TARGET_NOT_CONFIGURED`) and any call for which it authenticated
   nobody (`REF_TARGET_NO_PRINCIPAL`), both before the receipt is read.
   Refusals are HTTP 403 with body `{"detail": {"honored": false, "reason": <code>}}`;
   an honored call answers 200 with `{"honored": true, "reason": "REASSERTED_AND_BOUND"}`.
-- MCP: the receipt rides in `tools/call` `params._meta["gargoyle/envelope"]`;
-  the response `_meta` carries `gargoyle/executed` (boolean) and
-  `gargoyle/reason`. A stdio server serves one principal, configured out of
-  band.
+- MCP: the receipt rides in `tools/call` `params._meta["gargoyle/envelope"]`
+  and a grant in `params._meta["gargoyle/grant"]`; the response `_meta`
+  carries `gargoyle/executed` (boolean) and `gargoyle/reason`. A stdio
+  server serves one principal, configured out of band. As middleware in
+  front of another stdio server it relays every other method unchanged and
+  forwards a `tools/call` only after honoring it, with both `gargoyle/*`
+  keys removed from `params._meta`.
 - Redis key prefixes used by the reference stores: `gargoyle:replay:` and
-  `gargoyle:pending:`.
+  `gargoyle:pending:`; grant ids are claimed in the replay store as
+  `grant:<grant_id>`.
 - `envelope_version` names this format. Any change to a field set, a hash
   or signature region, or the verification order is a new version;
   verifiers do not accept a version they do not implement. `gargoyle/1` is

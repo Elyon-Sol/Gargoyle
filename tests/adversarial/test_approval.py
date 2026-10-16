@@ -91,7 +91,7 @@ def test_valid_grant_accepted(approver, trust):
 # Binding to the decision and to the hold
 # --------------------------------------------------------------------------
 
-def test_action_binding_mismatch_REVERT_CATCHER(approver, trust):
+def test_action_binding_mismatch(approver, trust):
     """Regression guard: a grant for decision A presented against decision B
     is refused. Without the decision_sha256 binding check it would be accepted."""
     grant = _valid_signed(approver, decision_sha256="b" * 64)
@@ -100,7 +100,7 @@ def test_action_binding_mismatch_REVERT_CATCHER(approver, trust):
     assert res["reason"] == REF_APPROVAL_BINDING_MISMATCH
 
 
-def test_request_binding_mismatch_REVERT_CATCHER(approver, trust):
+def test_request_binding_mismatch(approver, trust):
     """Regression guard: a grant carrying a different approval_request_id is
     refused. Without the request binding, a grant minted for another hold
     would be accepted."""
@@ -114,7 +114,7 @@ def test_request_binding_mismatch_REVERT_CATCHER(approver, trust):
 # Mandatory grant_id, so single use cannot be skipped
 # --------------------------------------------------------------------------
 
-def test_absent_grant_id_refused_REVERT_CATCHER(approver, trust):
+def test_absent_grant_id_refused(approver, trust):
     """Regression guard: an otherwise valid grant with no grant_id is refused.
     Accepting it would leave the single-use claim nothing to claim, so the
     grant could be replayed silently."""
@@ -156,7 +156,7 @@ def test_build_grant_rejects_empty_grant_id():
 # Separation of duties
 # --------------------------------------------------------------------------
 
-def test_sod_approver_equals_gate_key_REVERT_CATCHER(approver):
+def test_sod_approver_equals_gate_key(approver):
     """Regression guard: an approval signed under the issuer's key id is
     refused even with a valid signature. Without this check the issuer could
     approve its own held decision."""
@@ -171,7 +171,7 @@ def test_sod_approver_equals_gate_key_REVERT_CATCHER(approver):
 # Freshness (reuses verifier.not_after_valid)
 # --------------------------------------------------------------------------
 
-def test_expired_grant_refused_REVERT_CATCHER(approver, trust):
+def test_expired_grant_refused(approver, trust):
     """Regression guard: a grant whose not_after has passed is refused.
     Without the expiry check a stale approval would be honored forever."""
     grant = _valid_signed(approver, not_after=datetime.now(timezone.utc) - timedelta(seconds=1))

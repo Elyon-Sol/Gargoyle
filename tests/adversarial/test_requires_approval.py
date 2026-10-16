@@ -27,7 +27,7 @@ ELIGIBLE_CTX = {"AP": ["auth_admin"], "OP": ["op_transfer", "op_read"]}
 # A missing or malformed HIGH_IMPACT fails closed, never as an empty set
 # --------------------------------------------------------------------------
 
-def test_missing_high_impact_requires_approval_REVERT_CATCHER():
+def test_missing_high_impact_requires_approval():
     """Regression guard: a manifest with no HIGH_IMPACT key requires approval.
     Reading it as `.get("HIGH_IMPACT", [])` would make this False and switch
     oversight off silently."""
@@ -60,7 +60,7 @@ def test_explicit_empty_high_impact_is_low_impact():
 # HIGH_IMPACT tokens must be ones the caller is forced to declare (in AR u R)
 # --------------------------------------------------------------------------
 
-def test_high_impact_token_outside_required_is_manifest_error_REVERT_CATCHER():
+def test_high_impact_token_outside_required_is_manifest_error():
     """Regression guard: a HIGH_IMPACT token outside AR u R is a manifest
     error and fails closed. Without the subset check a caller could omit that
     token and be classified low-impact while still eligible."""
@@ -69,7 +69,7 @@ def test_high_impact_token_outside_required_is_manifest_error_REVERT_CATCHER():
     assert requires_approval(ELIGIBLE_CTX, manifest) is True
 
 
-def test_h2_eligible_and_low_impact_by_omission_is_impossible_REVERT_CATCHER():
+def test_h2_eligible_and_low_impact_by_omission_is_impossible():
     """Regression guard: a HIGH_IMPACT token outside AR u R is the escape
     route, because the caller need not declare it and could be eligible yet
     classified low-impact. The subset check makes it a manifest error, so

@@ -6,10 +6,9 @@ receipt from scratch with a correct decision_sha256 (it is an unkeyed hash).
 Ed25519 issuer signatures close that: the target checks the signature against
 a pinned public key before anything else.
 
-This holds only when the verifier is given pinned_public_keys. With
-pinned_public_keys=None the verifier runs in unsigned mode, which still
-accepts a from-scratch forgery; test_verifier_unsigned_mode_accepts_forge_non_default
-pins that fact so nobody mistakes unsigned mode for protection.
+The verifier has no unsigned mode: without pinned_public_keys or a key
+record view it raises, so a target can never be configured to accept the
+from-scratch forgery.
 
 The keypair is generated per test and never written to disk.
 """
@@ -83,6 +82,7 @@ def _construct_forge(interaction):
     forge = {
         "envelope_version": ENVELOPE_VERSION,
         "decision": "ELIGIBLE",
+        "requires_approval": False,
         "target_url": TARGET_URL,
         "policy": reference_policy().pin(),
         "request_context": {
@@ -160,7 +160,7 @@ def test_signed_envelope_honored_on_signed_path():
     assert result["reason"] == ACCEPT_REASSERTED_AND_BOUND
 
 
-def test_three_model_forge_refused_on_signed_path():
+def test_keyless_forge_refused_on_signed_path():
     """
     The from-scratch forgery (no key, correct unkeyed decision_sha256) is refused
     on the signed path with REF_VERIFY_SIGNATURE_INVALID, because it carries no
@@ -232,34 +232,35 @@ def test_tampered_signed_envelope_refused_on_signature():
 
 
 # ---------------------------------------------------------------------------
-# Unsigned mode: no key pinning, still forgeable
+# There is no unsigned mode
 # ---------------------------------------------------------------------------
 
 
-def test_verifier_unsigned_mode_accepts_forge_non_default():
+def test_verifier_without_trusted_keys_raises():
     """
-    Characterizes unsigned mode, which is not protection: verify_envelope with
-    pinned_public_keys=None accepts a from-scratch forgery. Unsigned mode exists
-    for demonstrating what a target sees without key pinning (test_bypass.py).
-    The issuer always signs (gargoyle.issuer.issue), so a deployed target must
-    pin keys.
+    The from-scratch forgery has a correct decision_sha256, and a verifier
+    with no trusted keys could only check that hash. Rather than offer that
+    as a mode, the verifier raises: a target cannot be configured into
+    accepting the forgery.
     """
+    import pytest
     interaction = _normalized_interaction()
     forge = _construct_forge(interaction)
-    result = verify_envelope(forge, interaction, TARGET_URL, policy=reference_policy())  # no pinned keys
-    assert result["accepted"] is True
-    assert result["reason"] == ACCEPT_REASSERTED_AND_BOUND
+    with pytest.raises(ValueError):
+        verify_envelope(forge, interaction, TARGET_URL, policy=reference_policy())
+    priv, _ = _gate_keypair()
+    signed = sign_envelope(_build_unsigned_envelope(interaction=interaction), priv, GATE_KEY_ID)
+    with pytest.raises(ValueError):
+        verify_envelope(signed, interaction, TARGET_URL, policy=reference_policy())
 
 
-def test_genuine_signed_envelope_unsigned_path_still_honored():
-    """
-    A signed receipt checked in unsigned mode is still honored: the issuer fields
-    disturb neither the integrity check nor the binding check.
-    """
+def test_empty_key_map_trusts_nobody():
+    """An empty pinned map is a configured verifier that trusts no key: every
+    receipt is refused on provenance, none is accepted on its hash."""
     priv, _ = _gate_keypair()
     interaction = _normalized_interaction()
-    signed = sign_envelope(_build_unsigned_envelope(interaction=interaction),
-                           priv, GATE_KEY_ID)
-    result = verify_envelope(signed, interaction, TARGET_URL, policy=reference_policy())
-    assert result["accepted"] is True
-    assert result["reason"] == ACCEPT_REASSERTED_AND_BOUND
+    signed = sign_envelope(_build_unsigned_envelope(interaction=interaction), priv, GATE_KEY_ID)
+    result = verify_envelope(signed, interaction, TARGET_URL, pinned_public_keys={},
+                             policy=reference_policy())
+    assert result["accepted"] is False
+    assert result["reason"] == REF_VERIFY_SIGNATURE_UNKNOWN_KEY

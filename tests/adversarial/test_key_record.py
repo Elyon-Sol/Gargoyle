@@ -299,9 +299,10 @@ def test_static_map_path_unchanged():
     assert result["reason"] == ACCEPT_REASSERTED_AND_BOUND
 
 
-def test_unsigned_path_unchanged():
-    # Neither trust source supplied -> unsigned mode,
-    # reassert + binding pass on a freshly built envelope -> accepts.
+def test_no_trust_source_raises():
+    # Neither trust source supplied: there is no unsigned mode; the verifier
+    # raises instead of accepting a hash anyone can compute.
+    import pytest
     interaction = _interaction()
     env = build_envelope(
         policy_pin=reference_policy().pin(),
@@ -309,9 +310,8 @@ def test_unsigned_path_unchanged():
         target_url=TARGET_URL,
         call=interaction,
     )
-    result = verify_envelope(env, interaction, TARGET_URL, policy=reference_policy())
-    assert result["accepted"] is True
-    assert result["reason"] == ACCEPT_REASSERTED_AND_BOUND
+    with pytest.raises(ValueError):
+        verify_envelope(env, interaction, TARGET_URL, policy=reference_policy())
 
 
 # --------------------------------------------------------------------------

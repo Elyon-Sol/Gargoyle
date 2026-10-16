@@ -65,7 +65,7 @@ def test_typed_types_not_a_dict_rejected():
     assert safe_manifest(dict(TYPED, interaction_types=["read"])) is None
 
 
-def test_type_token_outside_vocabulary_rejected_REVERT_CATCHER():
+def test_type_token_outside_vocabulary_rejected():
     """
     A type requiring a token outside the top-level AR u R vocabulary makes the
     manifest malformed. This keeps the top-level sets the true union, so the
@@ -86,7 +86,7 @@ def test_type_high_impact_flag_must_be_bool():
     assert safe_manifest(bad) is None
 
 
-def test_mislabeled_type_consistency_rejected_REVERT_CATCHER():
+def test_mislabeled_type_consistency_rejected():
     """
     A type flagged benign whose tokens intersect HIGH_IMPACT, or the reverse, is
     a mislabel and fails closed, so a sensitive action cannot be dressed up as
@@ -125,7 +125,7 @@ def test_resolve_no_declared_type_defaults_to_union():
         ["identity", "role"], ["session", "request"])
 
 
-def test_resolve_unknown_type_fails_closed_REVERT_CATCHER():
+def test_resolve_unknown_type_fails_closed():
     """An unknown declared type resolves to (None, None), which the policy refuses."""
     assert resolve_required_sets(TYPED, {"interaction_type": "delete"}) == (None, None)
 

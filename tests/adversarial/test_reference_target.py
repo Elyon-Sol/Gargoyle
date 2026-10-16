@@ -160,7 +160,7 @@ def test_reference_target_honors_valid_signed_routed_call(gate_signing):
 # ---------------------------------------------------------------------------
 
 
-def test_reference_target_refuses_absent_envelope_a1(gate_signing):
+def test_reference_target_refuses_absent_envelope_direct(gate_signing):
     """A direct caller sending no receipt header is refused by the target itself."""
     app, client = _make_target(gate_signing)
     resp = _post(client, _normalized_interaction(), envelope=None)
@@ -183,7 +183,7 @@ def test_reference_target_refuses_keyless_forge(gate_signing):
     assert app.state.received == []
 
 
-def test_reference_target_refuses_tampered_signed_envelope_a2(gate_signing):
+def test_reference_target_refuses_tampered_signed_envelope_after_signing(gate_signing):
     """
     A signed receipt whose request_context is changed after signing is refused:
     the edit is inside the signed region, so the signature fails.
@@ -197,7 +197,7 @@ def test_reference_target_refuses_tampered_signed_envelope_a2(gate_signing):
     assert app.state.received == []
 
 
-def test_reference_target_refuses_replay_binding_mismatch_a3(gate_signing):
+def test_reference_target_refuses_replay_binding_mismatch_other_call(gate_signing):
     """
     A genuine signed receipt for call X, delivered with a different call Y, is
     refused by the binding check.
@@ -422,7 +422,7 @@ def test_shared_replay_cache_cross_instance(gate_signing):
     assert r2.json()["detail"]["reason"] == REF_VERIFY_REPLAY   # cross-instance replay caught
 
 
-def test_reference_target_refuses_duplicate_envelope_header_p01(gate_signing):
+def test_reference_target_refuses_duplicate_envelope_header(gate_signing):
     """
     A valid receipt sent in two duplicate headers is treated as absent and
     refused, rather than honoring whichever header comes first.
@@ -437,3 +437,62 @@ def test_reference_target_refuses_duplicate_envelope_header_p01(gate_signing):
     assert resp.status_code == 403
     assert resp.json()["detail"]["reason"] == REF_VERIFY_ENVELOPE_ABSENT
     assert app.state.received == []
+
+
+# ---------------------------------------------------------------------------
+# Flagged receipts over HTTP: the grant rides in X-Gargoyle-Grant.
+# ---------------------------------------------------------------------------
+
+
+def test_reference_target_requires_and_honors_a_grant_for_a_flagged_call(gate_signing):
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    from datetime import datetime, timedelta, timezone
+    from gargoyle.approval import build_grant, sign_grant
+    from gargoyle.consumer import REF_TARGET_APPROVAL_REQUIRED, REF_TARGET_NO_APPROVER_TRUST, GRANT_HEADER
+    from gargoyle.envelope import build_envelope
+
+    approver = Ed25519PrivateKey.generate()
+    interaction = _normalized_interaction()
+    env = build_envelope(policy_pin=reference_policy().pin(), decision="ELIGIBLE", target_url=TARGET_URL,
+                         call=interaction, requires_approval=True)
+    env = sign_envelope(env, gate_signing["private_key"], gate_signing["key_id"],
+                        decision_id=uuid.uuid4().hex, approval_request_id="req-7")
+    grant = sign_grant(build_grant(decision_sha256=env["decision_sha256"], approval_request_id="req-7",
+                                   grant_id="g-7", not_after=datetime.now(timezone.utc) + timedelta(minutes=5)),
+                       approver, "approver-alice")
+
+    # No approver trust configured: never honored, even with a grant.
+    app, client = _make_target(gate_signing)
+    resp = client.post("/target", json={"tool": interaction["tool"], "args": interaction["args"]},
+                       headers={"X-Gargoyle-Envelope": canonical_json(env), GRANT_HEADER: canonical_json(grant),
+                                PRINCIPAL_HEADER: PRINCIPAL})
+    assert resp.status_code == 403
+    assert resp.json()["detail"]["reason"] == REF_TARGET_NO_APPROVER_TRUST
+
+    # With a pinned approver key: refused without the grant, honored once with it.
+    app, client = _make_target(gate_signing)
+    app_config_patch = {"approver_public_keys": {"approver-alice": approver.public_key()}}
+    # _make_target closes over its config dict; reach it through a fresh provider.
+    config = {
+        "target_url": TARGET_URL, "publisher_url": "http://publisher.test/published_hashes.json",
+        "pinned_root_sha256": _pinned_root(),
+        "pinned_public_keys": {gate_signing["key_id"]: gate_signing["public_key"]},
+        "principal_header": PRINCIPAL_HEADER, **app_config_patch,
+    }
+    app = build_reference_target_app(config_provider=lambda: config,
+                                     fetch=_fetch_via(_publisher_client(_published_bytes())))
+    client = TestClient(app)
+    body = {"tool": interaction["tool"], "args": interaction["args"]}
+    base = {"X-Gargoyle-Envelope": canonical_json(env), PRINCIPAL_HEADER: PRINCIPAL}
+    resp = client.post("/target", json=body, headers=base)
+    assert resp.status_code == 403
+    assert resp.json()["detail"]["reason"] == REF_TARGET_APPROVAL_REQUIRED
+    assert app.state.received == []
+    resp = client.post("/target", json=body, headers={**base, GRANT_HEADER: canonical_json(grant)})
+    assert resp.status_code == 200, resp.text
+    assert len(app.state.received) == 1
+    # Two grant headers are ambiguous: no grant.
+    resp = client.post("/target", json=body,
+                       headers=[("X-Gargoyle-Envelope", canonical_json(env)), (PRINCIPAL_HEADER, PRINCIPAL),
+                                (GRANT_HEADER, canonical_json(grant)), (GRANT_HEADER, canonical_json(grant))])
+    assert resp.json()["detail"]["reason"] in (REF_TARGET_APPROVAL_REQUIRED, REF_VERIFY_REPLAY)

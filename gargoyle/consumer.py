@@ -4,7 +4,8 @@ honor a receipt at most once, and a deployable reference target built on it.
 Every consumer (the reference target below, gargoyle.mcp_server, an
 integrator's own service) runs the same sequence on each call: establish
 the live policy pin, establish the trusted issuer keys, verify_envelope,
-then claim decision_id in a replay cache. `Consumer` packages it:
+demand and verify a human's grant when the receipt is flagged, then claim
+the grant and the decision_id in a replay cache. `Consumer` packages it:
 
     from gargoyle.consumer import Consumer
 
@@ -15,7 +16,7 @@ then claim decision_id in a replay cache. `Consumer` packages it:
     )
 
     call = {"tool": name, "args": arguments, "principal": peer_identity}
-    verdict = consumer.check(envelope, call)
+    verdict = consumer.check(envelope, call, grant=grant_or_none)
     if verdict.honored:
         do_the_side_effect()
     else:
@@ -26,12 +27,19 @@ the receipt must name the same principal (see gargoyle.verifier). The
 consumer only decides; the caller performs the side effect. Every
 undecidable path is honored=False. Two rules are not optional:
 
-  - The signature check always runs. verify_envelope has an unsigned path
-    when given no key material at all; a Consumer never takes it. It
-    requires issuer-key trust at construction and passes an empty map rather
-    than None, so an unsigned receipt is refused, never honored.
+  - The signature check always runs. verify_envelope raises when given no
+    key material; a Consumer requires issuer-key trust at construction and
+    passes an empty map rather than None when a key record is the source,
+    so an unsigned receipt is refused, never honored.
   - A receipt without a decision_id is refused (REF_TARGET_NO_DECISION_ID):
     single use cannot be enforced for it.
+  - A receipt whose signed requires_approval is true is honored only with a
+    grant (gargoyle.approval) that a trusted approver key signed for exactly
+    that decision_sha256 and approval_request_id, presented alongside the
+    receipt; the grant is single-use too. No grant is
+    REF_TARGET_APPROVAL_REQUIRED; no approver trust configured is
+    REF_TARGET_NO_APPROVER_TRUST. The human-held key is therefore required
+    at the point of execution, not merely at issuance.
 
 Live pin and issuer keys can be static (a validated record dict, anchored
 record bytes, a pinned key map, a validated key-record view) or come from a
@@ -61,6 +69,8 @@ from typing import Any, Callable, Dict, NamedTuple, Optional
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
 
+from gargoyle.approval import verify_grant
+from gargoyle.approver_trust import resolve_approver_keys
 from gargoyle.key_record_source import fetch_key_record
 from gargoyle.published_record_source import fetch_signed_record
 from gargoyle.published_source import (
@@ -73,8 +83,10 @@ from gargoyle.verifier import (
     REF_VERIFY_KEY_RECORD_INVALID,
     REF_VERIFY_PUBLISHED_RECORD_INVALID,
     REF_VERIFY_REPLAY,
+    not_after_valid,
     verify_envelope,
 )
+from gargoyle.approval import REF_APPROVAL_REPLAY
 
 
 # Refusals the consumer side emits itself. Every other refusal is the
@@ -86,9 +98,18 @@ REF_TARGET_NO_DECISION_ID = "REF_TARGET_NO_DECISION_ID"
 # The target could not authenticate the caller: no principal resolver and no
 # principal header configured, or the header absent, empty or duplicated.
 REF_TARGET_NO_PRINCIPAL = "REF_TARGET_NO_PRINCIPAL"
+# The receipt is flagged for a human and no grant was presented with it.
+REF_TARGET_APPROVAL_REQUIRED = "REF_TARGET_APPROVAL_REQUIRED"
+# The receipt is flagged for a human and this consumer trusts no approver key.
+REF_TARGET_NO_APPROVER_TRUST = "REF_TARGET_NO_APPROVER_TRUST"
 
-# The header carrying the receipt as JSON (see gargoyle.issuer).
+# The headers carrying the receipt and, for a flagged call, the grant, as JSON
+# (see gargoyle.issuer and gargoyle.approval).
 ENVELOPE_HEADER = "X-Gargoyle-Envelope"
+GRANT_HEADER = "X-Gargoyle-Grant"
+# Replay-cache namespace for grant ids, so a grant id can never collide with
+# a decision id.
+_GRANT_CLAIM_PREFIX = "grant:"
 
 
 class Verdict(NamedTuple):
@@ -154,6 +175,7 @@ class Consumer:
         replay_cache=None,
         clock_skew: timedelta = timedelta(0),
         high_water: Optional[HighWater] = None,
+        approver_public_keys: Optional[Dict[str, Any]] = None,
     ) -> None:
         """The live pin comes from exactly one of `record` (a validated
         {policy_id, policy_sha256}), `record_bytes` (anchored on `pinned_root`,
@@ -163,8 +185,10 @@ class Consumer:
         view, never re-validated: the caller owns its refresh) or
         `key_record_source` (called with the highest serial seen; prefer it);
         a view and a source together is a configuration error, and no trust
-        at all is one too, since it would put verify_envelope on its unsigned
-        path."""
+        at all is one too. Approver trust, needed only for flagged receipts,
+        comes from a key record's `approver`-role keys when a key-record view
+        or source is in use, else from the static `approver_public_keys`
+        map."""
         supplied = [x is not None for x in (record, record_bytes, record_source)]
         if sum(supplied) != 1:
             raise ValueError("supply exactly one of record, record_bytes or record_source")
@@ -193,6 +217,7 @@ class Consumer:
         self.replay_cache = replay_cache if replay_cache is not None else InMemoryReplayCache()
         self.clock_skew = clock_skew
         self.high_water = high_water if high_water is not None else HighWater()
+        self.approver_public_keys = approver_public_keys
 
     # ----- the live policy pin -----
 
@@ -232,17 +257,29 @@ class Consumer:
         self.high_water.advance_key_record(kres.get("serial"))
         return view
 
+    def _approver_keys(self, key_record_view, gate_key_id, now) -> Dict[str, Any]:
+        """The approver map for a flagged receipt: from the key record when
+        one is in use (only its `approver`-role keys, unrevoked, in window),
+        else the static map."""
+        if key_record_view is not None:
+            return resolve_approver_keys(key_record_view, gate_key_id=gate_key_id,
+                                         now=now, clock_skew=self.clock_skew)
+        return dict(self.approver_public_keys or {})
+
     def check(
         self,
         envelope: Any,
         call: Dict[str, Any],
         *,
+        grant: Any = None,
         now: Optional[datetime] = None,
     ) -> Verdict:
         """Decide whether to honor `envelope` for `call` ({"tool", "args",
         "principal"}, the principal being the one this consumer
-        authenticated). Fail-closed on every undecidable path; the caller
-        performs the side effect only when honored is True."""
+        authenticated), with `grant` the human's release presented alongside
+        a flagged receipt (None when none was). Fail-closed on every
+        undecidable path; the caller performs the side effect only when
+        honored is True."""
         if not isinstance(envelope, dict):
             envelope = None  # absent or not an object: verify_envelope refuses
 
@@ -253,8 +290,8 @@ class Consumer:
         if isinstance(key_record_view, Verdict):
             return key_record_view
 
-        # The signature check always runs: an empty map (not None) keeps
-        # verify_envelope off its unsigned path.
+        # The signature check always runs: an empty map (not None) satisfies
+        # verify_envelope's key requirement when the key record is the source.
         pinned_public_keys = (
             self.pinned_public_keys if self.pinned_public_keys is not None else {}
         )
@@ -277,6 +314,37 @@ class Consumer:
         decision_id = envelope.get("decision_id")
         if not isinstance(decision_id, str) or not decision_id:
             return Verdict(False, REF_TARGET_NO_DECISION_ID)
+
+        # A flagged receipt: the human-held key is required here, at the
+        # point of execution. requires_approval and approval_request_id are
+        # inside the signed region, so they are the issuer's word, not the
+        # caller's. The grant is checked and claimed before the receipt is
+        # claimed, so a refused grant leaves the receipt unspent.
+        if envelope["requires_approval"]:
+            if grant is None:
+                return Verdict(False, REF_TARGET_APPROVAL_REQUIRED)
+            approver_keys = self._approver_keys(key_record_view, envelope.get("issuer_key_id"), now)
+            if not approver_keys:
+                return Verdict(False, REF_TARGET_NO_APPROVER_TRUST)
+            g = verify_grant(
+                grant,
+                expected_decision_sha256=envelope["decision_sha256"],
+                expected_approval_request_id=envelope["approval_request_id"],
+                approver_public_keys=approver_keys,
+                gate_key_id=envelope.get("issuer_key_id"),
+                now=now,
+                clock_skew=self.clock_skew,
+            )
+            if not g["accepted"]:
+                return Verdict(False, g["reason"])
+            grant_exp = None
+            try:
+                grant_exp = datetime.fromisoformat(grant["not_after"]) + self.clock_skew
+            except (ValueError, TypeError, KeyError):
+                grant_exp = None
+            if not self.replay_cache.check_and_claim(
+                    _GRANT_CLAIM_PREFIX + grant["grant_id"], grant_exp, now=now):
+                return Verdict(False, REF_APPROVAL_REPLAY)
         # Keep the claim for the whole window the verifier honors: it accepts
         # until not_after + clock_skew, so expiring the claim at the bare
         # not_after would let the id be claimed again inside the skew.
@@ -306,10 +374,25 @@ class Consumer:
 #   GARGOYLE_GATE_KEY_ID         the pinned issuer key id.
 #   GARGOYLE_GATE_PUBLIC_KEY_HEX the pinned issuer public key, raw Ed25519
 #                                bytes as hex.
-#   GARGOYLE_PRINCIPAL_HEADER    the header a trusted front proxy sets to the
-#                                authenticated client identity. Without it,
-#                                and without an injected principal_resolver,
-#                                every call is refused.
+#   GARGOYLE_PRINCIPAL_SOURCE    how the caller is authenticated:
+#                                  "xfcc"   (default) the client certificate the
+#                                           TLS-terminating proxy verified, from
+#                                           its X-Forwarded-Client-Cert header
+#                                           (the URI SAN, else the Subject);
+#                                  "header" the identity header named below.
+#   GARGOYLE_PRINCIPAL_HEADER    with "header": the header a trusted front
+#                                proxy sets to the authenticated identity (a
+#                                bearer token's subject, for example).
+#                                In either mode the proxy must strip any
+#                                client-supplied copy of the header; nothing
+#                                here can check that. Without a usable
+#                                source, and without an injected
+#                                principal_resolver, every call is refused.
+#   GARGOYLE_APPROVER_KEY_ID / GARGOYLE_APPROVER_PUBLIC_KEY_HEX
+#                                a pinned approver key, so flagged receipts
+#                                can be honored with that approver's grant.
+#                                Optional; in key-record mode the record's
+#                                approver-role keys are used instead.
 #
 # Optional: GARGOYLE_PUBLISHER_KEY_ID / _KEY_HEX + GARGOYLE_SIGNED_RECORD_URL
 # for signed-record mode (freshness and serial instead of a byte anchor),
@@ -324,7 +407,11 @@ ENV_PUBLISHER_URL = "GARGOYLE_PUBLISHER_URL"
 ENV_PINNED_ROOT = "GARGOYLE_PINNED_ROOT_SHA256"
 ENV_GATE_KEY_ID = "GARGOYLE_GATE_KEY_ID"
 ENV_GATE_PUBLIC_KEY_HEX = "GARGOYLE_GATE_PUBLIC_KEY_HEX"
+ENV_PRINCIPAL_SOURCE = "GARGOYLE_PRINCIPAL_SOURCE"
 ENV_PRINCIPAL_HEADER = "GARGOYLE_PRINCIPAL_HEADER"
+XFCC_HEADER = "x-forwarded-client-cert"
+ENV_APPROVER_KEY_ID = "GARGOYLE_APPROVER_KEY_ID"
+ENV_APPROVER_PUBLIC_KEY_HEX = "GARGOYLE_APPROVER_PUBLIC_KEY_HEX"
 ENV_PUBLISHER_KEY_ID = "GARGOYLE_PUBLISHER_KEY_ID"
 ENV_PUBLISHER_KEY_HEX = "GARGOYLE_PUBLISHER_KEY_HEX"
 ENV_SIGNED_RECORD_URL = "GARGOYLE_SIGNED_RECORD_URL"
@@ -365,9 +452,24 @@ def config_from_env() -> Optional[Dict[str, Any]]:
         "pinned_root_sha256": pinned_root,
         "pinned_public_keys": {key_id: public_key},
     }
+    principal_source = (os.environ.get(ENV_PRINCIPAL_SOURCE) or "xfcc").strip().lower()
+    if principal_source not in ("xfcc", "header"):
+        return None
+    config["principal_source"] = principal_source
     principal_header = os.environ.get(ENV_PRINCIPAL_HEADER)
     if principal_header:
         config["principal_header"] = principal_header
+    ap_key_id = os.environ.get(ENV_APPROVER_KEY_ID)
+    ap_key_hex = os.environ.get(ENV_APPROVER_PUBLIC_KEY_HEX)
+    if ap_key_id or ap_key_hex:
+        if not (ap_key_id and ap_key_hex):
+            return None
+        try:
+            config["approver_public_keys"] = {
+                ap_key_id: Ed25519PublicKey.from_public_bytes(bytes.fromhex(ap_key_hex))
+            }
+        except Exception:
+            return None
     pub_key_id = os.environ.get(ENV_PUBLISHER_KEY_ID)
     pub_key_hex = os.environ.get(ENV_PUBLISHER_KEY_HEX)
     if pub_key_id and pub_key_hex:
@@ -428,6 +530,77 @@ def principal_from_header(request: Request, config: Dict[str, Any]) -> Optional[
     return value or None
 
 
+def _xfcc_elements(value: str):
+    """Split an X-Forwarded-Client-Cert value into its per-hop elements, each
+    a dict of key -> value. Values may be double-quoted (a Subject DN with
+    commas is); a quoted value keeps its inner text."""
+    elements, i, n = [], 0, len(value)
+    while i <= n:
+        current, pairs = {}, []
+        # one element: key=value;key="quoted, value";...
+        while i < n and value[i] != ",":
+            j = value.find("=", i)
+            if j < 0:
+                i = n
+                break
+            key = value[i:j].strip()
+            i = j + 1
+            if i < n and value[i] == '"':
+                k = value.find('"', i + 1)
+                if k < 0:
+                    return elements  # unterminated quote: stop, trust nothing further
+                val, i = value[i + 1:k], k + 1
+            else:
+                k = i
+                while k < n and value[k] not in ";,":
+                    k += 1
+                val, i = value[i:k].strip(), k
+            if key:
+                current[key] = val
+            if i < n and value[i] == ";":
+                i += 1
+        if current:
+            elements.append(current)
+        i += 1
+    return elements
+
+
+def principal_from_xfcc(request: Request, config: Dict[str, Any]) -> Optional[str]:
+    """Transport authentication: the client certificate the front proxy
+    verified, as Envoy reports it in X-Forwarded-Client-Cert. The last
+    element is the immediate downstream the proxy itself authenticated. The
+    principal is its URI SAN (a SPIFFE id, for example), else its Subject.
+    Absent or duplicated header, no last element, or neither field: None.
+    This is only transport authentication if the proxy requires and
+    verifies client certificates and never forwards a client-supplied copy
+    of the header (Envoy: forward_client_cert_details SANITIZE_SET)."""
+    values = request.headers.getlist(XFCC_HEADER)
+    if len(values) != 1:
+        return None
+    elements = _xfcc_elements(values[0])
+    if not elements:
+        return None
+    last = elements[-1]
+    for key in ("URI", "Subject"):
+        value = last.get(key, "").strip()
+        if value:
+            return value
+    return None
+
+
+def default_principal_resolver(request: Request, config: Dict[str, Any]) -> Optional[str]:
+    """The configured source: the proxy-verified client certificate (xfcc)
+    or a proxy-set identity header. An explicit principal_source wins; a
+    config that names only a principal_header means header mode; otherwise
+    xfcc."""
+    source = config.get("principal_source")
+    if source is None:
+        source = "header" if config.get("principal_header") else "xfcc"
+    if source == "header":
+        return principal_from_header(request, config)
+    return principal_from_xfcc(request, config)
+
+
 def _call_from_body(body: Any, principal: str) -> Optional[Dict[str, Any]]:
     """The call the receipt must bind: tool and args from the body (exactly
     those two keys, or the body is not a call), principal from the target's
@@ -451,7 +624,8 @@ def build_reference_target_app(
     runs per request, so a misconfigured deployment refuses each request
     with REF_TARGET_NOT_CONFIGURED instead of failing to boot), authenticates
     the caller (principal_resolver(request, config), default
-    principal_from_header; nobody -> REF_TARGET_NO_PRINCIPAL before anything
+    default_principal_resolver: the proxy-verified client certificate, or a
+    proxy-set header; nobody -> REF_TARGET_NO_PRINCIPAL before anything
     else), reads the call from the body (exactly {"tool", "args"}) and the
     receipt from the X-Gargoyle-Envelope header (absent, duplicated or
     unparseable -> no receipt), and hands them to a Consumer built from the
@@ -465,7 +639,7 @@ def build_reference_target_app(
     app.state.received = []
     app.state.replay_cache = replay_cache if replay_cache is not None else InMemoryReplayCache()
     app.state.high_water = HighWater()
-    resolve_principal = principal_resolver or principal_from_header
+    resolve_principal = principal_resolver or default_principal_resolver
 
     def consumer_for(config: Dict[str, Any], skew: timedelta) -> Consumer:
         # The published record: signed mode checks the publisher signature,
@@ -496,7 +670,21 @@ def build_reference_target_app(
             replay_cache=app.state.replay_cache,
             clock_skew=skew,
             high_water=app.state.high_water,
+            approver_public_keys=config.get("approver_public_keys"),
         )
+
+    def header_json(request: Request, name: str):
+        """One header's JSON value, or None when absent, duplicated or
+        unparseable: duplicates are ambiguous and count as absent."""
+        if len(request.headers.getlist(name)) > 1:
+            return None
+        raw = request.headers.get(name)
+        if raw is None:
+            return None
+        try:
+            return json.loads(raw)
+        except (json.JSONDecodeError, ValueError):
+            return None
 
     @app.post("/target")
     async def target(request: Request):
@@ -524,20 +712,13 @@ def build_reference_target_app(
             body = None
         call = _call_from_body(body, principal)
 
-        # Duplicate receipt headers are ambiguous: treat as no receipt.
-        raw = (None if len(request.headers.getlist(ENVELOPE_HEADER)) > 1
-               else request.headers.get(ENVELOPE_HEADER))
-        envelope = None
-        if raw is not None:
-            try:
-                envelope = json.loads(raw)
-            except (json.JSONDecodeError, ValueError):
-                envelope = None  # unparseable header: no receipt
+        envelope = header_json(request, ENVELOPE_HEADER)
+        grant = header_json(request, GRANT_HEADER)
 
         skew = timedelta(seconds=_clock_skew_seconds())
         consumer = consumer_for(config, skew)
         # The fetchers block (requests), so keep them off the event loop.
-        verdict = await run_in_threadpool(consumer.check, envelope, call)
+        verdict = await run_in_threadpool(consumer.check, envelope, call, grant=grant)
         if not verdict.honored:
             raise _refuse(verdict.reason)
 

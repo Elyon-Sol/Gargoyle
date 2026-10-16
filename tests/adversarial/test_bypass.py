@@ -36,7 +36,7 @@ async def target(request: Request):
 target_client = TestClient(target_app)
 
 
-def test_a1_direct_to_target_reaches_target_with_no_envelope():
+def test_direct_to_target_reaches_target_with_no_envelope():
     """
     A caller that skips the issuer reaches a naive target directly: the target
     acts and nothing attests the call was authorized.
@@ -52,12 +52,13 @@ def test_a1_direct_to_target_reaches_target_with_no_envelope():
     assert "envelope" not in _received[0]
 
 
-def test_a1_target_side_verifier_would_reject_unattested_call():
+def test_target_side_verifier_would_reject_unattested_call():
     """
     The same direct call checked by verify_envelope is refused with
     REF_VERIFY_ENVELOPE_ABSENT. The defense works only if the target runs it.
     """
     interaction = {"tool": "transfer", "args": {"amount": 5}, "principal": "agent-7"}
-    result = verify_envelope(None, interaction, "http://127.0.0.1:9000/target", policy=reference_policy())
+    result = verify_envelope(None, interaction, "http://127.0.0.1:9000/target",
+                             pinned_public_keys={}, policy=reference_policy())
     assert result["accepted"] is False
     assert result["reason"] == REF_VERIFY_ENVELOPE_ABSENT

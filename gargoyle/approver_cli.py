@@ -49,9 +49,12 @@ def make_grant(
 
 
 def main(argv=None) -> int:
-    """Read a pending-approval hold (JSON with approval_request_id and
-    decision_sha256) from --pending or stdin, show the human what they are
-    releasing, and on confirmation print the signed grant JSON to stdout.
+    """Read the flagged receipt itself, or a bare hold (JSON with
+    approval_request_id and decision_sha256), from --pending or stdin, show
+    the human what they are releasing, and on confirmation print the signed
+    grant JSON to stdout. A receipt is preferred: it lets the human see the
+    tool, the argument hash, the principal and the target they are
+    releasing, all of which are inside the issuer's signature.
 
     The approver key comes from the environment (GARGOYLE_APPROVER_KEY_HEX +
     GARGOYLE_APPROVER_KEY_ID) so it is never passed on the command line. --yes
@@ -62,7 +65,7 @@ def main(argv=None) -> int:
         prog="approver_cli",
         description="Emit a signed approval grant for a held decision.",
     )
-    parser.add_argument("--pending", help="file with the 202 JSON; default stdin")
+    parser.add_argument("--pending", help="file with the flagged receipt or hold JSON; default stdin")
     parser.add_argument("--ttl", type=int, default=300, help="grant lifetime (s)")
     parser.add_argument("--yes", action="store_true", help="skip the confirm prompt")
     args = parser.parse_args(argv)
@@ -80,11 +83,17 @@ def main(argv=None) -> int:
         return 2
 
     # Show the human exactly what they are releasing.
-    sys.stderr.write(
-        "About to APPROVE a held high-impact decision:\n"
-        "  decision_sha256     : %s\n"
-        "  approval_request_id : %s\n" % (decision_sha256, approval_request_id)
-    )
+    lines = ["About to APPROVE a held high-impact decision:",
+             "  decision_sha256     : %s" % decision_sha256,
+             "  approval_request_id : %s" % approval_request_id]
+    rc = pending.get("request_context")
+    if isinstance(rc, dict):
+        lines += ["  tool                : %s" % rc.get("tool"),
+                  "  args_sha256         : %s" % rc.get("args_sha256"),
+                  "  principal           : %s" % rc.get("principal"),
+                  "  target_url          : %s" % pending.get("target_url"),
+                  "  policy              : %s" % pending.get("policy")]
+    sys.stderr.write("\n".join(lines) + "\n")
     if not args.yes:
         sys.stderr.write("Type 'approve' to sign a grant: ")
         sys.stderr.flush()

@@ -5,7 +5,7 @@ not_after is inside the signed region, so it cannot be extended, and outside
 decision_sha256, so it does not change the decision hash. Expiry bounds how
 long a captured or leaked receipt is useful without anyone having to detect
 the leak. It is only enforced when the signature is verified; an unsigned
-not_after is forgeable. `now` is injected and reassert(, policy=reference_policy()) uses record_source,
+not_after is forgeable. `now` is injected and reassert() uses record_source,
 so the tests are deterministic.
 """
 from datetime import datetime, timedelta, timezone
@@ -32,7 +32,8 @@ INTER = {"tool": "act", "args": {"k": "v"}, "principal": "agent-7"}
 
 def _env():
     env = {
-        "envelope_version": "gargoyle/1", "decision": "ELIGIBLE", "target_url": TARGET,
+        "envelope_version": "gargoyle/1", "decision": "ELIGIBLE", "requires_approval": False,
+        "target_url": TARGET,
         "policy": dict(REC),
         "request_context": {"tool": "act", "args_sha256": args_sha256({"k": "v"}),
                             "principal": "agent-7"},
@@ -125,11 +126,9 @@ def test_sign_rejects_naive_not_after(keys):
         sign_envelope(_env(), priv, "k1", not_after=datetime(2026, 6, 2, 13, 0, 0))
 
 
-def test_expired_on_unsigned_path_not_checked(keys):
-    # Expiry is a signed-path concern: with pinned_public_keys=None the
-    # not_after field is not consulted (an unsigned not_after is forgeable;
-    # only the signed path enforces it). Honored via reassert+binding.
-    priv, _ = keys
+def test_no_trusted_keys_is_a_configuration_error(keys):
+    # There is no unsigned path on which an unsigned not_after could be
+    # believed: a verifier without trusted keys raises.
     e = _env(); e["not_after"] = (NOW - timedelta(days=1)).isoformat()
-    r = verify_envelope(e, INTER, TARGET, record_source=REC, now=NOW)
-    assert r["reason"] == ACCEPT_REASSERTED_AND_BOUND
+    with pytest.raises(ValueError):
+        verify_envelope(e, INTER, TARGET, record_source=REC, now=NOW)

@@ -7,10 +7,15 @@
                    signing_key=key, key_id="issuer-1")
     if result.envelope is None:
         ...                                  # refused: result.decision.reason
-    elif result.decision.requires_approval:
-        ...                                  # hold for a human grant (gargoyle.approval)
     else:
         send(call, headers={ENVELOPE_HEADER: json.dumps(result.envelope)})
+
+A receipt the policy flagged (result.decision.requires_approval) is issued
+with requires_approval true and a signed approval_request_id. The target
+will not honor it without a human's grant for exactly that decision and
+request (gargoyle.approval, presented alongside the receipt), so the issuer
+may hand it out at once; an issuer that prefers to hold it until the grant
+arrives records the hold in gargoyle.pending_store.
 
 The policy sees the whole interaction; the receipt binds only "tool",
 "args" (by hash) and "principal". `principal` must be the identity the
@@ -82,6 +87,7 @@ def issue(
             call=dict(interaction),
             policy_pin=pin,
             timestamp_utc=issued_at.isoformat(),
+            requires_approval=bool(decision.requires_approval),
         )
     except (KeyError, TypeError, ValueError):
         return IssueResult(refuse(ISSUE_UNBINDABLE_CALL))
@@ -91,5 +97,6 @@ def issue(
         key_id,
         not_after=issued_at + timedelta(seconds=ttl_seconds),
         decision_id=str(uuid.uuid4()),
+        approval_request_id=str(uuid.uuid4()) if decision.requires_approval else None,
     )
     return IssueResult(decision, signed)

@@ -19,12 +19,15 @@ from fastapi.testclient import TestClient
 
 from reference import reference_policy, reference_record_bytes
 from gargoyle.policy import ManifestPolicy
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
 from gargoyle.envelope import (
     REASSERTED,
     RE_EVALUATE_REQUIRED,
     build_envelope,
     canonical_json,
     reassert,
+    sign_envelope,
 )
 from gargoyle.policy import MANIFEST_POLICY_ID
 from gargoyle.published_source import (
@@ -67,6 +70,9 @@ def _pinned_root():
 
 
 PRINCIPAL_HEADER = "X-Peer"  # stands in for the front proxy's identity header
+KID = "issuer-1"
+PRIV = Ed25519PrivateKey.generate()
+KEYS = {KID: PRIV.public_key()}
 
 
 def _normalized_interaction(tool="transfer", args=None, principal="agent-7"):
@@ -81,13 +87,14 @@ def _build_valid_envelope(interaction=None, target_url=TARGET_URL,
                           timestamp_utc="2026-05-31T00:00:00+00:00"):
     if interaction is None:
         interaction = _normalized_interaction()
-    return build_envelope(
+    env = build_envelope(
         policy_pin=reference_policy().pin(),
         decision="ELIGIBLE",
         target_url=target_url,
         call=interaction,
         timestamp_utc=timestamp_utc,
     )
+    return sign_envelope(env, PRIV, KID, decision_id="d-1")
 
 
 def _post_call(client, path, call, env):
@@ -150,7 +157,8 @@ def _build_cross_host_target_app(publisher_base, pinned_root, fetch=fetch_publis
             )
 
         result = verify_envelope(
-            envelope, interaction, expected_target_url, record_source=record
+            envelope, interaction, expected_target_url, record_source=record,
+            pinned_public_keys=KEYS,
         )
         if not result["accepted"]:
             raise HTTPException(
@@ -170,7 +178,7 @@ def _build_cross_host_target_app(publisher_base, pinned_root, fetch=fetch_publis
 
 def test_reassert_currency_comes_from_record_not_local_disk(monkeypatch):
     """
-    With the target's local policy pin made to diverge, reassert(, policy=reference_policy()) with the
+    With the target's local policy pin made to diverge, reassert() with the
     authentic record as record_source still returns REASSERTED, while the same
     receipt with no record_source returns RE-EVALUATE-REQUIRED. The contrast
     shows the fetched record, not local state, decides currency.
@@ -206,11 +214,13 @@ def test_verify_envelope_honors_valid_despite_divergent_local_disk(monkeypatch):
         lambda self: {"policy_id": MANIFEST_POLICY_ID, "policy_sha256": "0" * 64},
     )
 
-    bound = verify_envelope(env, interaction, TARGET_URL, record_source=record)
+    bound = verify_envelope(env, interaction, TARGET_URL, record_source=record,
+                            pinned_public_keys=KEYS)
     assert bound["accepted"] is True
     assert bound["reason"] == ACCEPT_REASSERTED_AND_BOUND
 
-    local = verify_envelope(env, interaction, TARGET_URL, policy=reference_policy())
+    local = verify_envelope(env, interaction, TARGET_URL, policy=reference_policy(),
+                            pinned_public_keys=KEYS)
     assert local["accepted"] is False
     assert local["reason"] == REF_VERIFY_REASSERT_RE_EVALUATE_REQUIRED
 
@@ -223,12 +233,15 @@ def test_verify_envelope_refuses_forged_despite_divergent_local_disk(monkeypatch
     """
     env = _build_valid_envelope()
     env["request_context"]["tool"] = "delete_database"  # tamper, no rehash
+    env = sign_envelope({k: v for k, v in env.items() if k != "issuer_signature"},
+                        PRIV, KID, decision_id="d-1")  # re-signed, so provenance passes
     record = _published_record()
     monkeypatch.setattr(
         "gargoyle.policy.ManifestPolicy.pin",
         lambda self: {"policy_id": MANIFEST_POLICY_ID, "policy_sha256": "0" * 64},
     )
-    result = verify_envelope(env, _normalized_interaction(), TARGET_URL, record_source=record)
+    result = verify_envelope(env, _normalized_interaction(), TARGET_URL, record_source=record,
+                             pinned_public_keys=KEYS)
     assert result["accepted"] is False
     assert result["reason"] == REF_VERIFY_REASSERT_INVALIDATED
 

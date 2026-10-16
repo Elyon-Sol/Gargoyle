@@ -4,11 +4,15 @@ verify_envelope(envelope, interaction, target_url) decides whether a target
 should act on a call carrying a receipt. It returns
 {"accepted": bool, "reason": str} and checks, in order:
 
-  1. Structure: the receipt has the fields the later checks read.
-  2. Signature (when the target supplies trusted keys or a key-record view):
-     a known, unrevoked, in-window issuer key signed the receipt, and the
-     receipt's not_after has not passed. Checked before anything else, so a
-     forgery is refused on provenance before any further work.
+  1. Structure: the receipt has the fields the later checks read, including
+     a boolean requires_approval and, when it is true, an
+     approval_request_id.
+  2. Signature: a known, unrevoked, in-window issuer key signed the receipt,
+     and the receipt's not_after has not passed. Checked before anything
+     else, so a forgery is refused on provenance before any further work.
+     Trusted keys (a pinned map or a key-record view) are required; a
+     verifier without them cannot authenticate the issuer and raises rather
+     than accept hashes anyone can compute.
   3. Currency and integrity, via envelope.reassert(): decision_sha256
      verifies and the receipt's policy pin matches the live pin.
   4. Binding: the receipt's request_context and target_url match the call
@@ -18,7 +22,9 @@ should act on a call carrying a receipt. It returns
 
 The verifier is pure: it performs no action and keeps no state. Refusing a
 second use of the same receipt (REF_VERIFY_REPLAY) is the executing party's
-job, de-duplicating on the signed decision_id (see replay_cache).
+job, de-duplicating on the signed decision_id (see replay_cache), and so is
+demanding a grant for a receipt whose requires_approval is true (see
+consumer): this module only guarantees the flag is signed and well-formed.
 
 A caller that never presents a receipt is only stopped if the target refuses
 unattested calls; this module makes attested calls checkable, it does not by
@@ -109,6 +115,7 @@ _REQUIRED_ENVELOPE_KEYS = (
     "request_context",
     "decision_sha256",
     "target_url",
+    "requires_approval",
 )
 
 # request_context fields the binding check compares.
@@ -182,8 +189,9 @@ def verify_envelope(
             itself (same process as the issuer). One of record_source /
             policy is required; neither is a ValueError, since a verifier
             with no live pin cannot check currency and must not pretend to.
-        pinned_public_keys: {key_id: public_key}. When given, a valid issuer
-            signature from one of these keys is required.
+        pinned_public_keys: {key_id: public_key}. A valid issuer signature
+            from one of these keys is required. An empty map trusts no key
+            and refuses every receipt.
         key_record_view: A validated key-record view from
             key_record_source.load_key_record_from_bytes, shape
             {key_id: {"public_key", "revoked", "not_before", "not_after",
@@ -200,10 +208,9 @@ def verify_envelope(
         {"accepted": bool, "reason": str}; reason is
         ACCEPT_REASSERTED_AND_BOUND on accept, a REF_VERIFY_* code otherwise.
 
-    With neither pinned_public_keys nor key_record_view, the signature step
-    is skipped: such a target trusts any receipt whose hash verifies, which
-    anyone can compute. Only use that path when transport alone
-    authenticates the issuer.
+    pinned_public_keys or key_record_view is required. Without either the
+    verifier could only check a hash anyone can compute, so it raises
+    ValueError (a configuration error) instead of returning a verdict.
     """
     # A negative skew would narrow the honored window, and no live pin would
     # leave currency unchecked: configuration errors, so fail loudly instead
@@ -212,6 +219,8 @@ def verify_envelope(
         raise ValueError("clock_skew must be non-negative")
     if record_source is None and policy is None:
         raise ValueError("verify_envelope needs a record_source or a policy")
+    if pinned_public_keys is None and key_record_view is None:
+        raise ValueError("verify_envelope needs trusted issuer keys: pinned_public_keys or key_record_view")
 
     # ----- Structure -----
     if not isinstance(envelope, dict):
@@ -225,13 +234,20 @@ def verify_envelope(
     for key in _REQUEST_CONTEXT_KEYS:
         if key not in rc:
             return _reject(REF_VERIFY_ENVELOPE_ABSENT)
+    # A flagged receipt names the hold a grant must release; a receipt that
+    # says so without naming it is unusable.
+    if not isinstance(envelope["requires_approval"], bool):
+        return _reject(REF_VERIFY_ENVELOPE_ABSENT)
+    if envelope["requires_approval"]:
+        arid = envelope.get("approval_request_id")
+        if not isinstance(arid, str) or not arid:
+            return _reject(REF_VERIFY_ENVELOPE_ABSENT)
 
     # ----- Signature -----
-    # Required whenever the target configured trusted keys. A missing,
-    # malformed or unverifiable signature, or an unknown key, is a refusal,
-    # never a fall-back to the unsigned path. Duck-typed: the public key
-    # object supplies .verify(signature, message) (e.g. Ed25519PublicKey).
-    if pinned_public_keys is not None or key_record_view is not None:
+    # A missing, malformed or unverifiable signature, or an unknown key, is
+    # a refusal. Duck-typed: the public key object supplies
+    # .verify(signature, message) (e.g. Ed25519PublicKey).
+    if True:
         key_id = envelope.get("issuer_key_id")
         signature_hex = envelope.get("issuer_signature")
         if not isinstance(key_id, str) or not isinstance(signature_hex, str):

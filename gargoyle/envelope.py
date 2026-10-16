@@ -12,9 +12,15 @@ it, and when. Three operations:
       policy_id or policy_sha256 differs -> RE-EVALUATE-REQUIRED
       otherwise                          -> REASSERTED
   Only REASSERTED may be honored without asking the policy again.
-- sign_envelope() adds the issuer key id, optional not_after and decision_id,
-  and an Ed25519 signature over everything except the signature itself and
-  timestamp_utc.
+- sign_envelope() adds the issuer key id, optional not_after, decision_id
+  and approval_request_id, and an Ed25519 signature over everything except
+  the signature itself and timestamp_utc.
+
+A receipt also says whether the policy flagged the call for a human:
+`requires_approval` is part of the decision (hashed and signed), so a target
+can tell a held call from a free one without trusting the issuer to hold it.
+A flagged receipt is only honored together with a grant (gargoyle.approval)
+that names its decision_sha256 and its approval_request_id.
 
 A receipt binds exactly what a target can observe about a call: the tool
 name, a SHA-256 of the canonical arguments, and the principal, the
@@ -55,6 +61,7 @@ _HASH_EXCLUDED_KEYS = (
     "issuer_signature",
     "not_after",
     "decision_id",
+    "approval_request_id",
 )
 
 # Excluded from the issuer signature. not_after and decision_id are NOT
@@ -113,9 +120,11 @@ def build_envelope(
     call: Dict[str, Any],
     policy_pin: Dict[str, str],
     timestamp_utc: Optional[str] = None,
+    requires_approval: bool = False,
 ) -> Dict[str, Any]:
     """Assemble a receipt for `decision` on `call` at `target_url`, made under
-    the policy identified by `policy_pin`.
+    the policy identified by `policy_pin`. `requires_approval` records that
+    the policy flagged the call for a human; it is part of the decision.
 
     `call` must carry the three bound fields: "tool" (a non-empty string),
     "args" (any JSON value; the receipt stores its args_sha256) and
@@ -125,6 +134,8 @@ def build_envelope(
     issuer turns that into a refusal."""
     if not valid_pin(policy_pin):
         raise ValueError("policy_pin must be {'policy_id': str, 'policy_sha256': <64 hex>}")
+    if not isinstance(requires_approval, bool):
+        raise TypeError("requires_approval must be a bool")
     if not isinstance(call, dict):
         raise TypeError("call must be a dict")
     tool = call["tool"]
@@ -140,6 +151,7 @@ def build_envelope(
     envelope: Dict[str, Any] = {
         "envelope_version": ENVELOPE_VERSION,
         "decision": decision,
+        "requires_approval": requires_approval,
         "target_url": target_url,
         "policy": {
             "policy_id": policy_pin["policy_id"],
@@ -189,6 +201,7 @@ def sign_envelope(
     key_id: str,
     not_after: Optional[datetime] = None,
     decision_id: Optional[str] = None,
+    approval_request_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Return a signed copy of `envelope` (the input is not modified).
 
@@ -196,7 +209,10 @@ def sign_envelope(
     a cryptography Ed25519PrivateKey; this module does not import
     cryptography. `not_after`, when given, must be timezone-aware and bounds
     the receipt's validity; the verifier refuses it afterwards. `decision_id`
-    is the per-issuance id executors de-duplicate on to refuse replay."""
+    is the per-issuance id executors de-duplicate on to refuse replay.
+    `approval_request_id` is the per-issuance id a grant must name to release
+    a flagged receipt; it is signed, like decision_id, and like it is not in
+    the decision hash."""
     signed = dict(envelope)
     signed["issuer_key_id"] = key_id
     if not_after is not None:
@@ -205,6 +221,8 @@ def sign_envelope(
         signed["not_after"] = not_after.isoformat()
     if decision_id is not None:
         signed["decision_id"] = decision_id
+    if approval_request_id is not None:
+        signed["approval_request_id"] = approval_request_id
     region = {k: v for k, v in signed.items() if k not in _SIGNATURE_EXCLUDED_KEYS}
     signed["issuer_signature"] = signing_key.sign(canonical_json(region).encode("utf-8")).hex()
     return signed

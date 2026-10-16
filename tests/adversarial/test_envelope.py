@@ -16,6 +16,7 @@ from gargoyle.envelope import (
     decision_sha256_of,
     live_pin,
     reassert,
+    sign_envelope,
 )
 from gargoyle.policy import ManifestPolicy
 
@@ -46,8 +47,9 @@ def _rehash(env):
 
 def test_receipt_top_level_and_request_context_keys():
     env = _env()
-    assert set(env) == {"envelope_version", "decision", "target_url", "policy",
+    assert set(env) == {"envelope_version", "decision", "requires_approval", "target_url", "policy",
                         "request_context", "timestamp_utc", "decision_sha256"}
+    assert env["requires_approval"] is False
     assert env["envelope_version"] == ENVELOPE_VERSION
     assert env["policy"] == reference_policy().pin()
     assert set(env["request_context"]) == {"tool", "args_sha256", "principal"}
@@ -111,6 +113,32 @@ def test_decision_sha256_covers_the_policy_pin():
     a = _env()
     b = _env(pin={"policy_id": "gargoyle.manifest-subset/1", "policy_sha256": "0" * 64})
     assert a["decision_sha256"] != b["decision_sha256"]
+
+
+class _PinOnly:
+    def __init__(self, pin): self._pin = pin
+    def pin(self): return self._pin
+
+
+def test_requires_approval_is_part_of_the_decision():
+    """The flag is hashed and signed, so a target can tell a held call from a
+    free one on the issuer's word; the hold's id is signed but, like
+    decision_id, varies per issuance and stays out of the decision hash."""
+    free = _env()
+    held = build_envelope(decision="ELIGIBLE", target_url=TARGET, call=_call(),
+                          policy_pin=free["policy"], requires_approval=True)
+    assert held["requires_approval"] is True
+    assert held["decision_sha256"] != free["decision_sha256"]
+    with pytest.raises(TypeError):
+        build_envelope(decision="ELIGIBLE", target_url=TARGET, call=_call(),
+                       policy_pin=free["policy"], requires_approval="yes")
+
+    class K:
+        def sign(self, m): return b"\x00" * 64
+    signed = sign_envelope(held, K(), "k", decision_id="d", approval_request_id="req-1")
+    assert signed["approval_request_id"] == "req-1"
+    assert signed["decision_sha256"] == held["decision_sha256"] == decision_sha256_of(signed)
+    assert reassert(signed, policy=_PinOnly(free["policy"]))["outcome"] == REASSERTED
 
 
 def test_decision_sha256_covers_tool_args_and_principal():

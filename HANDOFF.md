@@ -172,17 +172,59 @@ replay, issuance_log, envelope_inspector, governance_wiring, request_validator.
    regression floor (316 at step 7). All eight steps are done;
    what remains is the list below.
 
-## Known weaknesses carried over (fix or document)
-- requires_approval is not in the signed receipt, so a target cannot tell a held
-  call from a free one; it trusts the issuer to hold. Carried from step 2.
-- verify_envelope() with no trusted keys (no pinned_public_keys, no key-record view)
-  accepts any receipt whose decision_sha256 verifies, and anyone can compute that
-  hash. Only the signed path authenticates the issuer. Consider making trusted keys
-  mandatory (refuse when none are configured) - a code change, not yet made.
-- Test names still carry old labels (_a1/_a2/_a3, _p01, _REVERT_CATCHER,
-  test_three_model_forge_refused_on_signed_path); docstrings are clean. Rename freely.
-- Replay cache scope and restart behavior are per-store; the shared (Redis) variant
-  is opt-in.
-- "Currently valid" depends on knobs with non-default wiring (expiry, clock skew).
-- Approver trust records are operator-controlled; separation of duties is
-  organizational unless the trust record lives outside the issuer's control.
+## Known weaknesses carried over: resolved (2026-10-16)
+- requires_approval is now inside the receipt (hashed and signed) with a signed
+  approval_request_id; the consumer refuses a flagged receipt without a grant that a
+  trusted approver signed for that decision and hold, claims the grant single-use,
+  and only then claims the receipt. The human-held key is required at execution.
+- verify_envelope() has no unsigned path: without pinned keys or a key-record view it
+  raises; an empty map trusts nobody. Every test runs on the signed path.
+- Test names carry no Elyon-Sol labels.
+- executor_sdk.Decision is gone (step 6).
+
+## Limits by design (documented in SPEC.md and README.md, not defects)
+- Replay-cache and pending-set scope are the scope of the guarantee: per process
+  unless a shared store is configured; a multi-instance deployment must share one.
+- "Currently valid" depends on expiry and clock skew as configured; skew widens
+  every time check symmetrically and must be non-negative.
+- Approver trust is as good as its source: a key record the issuer's operator
+  controls makes separation of duties organizational. Publish approver roles from a
+  root the issuer cannot reach.
+- Gargoyle compares principals; it authenticates nobody. The XFCC and header
+  sources are only as trustworthy as the proxy that sets and sanitizes them.
+- A caller that never asks for a receipt is stopped only by a target that refuses
+  unattested calls.
+
+## The 2026-10-08 paragraph, clause by clause (2026-10-16)
+"Drop the canon, the ledger apparatus and the superscripted vocabulary." Done at
+staging and steps 1-4; nothing of them remains in the repo.
+"Keep the envelope, verifier, replay cache and approval-grant flow" Kept, in
+gargoyle/{envelope,verifier,replay_cache,approval,approver_trust,approver_cli,
+pending_store}.py.
+"as a small MCP middleware" gargoyle/mcp_server.py fronts any stdio MCP server
+(`python -m gargoyle.mcp_server -- <upstream command>`): initialize, tools/list and
+everything else relayed; tools/call forwarded only once a receipt (and grant) is
+honored, with Gargoyle's _meta stripped; refusals answered locally. The demo
+executor remains the no-upstream mode. "small": the package is ~3.8k lines, not a few
+hundred; that estimate was wrong and is the one clause not met.
+"a signed, single-use, argument-bound receipt for a tool call" The receipt binds
+tool, args_sha256, principal and target, carries a signed decision_id and
+not_after, and is claimed once (SPEC.md sections 3-7).
+"with a human-held key required for flagged calls" The flag is signed into the
+receipt and the consumer demands the approver's grant at execution (SPEC.md 8.1);
+gargoyle-approver signs it from the receipt on a machine the issuer cannot reach.
+"where the actual allow or deny decision comes from a real policy engine"
+gargoyle/opa.py: OpaPolicy asks OPA's data API and pins the exact module set OPA
+holds, so a policy edit invalidates outstanding receipts; the Policy protocol
+takes any other engine. ManifestPolicy is a test fixture.
+"and the caller is authenticated by the transport" The reference target's default
+principal source is the client certificate the TLS-terminating proxy verified
+(Envoy's X-Forwarded-Client-Cert: URI SAN, else Subject); a proxy-set identity
+header is the explicit alternative; an injected resolver covers anything else. The
+MCP server's principal is the one process that spawned it, configured out of band.
+"Position it as receipts and holds for agent tool calls, not as a governance
+substrate." README, pyproject description, SPEC.md section 1.
+"a few hundred lines and a weekend of positioning" Not met (see above).
+"the first version of this project that answers a question somebody is asking"
+Open. Nothing outside has used it; the repo is public so that can now happen.
+Suite: 358 pass.

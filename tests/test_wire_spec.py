@@ -17,6 +17,7 @@ from gargoyle.envelope import (
     ENVELOPE_VERSION, _HASH_EXCLUDED_KEYS, _SIGNATURE_EXCLUDED_KEYS,
     args_sha256, build_envelope, canonical_json, sign_envelope,
 )
+from gargoyle.consumer import REF_TARGET_APPROVAL_REQUIRED, Consumer
 from gargoyle.verifier import ACCEPT_REASSERTED_AND_BOUND, verify_envelope
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -38,10 +39,12 @@ def _recompute():
     call = VECTORS["call"]
     env = build_envelope(decision="ELIGIBLE", target_url=VECTORS["unsigned"]["target_url"], call=call,
                          policy_pin=VECTORS["unsigned"]["policy"],
-                         timestamp_utc=VECTORS["unsigned"]["timestamp_utc"])
+                         timestamp_utc=VECTORS["unsigned"]["timestamp_utc"],
+                         requires_approval=VECTORS["unsigned"]["requires_approval"])
     signed = sign_envelope(env, issuer, VECTORS["signed"]["issuer_key_id"],
                            not_after=datetime.fromisoformat(VECTORS["signed"]["not_after"]),
-                           decision_id=VECTORS["signed"]["decision_id"])
+                           decision_id=VECTORS["signed"]["decision_id"],
+                           approval_request_id=VECTORS["signed"]["approval_request_id"])
     grant = sign_grant(build_grant(decision_sha256=env["decision_sha256"],
                                    approval_request_id=VECTORS["grant"]["approval_request_id"],
                                    grant_id=VECTORS["grant"]["grant_id"],
@@ -72,13 +75,20 @@ def test_vectors_verify_with_the_reference_implementation():
                      approver_public_keys={grant["approver_key_id"]: approver.public_key()},
                      gate_key_id=signed["issuer_key_id"], now=now)
     assert g == {"accepted": True, "reason": ACCEPT_GRANT_VALID}
+    # The flagged vector receipt is honored by a consumer only with its grant (section 8.1).
+    consumer = Consumer(target_id=signed["target_url"], record=signed["policy"],
+                        pinned_public_keys={signed["issuer_key_id"]: issuer.public_key()},
+                        approver_public_keys={grant["approver_key_id"]: approver.public_key()})
+    assert consumer.check(signed, VECTORS["call"], now=now) == (False, REF_TARGET_APPROVAL_REQUIRED)
+    assert consumer.check(signed, VECTORS["call"], grant=grant, now=now).honored is True
 
 
 def test_regions_match_the_spec():
     """Sections 4 and 5: the excluded key sets, and the exact region bytes."""
     signed = VECTORS["signed"]
     assert set(_HASH_EXCLUDED_KEYS) == {"decision_sha256", "timestamp_utc", "issuer_key_id",
-                                        "issuer_signature", "not_after", "decision_id"}
+                                        "issuer_signature", "not_after", "decision_id",
+                                        "approval_request_id"}
     assert set(_SIGNATURE_EXCLUDED_KEYS) == {"issuer_signature", "timestamp_utc"}
     hash_region = canonical_json({k: v for k, v in signed.items() if k not in _HASH_EXCLUDED_KEYS})
     signed_region = canonical_json({k: v for k, v in signed.items() if k not in _SIGNATURE_EXCLUDED_KEYS})
@@ -97,6 +107,7 @@ def test_spec_quotes_the_vectors_verbatim():
         VECTORS["hash_region"], VECTORS["signed_region"],
         VECTORS["signed"]["decision_id"], VECTORS["signed"]["issuer_key_id"],
         VECTORS["grant"]["approver_key_id"], VECTORS["grant"]["grant_id"],
+        VECTORS["signed"]["approval_request_id"],
         ENVELOPE_VERSION,
     ):
         assert value in SPEC, value

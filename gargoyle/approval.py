@@ -8,9 +8,11 @@ issuer's key.
 
 verify_grant() is pure: it checks provenance, binding to the held decision
 and request, separation of duties, and freshness. It does not consume the
-grant. Single use is stateful and belongs to whoever holds the call: claim
-grant_id exactly once (a ReplayCache), and consume approval_request_id from
-the pending set (gargoyle.pending_store). verify_grant only guarantees that
+grant. Single use is stateful and belongs to whoever enforces the grant:
+the consumer (gargoyle.consumer) claims grant_id exactly once in its replay
+cache when it honors a flagged receipt, and an issuer that holds flagged
+receipts until the grant arrives consumes approval_request_id from its
+pending set (gargoyle.pending_store). verify_grant only guarantees that
 grant_id is present, so that claim cannot be skipped.
 """
 
