@@ -54,3 +54,39 @@ def test_cli_refuses_without_key_material_and_without_confirmation(monkeypatch, 
     monkeypatch.setattr(sys, "stdin", io.StringIO("no\n"))
     assert main(["--pending", str(hold)]) == 1
     assert capsys.readouterr().out == ""
+
+
+def test_issuer_mode_shows_bound_arguments_and_refuses_a_mismatch(monkeypatch, capsys):
+    """The reviewer reads the actual arguments; they are shown only if they
+    hash to the receipt, and a hold whose arguments do not match is never
+    signed."""
+    from gargoyle.approver_cli import approve_at_issuer
+    issuer = Ed25519PrivateKey.generate(); approver = Ed25519PrivateKey.generate()
+    held = issue(FlagAll(), TARGET, {"tool": "write_file", "args": {"path": "/srv/clients/acme/a.txt", "content": "x"},
+                                      "principal": "agent-7"}, signing_key=issuer, key_id="issuer-1").envelope
+    tampered = issue(FlagAll(), TARGET, {"tool": "write_file", "args": {"path": "/srv/clients/acme/b.txt"},
+                                          "principal": "agent-7"}, signing_key=issuer, key_id="issuer-1").envelope
+    posted = []
+
+    class Http:
+        def get(self, url, headers=None, timeout=None):
+            class R:
+                status_code = 200
+                def json(self_inner):
+                    return {"pending": [{"envelope": held, "args": {"path": "/srv/clients/acme/a.txt", "content": "x"}},
+                                        {"envelope": tampered, "args": {"path": "/etc/shadow"}}]}
+            return R()
+        def post(self, url, json=None, headers=None, timeout=None):
+            posted.append(json)
+            class R:
+                status_code = 200
+                def json(self_inner): return {"accepted": True, "reason": "GRANT_VALID"}
+            return R()
+
+    rc = approve_at_issuer("http://issuer", "tok", key_hex=approver.private_bytes(Encoding.Raw, PrivateFormat.Raw, NoEncryption()).hex(),
+                           key_id="approver-alice", yes=True, http=Http())
+    err = capsys.readouterr().err
+    assert '"path": "/srv/clients/acme/a.txt"' in err and "arguments (bound by args_sha256)" in err
+    assert "DO NOT MATCH args_sha256" in err
+    assert [g["approval_request_id"] for g in posted] == [held["approval_request_id"]]
+    assert rc == 1                                   # one hold refused

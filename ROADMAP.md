@@ -99,3 +99,10 @@ outside.
   (/issue, /pending, /grants, /record, /keys, OPA-backed); gargoyle-approver
   gained --issuer to fetch holds and post grants. The verification model did
   not change: the middleware still pins the issuer's and approver's keys.
+- No-engine path (2026-10-16): gargoyle/rules.py (RulesPolicy from a JSON file;
+  first match wins; globs on tool, principal, on_behalf_of and string args; pin =
+  file hash) and gargoyle/cli.py (`gargoyle init | issuer | approve | audit`). Holds
+  now carry the full arguments so the reviewer reads what they release, shown only
+  when they hash to the receipt. Verified end to end against the real filesystem
+  MCP server with no OPA and no containers. This is the shape a small IT practice
+  can run for a client: one rules file, one issuer process, one approver terminal.

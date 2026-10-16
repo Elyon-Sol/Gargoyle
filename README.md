@@ -114,6 +114,12 @@ OPA unreachable, an undefined document, or a result in no recognized shape
 is a refusal, never an issuance. Any other engine goes behind the same
 two-method interface. `gargoyle.policy.ManifestPolicy` is a test fixture.
 
+**No engine.** `gargoyle.rules.RulesPolicy` decides from a JSON file:
+first matching rule wins, globs on tool name, principal, delegation and
+string arguments, actions allow, hold or deny. The pin is the file's hash,
+so an edit invalidates outstanding receipts exactly as an engine change
+does. This is what `gargoyle init` sets up.
+
 ## Checking a receipt
 
 Every executor runs the same check: establish the live policy pin,
@@ -174,13 +180,20 @@ by anyone, in Python or TypeScript.
 
 ## Deploy it
 
-[examples/filesystem-agent](examples/filesystem-agent/) is a complete
-deployment for an unmodified MCP client: a filesystem MCP server behind the
-Gargoyle middleware, an issuing service backed by OPA in Docker, a human
-approver with their own key, and an offline audit script. Reads are free,
-writes block until the human's grant arrives, deletes are refused by
-policy. The middleware obtains receipts itself (`GARGOYLE_MCP_ISSUER_URL`
-and a client token), so the client needs no changes.
+Three commands, no policy engine, no containers, no client changes:
+
+    gargoyle init /path/the/agent/may/touch     # keys, config, rules.json
+    gargoyle issuer                             # the issuing service, on rules.json
+    gargoyle approve --watch 2                  # where the approver sits
+
+then paste the server entry from `gargoyle-deploy/mcp-config.json` into
+your MCP client. Reads are free, writes block until the approver's key
+signs, deletes are refused; the policy is a JSON rules file you edit. Every
+honored call comes back with receipt, grant and execution receipt, and
+`gargoyle audit` verifies them later offline.
+[examples/filesystem-agent](examples/filesystem-agent/) walks through it,
+and through the alternative with OPA in Docker for sites that run a policy
+engine.
 
 ## Two shipped consumers
 
@@ -246,6 +259,8 @@ on it.
 |---|---|
 | `policy` | the decision interface and the reference manifest policy |
 | `opa` | the Open Policy Agent adapter |
+| `rules` | a policy from a JSON rules file, for sites without an engine |
+| `cli` | the `gargoyle` command: init, issuer, approve, audit |
 | `issuer` | ask the policy, sign the receipt |
 | `identity` | the issuer's identity input: bearer, delegation and transaction tokens to principal and on_behalf_of |
 | `jws` | the receipt as a JWS any JWT library verifies |

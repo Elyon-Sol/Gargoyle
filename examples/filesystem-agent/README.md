@@ -23,9 +23,46 @@ Nothing in the client changes. The middleware obtains receipts itself.
                               |  gargoyle-approver --issuer  (approver's key, approver's machine)
 ```
 
-## 1. Keys and config
+## The short way: no policy engine, no containers
 
-From the repository root, with the package installed (`pip install -e .`):
+From a machine with the package installed (`pip install gargoyle-receipts`
+once published; until then `pip install -e .` from the repository):
+
+    gargoyle init /path/to/the/project/the/agent/may/touch
+    gargoyle issuer                      # terminal 1: the issuing service, on rules.json
+
+Paste the `filesystem-gargoyle` entry from `gargoyle-deploy/mcp-config.json`
+into your MCP client's configuration (Claude Desktop:
+`claude_desktop_config.json`; Claude Code: `claude mcp add-json ...`) and
+restart the client. Where the approver sits:
+
+    gargoyle approve --watch 2           # terminal 2 (or another machine, with approver.env)
+
+`gargoyle-deploy/rules.json` is the policy, and it is three lines of intent:
+
+```json
+{
+  "version": "1",
+  "default": "deny",
+  "rules": [
+    {"tools": ["read_*", "list_*", "get_*", "search_*", "directory_tree"], "action": "allow"},
+    {"tools": ["write_file", "edit_file", "create_directory", "move_file"], "action": "hold"},
+    {"tools": ["delete_*", "remove_*", "rm*"], "action": "deny", "reason": "DESTRUCTIVE_TOOL"}
+  ]
+}
+```
+
+First match wins; `hold` means a human must sign; rules can also match on
+`principals`, `on_behalf_of` and string `args` by glob (for example only
+hold writes under `/srv/clients/*` and deny the rest). Edit the file and the
+policy pin changes; receipts in flight stop being honored until re-decided.
+Skip to step 4.
+
+## The long way: OPA in containers
+
+For a deployment that already runs Open Policy Agent, or wants to.
+
+### 1. Keys and config
 
     cd examples/filesystem-agent
     python setup.py /path/to/the/project/the/agent/may/touch
@@ -34,7 +71,7 @@ This writes `issuer.env`, `middleware.env`, `approver.env` and
 `mcp-config.json` (all gitignored, all private) and prints the executor's
 public key, which an auditor will need later.
 
-## 2. The issuing side
+### 2. The issuing side
 
     docker compose up -d --build
     curl -s http://127.0.0.1:8080/record > record.json
@@ -43,12 +80,10 @@ OPA loads `policy.rego` and watches it for changes. The issuer signs
 receipts with its key, trusts identity tokens from the setup's identity
 provider key, and accepts grants from the approver's public key.
 
-## 3. The middleware in your MCP client
+### 3. The middleware in your MCP client
 
 Paste the `filesystem-gargoyle` entry from `mcp-config.json` into your
-client's MCP configuration (Claude Desktop: `claude_desktop_config.json`;
-Claude Code: `claude mcp add-json filesystem-gargoyle "$(jq .mcpServers.\"filesystem-gargoyle\" mcp-config.json)"`).
-It launches:
+client's MCP configuration. It launches:
 
     python -m gargoyle.mcp_server -- npx -y @modelcontextprotocol/server-filesystem <dir>
 
@@ -61,14 +96,12 @@ its own receipt from the issuer, verified against the pinned issuer key,
 and ran once.
 
 Ask it to write or edit a file: the call blocks (up to five minutes). On
-the approver's machine:
-
-    set -a; . ./approver.env; set +a
-    gargoyle-approver --issuer http://127.0.0.1:8080
-
-The approver sees the tool, the argument hash, the principal, the target
-and the policy pin that are inside the issuer's signature, types
-`approve`, and the grant is posted. The middleware verifies the grant
+the approver's machine, `gargoyle approve --watch 2` (or, for the OPA
+path, `set -a; . ./approver.env; set +a; gargoyle-approver --issuer
+http://127.0.0.1:8080`) shows the tool, the principal, the target, the
+policy pin and the full arguments, the arguments shown only if they hash
+to the receipt's `args_sha256`. The approver types `approve` and the grant
+is posted. The middleware verifies the grant
 against the receipt and its pinned approver key, spends both once, and
 the write happens. Type anything else and the write never happens: there
 is no grant, and the hold expires with the receipt.
@@ -76,7 +109,7 @@ is no grant, and the hold expires with the receipt.
 Ask it to delete something: refused by policy before any receipt exists
 (`DEFAULT_DENY`), and the assistant is told so.
 
-Edit `policy.rego` to move a tool between the sets: OPA reloads it, the
+Edit `rules.json` (or `policy.rego`) to move a tool between the sets: the
 policy pin changes, and any receipt still in flight is refused with
 `REF_VERIFY_REASSERT_RE_EVALUATE_REQUIRED` until the call is decided again.
 
@@ -88,7 +121,8 @@ middleware obtained (`gargoyle/receipt`), the grant it spent for a write
 (`gargoyle/execution`). Save the three as JSON files, then, with no service
 running:
 
-    EXECUTOR_PUBLIC_KEY_HEX=<from setup.py> python audit.py receipt.json execution.json grant.json
+    gargoyle audit receipt.json execution.json grant.json          # the short way
+    EXECUTOR_PUBLIC_KEY_HEX=<from setup.py> python audit.py receipt.json execution.json grant.json   # the OPA path
 
 prints each step and `chain: CHAIN_VERIFIED`: this policy version
 authorized this call for this principal, this human released it, and
@@ -102,7 +136,7 @@ exactly this call ran.
 - The approver's private key should live on a machine the issuer and the
   agent cannot reach. The setup script writes it next to the others for
   convenience; move `approver.env` before relying on the separation.
-- The identity provider here is the setup script's key. In production it
+- The identity provider here is the setup's own key. In production it
   is your OAuth server, SPIRE or IdP, and the middleware's token comes from
   it (`gargoyle.identity` reads bearer, delegation and transaction tokens).
 - The middleware runs with your user's OS privileges and does not sandbox

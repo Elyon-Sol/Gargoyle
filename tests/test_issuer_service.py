@@ -90,7 +90,9 @@ def test_flagged_call_is_held_until_a_valid_grant_is_posted(client):
                       headers=auth()).json()["envelope"]
     arid = env["approval_request_id"]
     assert env["requires_approval"] is True
-    assert [e["approval_request_id"] for e in client.get("/pending", headers=auth()).json()["pending"]] == [arid]
+    listed = client.get("/pending", headers=auth()).json()["pending"]
+    assert [h["envelope"]["approval_request_id"] for h in listed] == [arid]
+    assert listed[0]["args"] == {"path": "a.txt", "content": "x"}      # the reviewer sees the arguments
     assert client.get("/grants/" + arid, headers=auth()).json() == {"pending": True, "grant": None}
 
     def grant_by(key, kid, **over):

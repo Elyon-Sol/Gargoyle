@@ -73,6 +73,8 @@ def main(argv=None) -> int:
     )
     parser.add_argument("--pending", help="file with the flagged receipt or hold JSON; default stdin")
     parser.add_argument("--issuer", help="issuing service URL: fetch its pending holds and post grants back")
+    parser.add_argument("--watch", type=float, metavar="SECONDS",
+                        help="with --issuer: keep polling for new holds every SECONDS and prompt for each")
     parser.add_argument("--ttl", type=int, default=300, help="grant lifetime (s)")
     parser.add_argument("--yes", action="store_true", help="skip the confirm prompt")
     args = parser.parse_args(argv)
@@ -89,8 +91,17 @@ def main(argv=None) -> int:
         if not token:
             print("GARGOYLE_APPROVER_TOKEN must be set to talk to the issuer", file=sys.stderr)
             return 2
-        return approve_at_issuer(args.issuer, token, key_hex=key_hex, key_id=key_id,
-                                 ttl=args.ttl, yes=args.yes)
+        if not args.watch:
+            return approve_at_issuer(args.issuer, token, key_hex=key_hex, key_id=key_id,
+                                     ttl=args.ttl, yes=args.yes)
+        import time
+        print("watching %s for holds (Ctrl-C to stop)" % args.issuer, file=sys.stderr)
+        try:
+            while True:
+                approve_at_issuer(args.issuer, token, key_hex=key_hex, key_id=key_id, ttl=args.ttl, yes=args.yes)
+                time.sleep(args.watch)
+        except KeyboardInterrupt:
+            return 0
 
     raw = open(args.pending).read() if args.pending else sys.stdin.read()
     pending = json.loads(raw)
@@ -113,9 +124,11 @@ def main(argv=None) -> int:
     return 0
 
 
-def describe(pending: Dict[str, Any]) -> None:
+def describe(pending: Dict[str, Any], args: Any = None) -> None:
     """Show the human exactly what they are releasing: everything inside the
-    issuer's signature that identifies the call."""
+    issuer's signature that identifies the call, and the arguments
+    themselves when the issuer supplied them, shown only if they hash to
+    the receipt's args_sha256 (otherwise the mismatch is shown instead)."""
     lines = ["About to APPROVE a held high-impact decision:",
              "  decision_sha256     : %s" % pending.get("decision_sha256"),
              "  approval_request_id : %s" % pending.get("approval_request_id")]
@@ -129,6 +142,17 @@ def describe(pending: Dict[str, Any]) -> None:
         lines += ["  target_url          : %s" % pending.get("target_url"),
                   "  policy              : %s" % pending.get("policy"),
                   "  not_after           : %s" % pending.get("not_after")]
+        if args is not None:
+            from gargoyle.envelope import args_sha256
+            try:
+                bound = args_sha256(args) == rc.get("args_sha256")
+            except (TypeError, ValueError):
+                bound = False
+            if bound:
+                rendered = json.dumps(args, indent=2, sort_keys=True)
+                lines += ["  arguments (bound by args_sha256):"] + ["    " + l for l in rendered.splitlines()]
+            else:
+                lines.append("  arguments           : DO NOT MATCH args_sha256; refuse this hold")
     sys.stderr.write("\n".join(lines) + "\n")
 
 
@@ -158,11 +182,22 @@ def approve_at_issuer(issuer_url: str, token: str, *, key_hex: str, key_id: str,
         print("issuer unreachable: %s" % exc, file=sys.stderr)
         return 2
     if not pending:
-        print("nothing pending", file=sys.stderr)
         return 0
     status = 0
-    for env in pending:
-        describe(env)
+    for item in pending:
+        env, args_ = (item["envelope"], item.get("args")) if isinstance(item, dict) and "envelope" in item else (item, None)
+        describe(env, args_)
+        if args_ is not None:
+            from gargoyle.envelope import args_sha256
+            try:
+                if args_sha256(args_) != env["request_context"]["args_sha256"]:
+                    print("refusing %s: arguments do not match the receipt" % env["approval_request_id"], file=sys.stderr)
+                    status = 1
+                    continue
+            except (TypeError, ValueError, KeyError):
+                print("refusing %s: arguments unreadable" % env.get("approval_request_id"), file=sys.stderr)
+                status = 1
+                continue
         if not yes and not confirm():
             print("skipped", file=sys.stderr)
             status = 1
