@@ -5,20 +5,29 @@ On every POST /target it:
   1. Resolves its configuration from the environment, per request. Missing
      or malformed configuration refuses (REF_TARGET_NOT_CONFIGURED) rather
      than acting on an unconfigured trust base.
-  2. Reads the receipt from the X-Gargoyle-Envelope header. An absent,
-     duplicated or unparseable header means no receipt, so an unattested
-     caller is refused by verify_envelope (REF_VERIFY_ENVELOPE_ABSENT). This
-     target's policy of requiring a receipt is what stops a caller who skips
-     the issuer; the issuer cannot.
-  3. Fetches the published record (the live policy pin) and checks it
+  2. Authenticates the caller: the principal is whatever the injected
+     principal_resolver returns for the request, or, by default, the single
+     value of the header named by GARGOYLE_PRINCIPAL_HEADER, which a trusted
+     front proxy (the TLS terminator that checked the client certificate or
+     the bearer token) sets after stripping any copy the client sent. No
+     principal, no call: REF_TARGET_NO_PRINCIPAL. The body is never a source
+     of identity.
+  3. Reads the call from the JSON body, exactly {"tool", "args"}, and the
+     receipt from the X-Gargoyle-Envelope header. An absent, duplicated or
+     unparseable header means no receipt, so an unattested caller is refused
+     by verify_envelope (REF_VERIFY_ENVELOPE_ABSENT). This target's policy of
+     requiring a receipt is what stops a caller who skips the issuer; the
+     issuer cannot.
+  4. Fetches the published record (the live policy pin) and checks it
      against a pinned anchor, or, in signed-record mode, checks the
      publisher's signature, freshness and serial. Any failure refuses before
      a receipt is trusted.
-  4. Calls verify_envelope with the fetched record and the pinned issuer key
+  5. Calls verify_envelope with the fetched record and the pinned issuer key
      (or the signed key record), so the signature is required and checked
      first, currency is checked against the record rather than local files,
-     and the receipt must bind exactly this call.
-  5. Claims the receipt's decision_id in the replay cache, so it acts at
+     and the receipt must bind exactly this call: this principal, this tool,
+     these arguments, this target.
+  6. Claims the receipt's decision_id in the replay cache, so it acts at
      most once per receipt.
 
 Acceptance depends only on the out-of-band pins and the verifier, never on
@@ -37,11 +46,17 @@ Configuration (environment, never the repository):
   GARGOYLE_GATE_PUBLIC_KEY_HEX the pinned issuer public key, raw Ed25519
                                bytes as hex.
 
+  GARGOYLE_PRINCIPAL_HEADER    the header a trusted front proxy sets to the
+                               authenticated client identity (see step 2).
+                               Without it, and without an injected
+                               principal_resolver, every call is refused.
+
 Optional: GARGOYLE_PUBLISHER_KEY_ID / _KEY_HEX / GARGOYLE_SIGNED_RECORD_URL
 for signed-record mode, GARGOYLE_KEY_RECORD_URL / _ROOT_ID / _ROOT_HEX for
 signed key-record mode, GARGOYLE_CLOCK_SKEW_SECONDS for cross-host skew.
-Distributing the anchor and key pins securely is the deployer's problem and
-is not addressed here.
+Distributing the anchor and key pins securely, and making sure the principal
+header can only come from the proxy, is the deployer's problem and is not
+addressed here.
 
 Run: uvicorn gargoyle.reference_target:app --host 0.0.0.0 --port 9000
 """
@@ -69,6 +84,9 @@ REF_TARGET_NOT_CONFIGURED = "REF_TARGET_NOT_CONFIGURED"
 REF_TARGET_ANCHOR_MISMATCH = "REF_TARGET_ANCHOR_MISMATCH"
 # A receipt without a decision_id cannot be held to single use.
 REF_TARGET_NO_DECISION_ID = "REF_TARGET_NO_DECISION_ID"
+# The target could not authenticate the caller: no principal resolver and no
+# principal header configured, or the header absent, empty or duplicated.
+REF_TARGET_NO_PRINCIPAL = "REF_TARGET_NO_PRINCIPAL"
 
 # The header carrying the receipt as JSON (see gargoyle.issuer).
 ENVELOPE_HEADER = "X-Gargoyle-Envelope"
@@ -79,6 +97,10 @@ ENV_PUBLISHER_URL = "GARGOYLE_PUBLISHER_URL"
 ENV_PINNED_ROOT = "GARGOYLE_PINNED_ROOT_SHA256"
 ENV_GATE_KEY_ID = "GARGOYLE_GATE_KEY_ID"
 ENV_GATE_PUBLIC_KEY_HEX = "GARGOYLE_GATE_PUBLIC_KEY_HEX"
+# The header carrying the authenticated client identity, set by a trusted
+# front proxy. Optional in the configuration; without it the default resolver
+# authenticates nobody and every call is refused.
+ENV_PRINCIPAL_HEADER = "GARGOYLE_PRINCIPAL_HEADER"
 # Optional signed-record mode: with a pinned publisher key, the target uses the
 # publisher-signed record, which carries freshness and a serial, instead of the
 # byte-anchored record.
@@ -124,6 +146,9 @@ def config_from_env() -> Optional[Dict[str, Any]]:
         "pinned_root_sha256": pinned_root,
         "pinned_public_keys": {key_id: public_key},
     }
+    principal_header = os.environ.get(ENV_PRINCIPAL_HEADER)
+    if principal_header:
+        config["principal_header"] = principal_header
     # Optional signed-record (freshness) mode: pin a publisher key + a signed-record URL.
     pub_key_id = os.environ.get(ENV_PUBLISHER_KEY_ID)
     pub_key_hex = os.environ.get(ENV_PUBLISHER_KEY_HEX)
@@ -160,6 +185,31 @@ def _refuse(reason: str) -> HTTPException:
     )
 
 
+def principal_from_header(request: Request, config: Dict[str, Any]) -> Optional[str]:
+    """The default principal resolver: the one non-empty value of the header
+    named by config["principal_header"]. No configured header, an absent or
+    empty value, or more than one value (ambiguous) is None: unauthenticated.
+    The header is trusted only because the deployment's front proxy sets it
+    and strips any client-supplied copy; this function cannot check that."""
+    name = config.get("principal_header")
+    if not isinstance(name, str) or not name:
+        return None
+    values = request.headers.getlist(name)
+    if len(values) != 1:
+        return None
+    value = values[0].strip()
+    return value or None
+
+
+def _call_from_body(body: Any, principal: str) -> Optional[Dict[str, Any]]:
+    """The call the receipt must bind: tool and args from the body (exactly
+    those two keys, or the body is not a call), principal from the target's
+    own authentication. None is refused by the verifier."""
+    if not isinstance(body, dict) or set(body.keys()) != {"tool", "args"}:
+        return None
+    return {"tool": body["tool"], "args": body["args"], "principal": principal}
+
+
 def _clock_skew_seconds() -> float:
     """Configured clock-skew tolerance in seconds (default 0). It widens the
     freshness window and replay-cache retention together, so a receipt cannot
@@ -176,13 +226,17 @@ def build_reference_target_app(
     signed_fetch: Callable[..., Dict[str, Any]] = fetch_signed_record,
     replay_cache=None,
     key_record_fetch: Callable[..., Dict[str, Any]] = fetch_key_record,
+    principal_resolver: Optional[Callable[[Request, Dict[str, Any]], Optional[str]]] = None,
 ) -> FastAPI:
     """Build the reference target ASGI app.
 
     config_provider runs per request, so a misconfigured deployment refuses
     each request (REF_TARGET_NOT_CONFIGURED) instead of failing to boot. The
     fetchers and the replay cache are injectable for tests and for shared
-    deployments.
+    deployments. principal_resolver(request, config) returns the identity
+    this target authenticated for the caller, or None; an integrator reading
+    an mTLS peer certificate or a bearer token's subject supplies one. The
+    default is principal_from_header.
 
     Every call the target acts on is appended to app.state.received; a
     refused call never is, so tests can assert it acted exactly once.
@@ -200,6 +254,7 @@ def build_reference_target_app(
     # Highest serial seen on the signed key record, so a rolled-back record that
     # would resurrect a revoked issuer key is refused (REF_VERIFY_KEY_RECORD_STALE).
     app.state.last_seen_key_record_serial = None
+    resolve_principal = principal_resolver or principal_from_header
 
     @app.post("/target")
     async def target(request: Request):
@@ -207,12 +262,25 @@ def build_reference_target_app(
         if config is None:
             raise _refuse(REF_TARGET_NOT_CONFIGURED)
 
-        # The body is the call the receipt must bind. A non-JSON body becomes
-        # None and is refused by the verifier, never a 500.
+        # Who is calling, as this target authenticated them. A resolver that
+        # raises or returns anything but a non-empty string authenticates
+        # nobody, and nobody gets nothing.
         try:
-            interaction = await request.json()
+            principal = resolve_principal(request, config)
         except Exception:
-            interaction = None
+            principal = None
+        if not isinstance(principal, str) or not principal:
+            raise _refuse(REF_TARGET_NO_PRINCIPAL)
+
+        # The body carries the tool and arguments the receipt must bind; the
+        # principal comes from above, never from the body. A non-JSON body or
+        # a body that is not exactly {"tool", "args"} becomes None and is
+        # refused by the verifier, never a 500.
+        try:
+            body = await request.json()
+        except Exception:
+            body = None
+        call = _call_from_body(body, principal)
 
         # Duplicate receipt headers are ambiguous: treat as no receipt.
         raw = (None if len(request.headers.getlist(ENVELOPE_HEADER)) > 1
@@ -285,7 +353,7 @@ def build_reference_target_app(
         # record's trust view replaces the static pin.
         result = verify_envelope(
             envelope,
-            interaction,
+            call,
             config["target_url"],
             record_source=record,
             pinned_public_keys=config["pinned_public_keys"],
@@ -312,7 +380,7 @@ def build_reference_target_app(
         if not app.state.replay_cache.check_and_claim(decision_id, exp):
             raise _refuse(REF_VERIFY_REPLAY)
 
-        app.state.received.append(interaction)  # the target acts only here
+        app.state.received.append(call)  # the target acts only here
         return {"honored": True, "reason": result["reason"]}
 
     @app.get("/received")

@@ -12,8 +12,9 @@ should act on a call carrying a receipt. It returns
   3. Currency and integrity, via envelope.reassert(): decision_sha256
      verifies and the receipt's policy pin matches the live pin.
   4. Binding: the receipt's request_context and target_url match the call
-     being executed exactly. A genuine, current receipt for call X presented
-     with call Y passes reassert() and is refused here.
+     being executed exactly: same principal, same tool, same arguments
+     (by args_sha256), same target. A genuine, current receipt for call X
+     presented with call Y passes reassert() and is refused here.
 
 The verifier is pure: it performs no action and keeps no state. Refusing a
 second use of the same receipt (REF_VERIFY_REPLAY) is the executing party's
@@ -23,11 +24,15 @@ A caller that never presents a receipt is only stopped if the target refuses
 unattested calls; this module makes attested calls checkable, it does not by
 itself force calls through the issuer.
 
-Comparison rules: AP and OP are sets, so both sides are de-duplicated and
-sorted before comparing, and an unsorted or duplicated list never causes a
-false refusal. context is compared by canonical_json equality, the same
-serialization the receipt hash uses. target_url and the manifest-pin fields
-are compared as exact strings.
+The live call is {"tool", "args", "principal"} and nothing else. `principal`
+is the identity the TARGET authenticated for the party presenting the call
+(its mTLS peer, a bearer token's subject, an id a trusted front proxy
+asserted); it is never read from the request body, or a caller could claim
+any principal a stolen receipt names. The receipt's principal must equal it
+(REF_VERIFY_PRINCIPAL_MISMATCH otherwise), and an unauthenticated caller
+(no principal, or not a string) never matches. tool and target_url are exact
+strings; args are compared by args_sha256 over canonical_json, so key order
+never matters.
 """
 
 from typing import Any, Dict
@@ -37,8 +42,10 @@ from gargoyle.envelope import (
     INVALIDATED,
     REASSERTED,
     RE_EVALUATE_REQUIRED,
+    args_sha256,
     canonical_json,
     reassert,
+    valid_principal,
 )
 
 
@@ -51,6 +58,9 @@ REF_VERIFY_ENVELOPE_ABSENT = "REF_VERIFY_ENVELOPE_ABSENT"
 REF_VERIFY_REASSERT_INVALIDATED = "REF_VERIFY_REASSERT_INVALIDATED"
 REF_VERIFY_REASSERT_RE_EVALUATE_REQUIRED = "REF_VERIFY_REASSERT_RE_EVALUATE_REQUIRED"
 REF_VERIFY_BINDING_MISMATCH = "REF_VERIFY_BINDING_MISMATCH"
+# The receipt names a different principal than the one the target
+# authenticated, or the target authenticated none.
+REF_VERIFY_PRINCIPAL_MISMATCH = "REF_VERIFY_PRINCIPAL_MISMATCH"
 REF_VERIFY_SIGNATURE_INVALID = "REF_VERIFY_SIGNATURE_INVALID"
 REF_VERIFY_SIGNATURE_UNKNOWN_KEY = "REF_VERIFY_SIGNATURE_UNKNOWN_KEY"
 REF_VERIFY_SIGNATURE_EXPIRED = "REF_VERIFY_SIGNATURE_EXPIRED"
@@ -102,22 +112,13 @@ _REQUIRED_ENVELOPE_KEYS = (
 
 # request_context fields the binding check compares.
 _REQUEST_CONTEXT_KEYS = (
-    "AP",
-    "OP",
-    "context",
-    "expected_manifest_version",
-    "expected_manifest_sha256",
+    "tool",
+    "args_sha256",
+    "principal",
 )
 
-# interaction_type is optional (untyped manifests omit it), but when either
-# side carries it, both must agree: it selected the required sets, so it is
-# part of what was decided.
-_OPTIONAL_REQUEST_CONTEXT_KEYS = ("interaction_type",)
-
-
-def _normalize_set_field(value: Any) -> list:
-    """De-duplicate and sort, so AP / OP compare as sets."""
-    return sorted(set(value))
+# The live call's keys: exactly these, no more.
+_CALL_KEYS = ("tool", "args", "principal")
 
 
 def _reject(reason: str) -> Dict[str, Any]:
@@ -154,7 +155,7 @@ def not_after_valid(not_after_raw, now=None, clock_skew=timedelta(0)):
 
 def verify_envelope(
     envelope: Any,
-    interaction: Dict[str, Any],
+    call: Dict[str, Any],
     target_url: str,
     record_source: Dict[str, Any] = None,
     pinned_public_keys: Dict[str, Any] = None,
@@ -162,15 +163,15 @@ def verify_envelope(
     key_record_view: Dict[str, Any] = None,
     clock_skew: timedelta = timedelta(0),
 ) -> Dict[str, Any]:
-    """Decide whether to act on `interaction` at `target_url` given `envelope`.
+    """Decide whether to act on `call` at `target_url` given `envelope`.
 
     Args:
         envelope: The receipt presented with the call. May be None or
             malformed (an unattested or fabricated call).
-        interaction: The call about to be executed, in the shape the issuer
-            signed (AP, OP, context, expected_manifest_version,
-            expected_manifest_sha256, optional interaction_type). AP / OP
-            need not be sorted.
+        call: The call about to be executed: {"tool": str, "args": <JSON>,
+            "principal": str}. `principal` is the identity this target
+            authenticated for the presenting party (see the module
+            docstring); the other two are what the target is about to run.
         target_url: The target the call is addressed to.
         record_source: A fetched published record whose policy pin replaces
             the local one in reassert(). None uses the local policy.
@@ -284,47 +285,36 @@ def verify_envelope(
         return _reject(REF_VERIFY_REASSERT_INVALIDATED)
 
     # ----- Binding -----
-    if not isinstance(interaction, dict):
+    if not isinstance(call, dict):
         return _reject(REF_VERIFY_BINDING_MISMATCH)
 
     # Binding is exact: any field in the live call beyond the bound set is a
     # refusal, or a receipt holder could smuggle unbound data past the check.
-    if set(interaction.keys()) - set(_REQUEST_CONTEXT_KEYS) - set(_OPTIONAL_REQUEST_CONTEXT_KEYS):
+    if set(call.keys()) != set(_CALL_KEYS):
         return _reject(REF_VERIFY_BINDING_MISMATCH)
+
+    # principal: the receipt's must equal the one the target authenticated.
+    # An unauthenticated caller never matches, whatever the receipt says.
+    if not valid_principal(call["principal"]) or not valid_principal(rc["principal"]):
+        return _reject(REF_VERIFY_PRINCIPAL_MISMATCH)
+    if rc["principal"] != call["principal"]:
+        return _reject(REF_VERIFY_PRINCIPAL_MISMATCH)
 
     # target_url: exact string equality, no URL normalization.
     if envelope["target_url"] != target_url:
         return _reject(REF_VERIFY_BINDING_MISMATCH)
 
-    # AP / OP: set equality on both sides. A missing or non-list value on
-    # either side is a binding failure.
+    # tool: exact string equality.
+    if not isinstance(rc["tool"], str) or rc["tool"] != call["tool"]:
+        return _reject(REF_VERIFY_BINDING_MISMATCH)
+
+    # args: the hash of the live arguments must equal the one the receipt
+    # carries. Unserializable arguments cannot be bound and are refused.
     try:
-        env_ap = _normalize_set_field(rc["AP"])
-        env_op = _normalize_set_field(rc["OP"])
-        live_ap = _normalize_set_field(interaction["AP"])
-        live_op = _normalize_set_field(interaction["OP"])
-    except (KeyError, TypeError):
+        live_args_hash = args_sha256(call["args"])
+    except (TypeError, ValueError):
         return _reject(REF_VERIFY_BINDING_MISMATCH)
-    if env_ap != live_ap:
-        return _reject(REF_VERIFY_BINDING_MISMATCH)
-    if env_op != live_op:
-        return _reject(REF_VERIFY_BINDING_MISMATCH)
-
-    # Manifest-pin fields: exact string equality.
-    if rc["expected_manifest_version"] != interaction.get("expected_manifest_version"):
-        return _reject(REF_VERIFY_BINDING_MISMATCH)
-    if rc["expected_manifest_sha256"] != interaction.get("expected_manifest_sha256"):
-        return _reject(REF_VERIFY_BINDING_MISMATCH)
-
-    # context: canonical_json equality. A missing live context is a mismatch.
-    if "context" not in interaction:
-        return _reject(REF_VERIFY_BINDING_MISMATCH)
-    if canonical_json(rc["context"]) != canonical_json(interaction["context"]):
-        return _reject(REF_VERIFY_BINDING_MISMATCH)
-
-    # interaction_type: both absent, or both present and equal. A one-sided
-    # declaration is a mismatch.
-    if rc.get("interaction_type") != interaction.get("interaction_type"):
+    if rc["args_sha256"] != live_args_hash:
         return _reject(REF_VERIFY_BINDING_MISMATCH)
 
     return _accept()

@@ -63,13 +63,43 @@ replay, issuance_log, envelope_inspector, governance_wiring, request_validator.
    server now refuses a receipt without decision_id (it was executable and replayable).
    Suite: 251 pass.
    Open from this step: the MCP server's interaction_for() still rebuilds AP/OP from
-   the manifest, so the consumer side is tied to ManifestPolicy - fix with step 3,
-   which replaces AP/OP binding with tool + args + principal. requires_approval is not
-   in the signed receipt, so a target cannot tell a held call from a free one.
-3. Bind caller identity: today AP/OP are caller-asserted strings and nothing at the
-   gate ties them to who sent the request. The receipt must carry an authenticated
-   principal (mTLS peer, bearer subject, or integrator-supplied id) and the verifier
-   must check it.
+   the manifest, so the consumer side is tied to ManifestPolicy - fixed at step 3.
+   requires_approval is not in the signed receipt, so a target cannot tell a held
+   call from a free one - STILL OPEN (see below).
+3. DONE (2026-10-16). The receipt binds what a target can observe and nothing else:
+   request_context is now {tool, args_sha256, principal}. `tool` is the operation
+   name, `args_sha256` is SHA-256 over canonical_json(args) (so key order never
+   matters and the receipt stays small), `principal` is the authenticated identity
+   of the caller: the issuer records the one it authenticated (mTLS peer, bearer
+   subject, integrator-supplied id; build_envelope refuses an empty or non-string
+   one, issue() turns that into ISSUE_UNBINDABLE_CALL), and the verifier compares it
+   with the identity the TARGET authenticated for the presenting party. The live call
+   verify_envelope() takes is exactly {tool, args, principal}; a mismatch on the
+   principal, or an unauthenticated caller (None/""/non-string on either side), is
+   REF_VERIFY_PRINCIPAL_MISMATCH, checked before tool/args ("who" before "what").
+   Gone from the receipt: AP, OP, context, expected_manifest_*, interaction_type.
+   They remain policy INPUTS: issue() still passes the whole interaction mapping to
+   policy.decide(), so ManifestPolicy keeps reading its claims from it; the receipt
+   records only the call and the policy pin. Consumers: the MCP server's
+   interaction_for() is replaced by call_for(tool, args, principal) with the
+   principal from GARGOYLE_MCP_PRINCIPAL (a stdio server has one client, the process
+   that spawned it, and that identity is established by whoever wired it up; no
+   principal -> unconfigured, every call refused); the manifest coupling is gone from
+   mcp_server. The reference target authenticates the caller itself: an injectable
+   principal_resolver(request, config) (for an mTLS peer or a token subject), else
+   the single value of the header named by GARGOYLE_PRINCIPAL_HEADER, which a trusted
+   front proxy must set and must strip from client input; absent/empty/duplicated
+   header or no source at all -> REF_TARGET_NO_PRINCIPAL before anything else. The
+   body is exactly {"tool", "args"}; a principal (or anything else) in the body is
+   unbound data and refused. ExecutorGate.check(envelope, call) is unchanged in
+   shape. Tests: tests/adversarial/test_fix_interaction_type_binding.py deleted
+   (interaction_type is no longer a receipt field); tests/adversarial/
+   test_principal_binding.py added; the other fixtures rewritten to the new call
+   shape. Suite: 288 pass (the floor from here).
+   Known limits, by design: the principal is only as good as the issuer's and the
+   target's own authentication; Gargoyle compares, it does not authenticate. A
+   deployment where the principal header is reachable by the client has no
+   principal binding at all.
 4. Remove the remaining hard-coded paths: the default MANIFEST/manifest.json behind
    ManifestPolicy() and envelope.live_pin(), and EVIDENCE/published_hashes.json in
    mcp_server. Then delete EVIDENCE/ (CANON/ is already gone).
@@ -79,9 +109,12 @@ replay, issuance_log, envelope_inspector, governance_wiring, request_validator.
 6. Collapse reference_target + executor_sdk into one "consumer" module; keep
    mcp_server as the primary integration surface.
 7. Choose the license (permissive recommended for adoption), add README, pyproject.
-8. Re-run the suite after each step; the 253 tests are the regression floor.
+8. Re-run the suite after each step; the suite at the last DONE step is the
+   regression floor (288 at step 3).
 
 ## Known weaknesses carried over (fix or document)
+- requires_approval is not in the signed receipt, so a target cannot tell a held
+  call from a free one; it trusts the issuer to hold. Carried from step 2.
 - verify_envelope() with no trusted keys (no pinned_public_keys, no key-record view)
   accepts any receipt whose decision_sha256 verifies, and anyone can compute that
   hash. Only the signed path authenticates the issuer. Consider making trusted keys

@@ -9,32 +9,28 @@ from gargoyle.envelope import (
     INVALIDATED,
     RE_EVALUATE_REQUIRED,
     REASSERTED,
+    args_sha256,
     build_envelope,
     canonical_json,
     decision_sha256_of,
     live_pin,
     reassert,
 )
-from gargoyle.policy import ManifestPolicy, manifest_sha256
+from gargoyle.policy import ManifestPolicy
 
 TARGET = "http://127.0.0.1:9000/target"
 
 
-def _interaction():
-    return {
-        "AP": ["identity", "role"],
-        "OP": ["session", "request"],
-        "context": {},
-        "expected_manifest_version": "1.0",
-        "expected_manifest_sha256": manifest_sha256(),
-    }
+def _call(args=None, principal="agent-7"):
+    return {"tool": "transfer", "args": {"amount": 5} if args is None else args,
+            "principal": principal}
 
 
-def _env(timestamp_utc=None, pin=None):
+def _env(timestamp_utc=None, pin=None, call=None):
     return build_envelope(
         decision="ELIGIBLE",
         target_url=TARGET,
-        normalized_interaction=_interaction(),
+        call=call or _call(),
         policy_pin=pin or ManifestPolicy().pin(),
         timestamp_utc=timestamp_utc,
     )
@@ -53,16 +49,39 @@ def test_receipt_top_level_and_request_context_keys():
                         "request_context", "timestamp_utc", "decision_sha256"}
     assert env["envelope_version"] == ENVELOPE_VERSION
     assert env["policy"] == ManifestPolicy().pin()
-    assert set(env["request_context"]) == {"AP", "OP", "context", "expected_manifest_version",
-                                           "expected_manifest_sha256"}
+    assert set(env["request_context"]) == {"tool", "args_sha256", "principal"}
 
 
-def test_interaction_type_is_recorded_only_when_declared():
-    assert "interaction_type" not in _env()["request_context"]
-    env = build_envelope(decision="ELIGIBLE", target_url=TARGET,
-                         normalized_interaction=dict(_interaction(), interaction_type="read"),
-                         policy_pin=ManifestPolicy().pin())
-    assert env["request_context"]["interaction_type"] == "read"
+def test_args_bound_by_canonical_hash():
+    """The receipt stores a hash of the arguments over canonical JSON, so key
+    order does not matter and the receipt stays small whatever the args."""
+    env = _env(call=_call(args={"b": 2, "a": {"y": 1, "x": [1, 2]}}))
+    rc = env["request_context"]
+    assert rc["args_sha256"] == args_sha256({"a": {"x": [1, 2], "y": 1}, "b": 2})
+    assert "args" not in rc
+    assert args_sha256(None) != args_sha256({}) != args_sha256([])
+
+
+def test_policy_inputs_are_not_recorded():
+    """Only tool, args and principal are bound; what the policy was shown
+    beyond them (claims, manifest pins) is represented by the policy pin."""
+    env = _env(call=dict(_call(), AP=["identity"], expected_manifest_version="1.0"))
+    assert set(env["request_context"]) == {"tool", "args_sha256", "principal"}
+
+
+@pytest.mark.parametrize("bad", [None, "", 7, ["transfer"]])
+def test_build_rejects_malformed_tool(bad):
+    with pytest.raises((ValueError, TypeError)):
+        _env(call=dict(_call(), tool=bad))
+
+
+def test_build_rejects_missing_bound_field():
+    for key in ("tool", "args", "principal"):
+        c = _call(); del c[key]
+        with pytest.raises(KeyError):
+            _env(call=c)
+    with pytest.raises(TypeError):
+        _env(call=["transfer"])
 
 
 @pytest.mark.parametrize("pin", [None, {}, {"policy_id": "x"}, {"policy_id": "", "policy_sha256": "a" * 64},
@@ -70,7 +89,7 @@ def test_interaction_type_is_recorded_only_when_declared():
 def test_build_rejects_malformed_pin(pin):
     with pytest.raises((ValueError, TypeError)):
         build_envelope(decision="ELIGIBLE", target_url=TARGET,
-                       normalized_interaction=_interaction(), policy_pin=pin)
+                       call=_call(), policy_pin=pin)
 
 
 def test_decision_sha256_is_hex_and_deterministic():
@@ -93,6 +112,13 @@ def test_decision_sha256_covers_the_policy_pin():
     assert a["decision_sha256"] != b["decision_sha256"]
 
 
+def test_decision_sha256_covers_tool_args_and_principal():
+    base = _env()["decision_sha256"]
+    assert _env(call=dict(_call(), tool="delete"))["decision_sha256"] != base
+    assert _env(call=_call(args={"amount": 6}))["decision_sha256"] != base
+    assert _env(call=_call(principal="agent-8"))["decision_sha256"] != base
+
+
 # --- reassert ---------------------------------------------------------------
 
 def test_reassert_current_receipt():
@@ -101,7 +127,7 @@ def test_reassert_current_receipt():
 
 def test_reassert_tampered_receipt_is_invalidated():
     env = _env()
-    env["request_context"]["AP"] = ["identity", "role", "admin"]
+    env["request_context"]["tool"] = "delete_database"
     assert reassert(env)["outcome"] == INVALIDATED
 
 

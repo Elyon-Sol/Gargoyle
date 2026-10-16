@@ -13,7 +13,6 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from gargoyle.policy import ManifestPolicy
 from gargoyle.envelope import build_envelope, sign_envelope
-from gargoyle.policy import load_manifest, manifest_sha256
 from gargoyle.verifier import verify_envelope, REF_VERIFY_BINDING_MISMATCH, REF_VERIFY_REPLAY
 from gargoyle.reference_target import build_reference_target_app, REF_TARGET_NO_DECISION_ID
 from gargoyle.replay_cache import InMemoryReplayCache
@@ -22,13 +21,14 @@ TARGET = "https://target.example.com:9443/target"
 KID = "gate-ed25519-001"
 priv = Ed25519PrivateKey.generate()
 
+PRINCIPAL = "agent-7"
+
 def inter():
-    return {"AP": ["identity","role"], "OP": ["session","request"], "context": {},
-            "expected_manifest_version": "1.0", "expected_manifest_sha256": manifest_sha256()}
+    return {"tool": "transfer", "args": {"amount": 5}, "principal": PRINCIPAL}
 
 def signed(decision_id="d1", not_after=None):
     e = build_envelope(
-        policy_pin=ManifestPolicy().pin(),decision="ELIGIBLE", target_url=TARGET, normalized_interaction=inter(),
+        policy_pin=ManifestPolicy().pin(),decision="ELIGIBLE", target_url=TARGET, call=inter(),
                        timestamp_utc="2026-07-09T00:00:00+00:00")
     return sign_envelope(e, priv, KID, not_after=not_after, decision_id=decision_id)
 
@@ -37,14 +37,16 @@ def record_for(env):
 
 def client_for(env, cache=None):
     cfg = {"target_url": TARGET, "publisher_url": "http://pub", "pinned_root_sha256": "anchor",
-           "pinned_public_keys": {KID: priv.public_key()}}
+           "pinned_public_keys": {KID: priv.public_key()}, "principal_header": "X-Peer"}
     rec = record_for(env)
     app = build_reference_target_app(config_provider=lambda: cfg, fetch=lambda url, anchor: rec,
                                      replay_cache=cache or InMemoryReplayCache())
     return TestClient(app)
 
-def post(client, env, body):
-    return client.post("/target", json=body, headers={"X-Gargoyle-Envelope": json.dumps(env)})
+def post(client, env, call):
+    body = {"tool": call["tool"], "args": call["args"]}
+    return client.post("/target", json=body,
+                       headers={"X-Gargoyle-Envelope": json.dumps(env), "X-Peer": call["principal"]})
 
 # ---- exact binding ----
 def test_f1_extra_body_fields_rejected():

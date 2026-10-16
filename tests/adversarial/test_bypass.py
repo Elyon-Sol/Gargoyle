@@ -41,13 +41,7 @@ def test_a1_direct_to_target_reaches_target_with_no_envelope():
     acts and nothing attests the call was authorized.
     """
     _received.clear()
-    interaction = {
-        "AP": ["identity", "role"],
-        "OP": ["session", "request"],
-        "context": {},
-        "expected_manifest_version": "1.0",
-        "expected_manifest_sha256": "0" * 64,
-    }
+    interaction = {"tool": "transfer", "args": {"amount": 5}, "principal": "agent-7"}
     response = target_client.post("/target", json=interaction)
 
     assert response.status_code == 200
@@ -62,13 +56,7 @@ def test_a1_target_side_verifier_would_reject_unattested_call():
     The same direct call checked by verify_envelope is refused with
     REF_VERIFY_ENVELOPE_ABSENT. The defense works only if the target runs it.
     """
-    interaction = {
-        "AP": ["identity", "role"],
-        "OP": ["session", "request"],
-        "context": {},
-        "expected_manifest_version": "1.0",
-        "expected_manifest_sha256": "0" * 64,
-    }
+    interaction = {"tool": "transfer", "args": {"amount": 5}, "principal": "agent-7"}
     result = verify_envelope(None, interaction, "http://127.0.0.1:9000/target")
     assert result["accepted"] is False
     assert result["reason"] == REF_VERIFY_ENVELOPE_ABSENT

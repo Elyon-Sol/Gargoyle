@@ -13,11 +13,15 @@ ExecutorGate packages it:
         record_bytes=open(RECORD_PATH, "rb").read(),   # the published record
     )
 
-    decision = gate.check(envelope, interaction)
+    call = {"tool": name, "args": arguments, "principal": peer_identity}
+    decision = gate.check(envelope, call)
     if decision.honored:
         do_the_side_effect()
     else:
         refuse(decision.reason)                        # REF_VERIFY_* / REF_TARGET_*
+
+`peer_identity` is who the executor authenticated as the presenting party;
+the receipt must name the same principal (see gargoyle.verifier).
 
 The gate only decides; the caller performs the side effect. Every
 undecidable path returns honored=False. Two rules are not optional:
@@ -131,12 +135,14 @@ class ExecutorGate:
     def check(
         self,
         envelope: Any,
-        interaction: Dict[str, Any],
+        call: Dict[str, Any],
         *,
         now: Optional[datetime] = None,
     ) -> Decision:
-        """Decide whether to honor `envelope` for `interaction`. Returns Decision(honored,
-        reason). Fail-closed on every undecidable path; the caller performs the side effect only
+        """Decide whether to honor `envelope` for `call` ({"tool", "args",
+        "principal"}, the principal being the one this executor
+        authenticated). Returns Decision(honored, reason). Fail-closed on
+        every undecidable path; the caller performs the side effect only
         when honored is True."""
         if not isinstance(envelope, dict):
             envelope = None  # absent or not an object: verify_envelope refuses
@@ -165,7 +171,7 @@ class ExecutorGate:
         )
         result = verify_envelope(
             envelope,
-            interaction,
+            call,
             self.target_id,
             record_source=record,
             pinned_public_keys=pinned_public_keys,

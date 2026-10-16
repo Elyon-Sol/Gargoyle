@@ -1,5 +1,8 @@
 """Issue receipts: ask the policy, and sign the answer if it is ELIGIBLE.
 
+    interaction = {"tool": "transfer_funds", "args": {...},
+                   "principal": principal,        # who the issuer authenticated
+                   **claims}                      # whatever the policy reads
     result = issue(policy, target_url, interaction,
                    signing_key=key, key_id="issuer-1")
     if result.envelope is None:
@@ -8,6 +11,13 @@
         ...                                  # hold for a human grant (gargoyle.approval)
     else:
         send(call, headers={ENVELOPE_HEADER: json.dumps(result.envelope)})
+
+The policy sees the whole interaction; the receipt binds only "tool",
+"args" (by hash) and "principal". `principal` must be the identity the
+issuing service authenticated for the requester (its mTLS peer, a bearer
+token's subject, an id the integrator established), never a value the
+requester asserted about itself: the target compares it with the identity it
+authenticates, and that comparison is only as good as this input.
 
 Every receipt carries a fresh decision_id, so an executor can refuse a
 second use, and a not_after, so a receipt that is never used still dies.
@@ -26,7 +36,7 @@ ENVELOPE_HEADER = "X-Gargoyle-Envelope"
 DEFAULT_TTL_SECONDS = 300
 
 ISSUE_POLICY_ERROR = "ISSUE_POLICY_ERROR"  # decide() or pin() returned something malformed
-ISSUE_UNBINDABLE_CALL = "ISSUE_UNBINDABLE_CALL"  # eligible, but the call lacks the fields a receipt binds
+ISSUE_UNBINDABLE_CALL = "ISSUE_UNBINDABLE_CALL"  # eligible, but tool/args/principal are missing or malformed
 
 
 @dataclass(frozen=True)
@@ -69,7 +79,7 @@ def issue(
         envelope = build_envelope(
             decision=ELIGIBLE,
             target_url=target_url,
-            normalized_interaction=dict(interaction),
+            call=dict(interaction),
             policy_pin=pin,
             timestamp_utc=issued_at.isoformat(),
         )

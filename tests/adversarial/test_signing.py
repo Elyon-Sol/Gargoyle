@@ -19,6 +19,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from gargoyle.policy import ManifestPolicy
 from gargoyle.envelope import (
     REASSERTED,
+    args_sha256,
     build_envelope,
     canonical_json,
     reassert,
@@ -28,7 +29,6 @@ from gargoyle.envelope import (
     _SIGNATURE_EXCLUDED_KEYS,
     _sha256_text,
 )
-from gargoyle.policy import load_manifest, manifest_sha256
 from gargoyle.verifier import (
     ACCEPT_REASSERTED_AND_BOUND,
     REF_VERIFY_SIGNATURE_INVALID,
@@ -46,13 +46,11 @@ GATE_KEY_ID = "gate-ed25519-001"
 # ---------------------------------------------------------------------------
 
 
-def _normalized_interaction(context=None):
+def _normalized_interaction(args=None):
     return {
-        "AP": ["identity", "role"],
-        "OP": ["session", "request"],
-        "context": {} if context is None else context,
-        "expected_manifest_version": "1.0",
-        "expected_manifest_sha256": manifest_sha256(),
+        "tool": "transfer",
+        "args": {"amount": 5} if args is None else args,
+        "principal": "agent-7",
     }
 
 
@@ -64,7 +62,7 @@ def _build_unsigned_envelope(interaction=None,
         policy_pin=ManifestPolicy().pin(),
         decision="ELIGIBLE",
         target_url=TARGET_URL,
-        normalized_interaction=interaction,
+        call=interaction,
         timestamp_utc=timestamp_utc,
     )
 
@@ -87,11 +85,9 @@ def _construct_forge(interaction):
         "target_url": TARGET_URL,
         "policy": ManifestPolicy().pin(),
         "request_context": {
-            "AP": interaction["AP"],
-            "OP": interaction["OP"],
-            "context": interaction["context"],
-            "expected_manifest_version": "1.0",
-            "expected_manifest_sha256": manifest_sha256(),
+            "tool": interaction["tool"],
+            "args_sha256": args_sha256(interaction["args"]),
+            "principal": interaction["principal"],
         },
         "timestamp_utc": "2026-05-31T00:00:00+00:00",
     }
@@ -170,7 +166,7 @@ def test_three_model_forge_refused_on_signed_path():
     issuer signature.
     """
     priv, pub = _gate_keypair()
-    interaction = _normalized_interaction(context={"exfil": "yes"})
+    interaction = _normalized_interaction(args={"exfil": "yes"})
     forge = _construct_forge(interaction)
     assert "issuer_signature" not in forge  # the adversary holds no key
     result = verify_envelope(forge, interaction, TARGET_URL,
@@ -227,7 +223,7 @@ def test_tampered_signed_envelope_refused_on_signature():
     interaction = _normalized_interaction()
     signed = sign_envelope(_build_unsigned_envelope(interaction=interaction),
                            priv, GATE_KEY_ID)
-    signed["request_context"]["AP"] = ["identity", "role", "admin"]  # tamper
+    signed["request_context"]["tool"] = "delete_database"  # tamper
     result = verify_envelope(signed, interaction, TARGET_URL,
                              pinned_public_keys={GATE_KEY_ID: pub})
     assert result["accepted"] is False

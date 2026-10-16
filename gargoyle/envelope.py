@@ -1,7 +1,8 @@
 """Receipts: build, check against the live policy, and sign.
 
 A receipt (historically "envelope") records one ELIGIBLE decision: which
-call it was about, which policy decided it, and when. Three operations:
+call it was about (tool, arguments, principal, target), which policy decided
+it, and when. Three operations:
 
 - build_envelope() assembles the receipt and computes decision_sha256, a
   SHA-256 over its canonical JSON (minus the per-issuance fields listed in
@@ -14,6 +15,13 @@ call it was about, which policy decided it, and when. Three operations:
 - sign_envelope() adds the issuer key id, optional not_after and decision_id,
   and an Ed25519 signature over everything except the signature itself and
   timestamp_utc.
+
+A receipt binds exactly what a target can observe about a call: the tool
+name, a SHA-256 of the canonical arguments, and the principal, the
+authenticated identity of the caller. The issuer records the principal it
+authenticated; the target compares it with the identity it authenticated
+itself. Whatever else the policy was shown (the caller's claims, a manifest
+pin) is not in the receipt: the policy pin stands for it.
 
 Binding a receipt to the call being executed, and checking the signature,
 expiry and replay, is verifier.verify_envelope()'s job.
@@ -64,6 +72,17 @@ def _sha256_text(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
+def args_sha256(args: Any) -> str:
+    """The SHA-256 a receipt binds a call's arguments by: over canonical_json,
+    so key order never matters and the hash is defined for any JSON value."""
+    return _sha256_text(canonical_json(args))
+
+
+def valid_principal(principal: Any) -> bool:
+    """A principal is a non-empty string. Anything else is unauthenticated."""
+    return isinstance(principal, str) and bool(principal)
+
+
 def decision_sha256_of(envelope: Dict[str, Any]) -> str:
     hashable = {k: v for k, v in envelope.items() if k not in _HASH_EXCLUDED_KEYS}
     return _sha256_text(canonical_json(hashable))
@@ -88,30 +107,32 @@ def build_envelope(
     *,
     decision: str,
     target_url: str,
-    normalized_interaction: Dict[str, Any],
+    call: Dict[str, Any],
     policy_pin: Dict[str, str],
     timestamp_utc: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Assemble a receipt for `decision` on the call (target_url,
-    normalized_interaction), made under the policy identified by
-    `policy_pin`. The interaction's declared interaction_type, when present,
-    is recorded too: it selected the required sets, so it is part of what was
-    decided."""
+    """Assemble a receipt for `decision` on `call` at `target_url`, made under
+    the policy identified by `policy_pin`.
+
+    `call` must carry the three bound fields: "tool" (a non-empty string),
+    "args" (any JSON value; the receipt stores its args_sha256) and
+    "principal" (the caller's authenticated identity, a non-empty string).
+    Other keys are policy inputs and are not recorded. A missing or
+    malformed bound field raises (KeyError, TypeError, ValueError); the
+    issuer turns that into a refusal."""
     if not valid_pin(policy_pin):
         raise ValueError("policy_pin must be {'policy_id': str, 'policy_sha256': <64 hex>}")
+    if not isinstance(call, dict):
+        raise TypeError("call must be a dict")
+    tool = call["tool"]
+    if not isinstance(tool, str) or not tool:
+        raise ValueError("call['tool'] must be a non-empty string")
+    principal = call["principal"]
+    if not valid_principal(principal):
+        raise ValueError("call['principal'] must be a non-empty string")
+    args_hash = args_sha256(call["args"])
     if timestamp_utc is None:
         timestamp_utc = datetime.now(timezone.utc).isoformat()
-
-    request_context = {
-        "AP": list(normalized_interaction["AP"]),
-        "OP": list(normalized_interaction["OP"]),
-        "context": normalized_interaction["context"],
-        "expected_manifest_version": normalized_interaction["expected_manifest_version"],
-        "expected_manifest_sha256": normalized_interaction["expected_manifest_sha256"],
-    }
-    itype = normalized_interaction.get("interaction_type")
-    if itype is not None:
-        request_context["interaction_type"] = itype
 
     envelope: Dict[str, Any] = {
         "envelope_version": ENVELOPE_VERSION,
@@ -121,7 +142,11 @@ def build_envelope(
             "policy_id": policy_pin["policy_id"],
             "policy_sha256": policy_pin["policy_sha256"],
         },
-        "request_context": request_context,
+        "request_context": {
+            "tool": tool,
+            "args_sha256": args_hash,
+            "principal": principal,
+        },
         "timestamp_utc": timestamp_utc,
     }
     envelope["decision_sha256"] = decision_sha256_of(envelope)

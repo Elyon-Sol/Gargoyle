@@ -3,23 +3,28 @@
 JSON-RPC 2.0 over stdio: initialize, tools/list, tools/call. This server is
 the executor, not the issuer. An agent obtains a signed receipt from the
 issuer (gargoyle.issuer.issue) and sends it in tools/call params._meta under
-"gargoyle/envelope". The server rebuilds the expected call from the actual
-tool name and arguments, runs verify_envelope (signature, policy pin,
-binding, expiry), then claims decision_id in the replay cache. The tool
-fires only after a positive verdict and a fresh claim; every other path
-leaves it unfired.
+"gargoyle/envelope". The server rebuilds the call from the actual tool name
+and arguments plus the principal it serves, runs verify_envelope (signature,
+policy pin, binding, expiry), then claims decision_id in the replay cache.
+The tool fires only after a positive verdict and a fresh claim; every other
+path leaves it unfired.
+
+The principal: a stdio server has exactly one client, the process that
+spawned it, and that client's identity is established by whoever wired the
+server up, not by anything on the wire. GARGOYLE_MCP_PRINCIPAL names it. A
+receipt issued to any other principal is refused (REF_VERIFY_PRINCIPAL_MISMATCH),
+so a receipt obtained by one agent cannot be spent through another agent's
+server.
 
 Run as a stdio MCP server:  python3 -m gargoyle.mcp_server
 """
 
-import hashlib
 import json
 import sys
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from gargoyle.envelope import canonical_json
-from gargoyle.policy import manifest_sha256, load_manifest, resolve_required_sets
+from gargoyle.envelope import valid_principal
 from gargoyle.published_source import anchor_sha256, load_record_from_bytes
 from gargoyle.replay_cache import InMemoryReplayCache
 from gargoyle.reference_target import (
@@ -58,63 +63,19 @@ ENV_GATE_KEY_ID = "GARGOYLE_MCP_GATE_KEY_ID"
 ENV_GATE_PUBLIC_KEY_HEX = "GARGOYLE_MCP_GATE_PUBLIC_KEY_HEX"
 ENV_TARGET_ID = "GARGOYLE_MCP_TARGET_ID"
 ENV_RECORD_PATH = "GARGOYLE_MCP_RECORD_PATH"
+ENV_PRINCIPAL = "GARGOYLE_MCP_PRINCIPAL"
 
 
-# Tool name -> manifest interaction_type. Under a manifest with
-# interaction_types, a tool declares its type's required tokens, so a benign
-# tool declares fewer and need not be held. Under a flat manifest the type is
-# ignored. An unknown tool gets no type and so the full top-level token set,
-# which a typed manifest holds for approval (fail toward oversight). Keep this
-# table in step with the deployed manifest's types.
-_BENIGN_TOOLS = frozenset(
-    {"read", "list", "get", "status", "inspect", "read_file", "list_files", "healthz"}
-)
-_SENSITIVE_TOOLS = frozenset(
-    {"transfer", "transfer_funds", "delete", "delete_database", "rotate",
-     "rotate_key", "write", "write_file", "deploy"}
-)
-
-
-def _interaction_type_for_tool(tool: str):
-    """A tool's manifest interaction_type, or None for an unknown tool."""
-    if tool in _BENIGN_TOOLS:
-        return "read"
-    if tool in _SENSITIVE_TOOLS:
-        return "transfer"
-    return None
-
-
-def interaction_for(tool: str, args: Any) -> Dict[str, Any]:
-    """Encode a tool call as the interaction a receipt binds to. The tool name
-    and a SHA-256 of its canonical arguments go in `context`, so a receipt
-    covers exactly this call. AP/OP are the tokens ManifestPolicy checks:
-    the tool type's required sets under a typed manifest, else the top-level
-    sets. This ties the server to ManifestPolicy's call shape."""
-    manifest = load_manifest()
-    base = {
-        "context": {
-            "tool": tool,
-            "args_sha256": hashlib.sha256(
-                canonical_json(args).encode("utf-8")
-            ).hexdigest(),
-        },
-        "expected_manifest_version": manifest.get("version", "1.0"),
-        "expected_manifest_sha256": manifest_sha256(),
-    }
-    itype = _interaction_type_for_tool(tool)
-    types = manifest.get("interaction_types")
-    if isinstance(types, dict) and itype in types:
-        AR, R = resolve_required_sets(manifest, {"interaction_type": itype})
-        if AR is not None and R is not None:
-            return {"AP": sorted(AR), "OP": sorted(R),
-                    "interaction_type": itype, **base}
-    # Flat manifest, or unknown or absent type: top-level tokens, no type.
-    return {"AP": ["identity", "role"], "OP": ["session", "request"], **base}
+def call_for(tool: str, args: Any, principal: str) -> Dict[str, Any]:
+    """The call a receipt must bind to execute `tool` with `args` through a
+    server serving `principal`: the same three fields the issuer bound."""
+    return {"tool": tool, "args": args, "principal": principal}
 
 
 class ServerState:
-    """The executor's out-of-band trust material, its replay cache and the list
-    of tool calls actually executed. `config` None means unconfigured: every
+    """The executor's out-of-band trust material (issuer keys, record anchor,
+    target id, the principal it serves), its replay cache and the list of
+    tool calls actually executed. `config` None means unconfigured: every
     tools/call is refused with REF_TARGET_NOT_CONFIGURED."""
 
     def __init__(
@@ -158,10 +119,12 @@ def gate_tool_call(state: ServerState, params: Dict[str, Any]) -> (bool, str):
     if record is None:
         return False, REF_TARGET_ANCHOR_MISMATCH
 
-    expected = interaction_for(name, args)
+    principal = state.config.get("principal")
+    if not valid_principal(principal):
+        return False, REF_TARGET_NOT_CONFIGURED
     result = verify_envelope(
         envelope,
-        expected,
+        call_for(name, args, principal),
         state.config["target_id"],
         record_source=record,
         pinned_public_keys=state.config["pinned_public_keys"],
@@ -249,16 +212,18 @@ def config_from_env() -> Optional[Dict[str, Any]]:
     """The executor's configuration from the environment, or None (then every
     tool call is refused). GARGOYLE_MCP_GATE_KEY_ID and
     GARGOYLE_MCP_GATE_PUBLIC_KEY_HEX pin the issuer's public key;
-    GARGOYLE_MCP_TARGET_ID is the identity receipts bind to; the published
-    record is read from GARGOYLE_MCP_RECORD_PATH and anchored on its own
-    bytes."""
+    GARGOYLE_MCP_TARGET_ID is the identity receipts bind to;
+    GARGOYLE_MCP_PRINCIPAL is the client this server serves (see the module
+    docstring); the published record is read from GARGOYLE_MCP_RECORD_PATH
+    and anchored on its own bytes."""
     import os
 
     key_id = os.environ.get(ENV_GATE_KEY_ID)
     key_hex = os.environ.get(ENV_GATE_PUBLIC_KEY_HEX)
     target_id = os.environ.get(ENV_TARGET_ID)
+    principal = os.environ.get(ENV_PRINCIPAL)
     record_path = os.environ.get(ENV_RECORD_PATH, "EVIDENCE/published_hashes.json")
-    if not (key_id and key_hex and target_id):
+    if not (key_id and key_hex and target_id and principal):
         return None
     try:
         from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
@@ -273,6 +238,7 @@ def config_from_env() -> Optional[Dict[str, Any]]:
         "record_bytes": record_bytes,
         "pinned_root": anchor_sha256(record_bytes),
         "target_id": target_id,
+        "principal": principal,
     }
 
 

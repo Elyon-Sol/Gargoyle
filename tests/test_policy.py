@@ -41,14 +41,21 @@ TARGET = "https://target.example.com/act"
 
 def call(**over):
     base = {
+        "tool": "t",
+        "args": {"k": 1},
+        "principal": "agent-7",
         "AP": ["identity", "role"],
         "OP": ["session", "request"],
-        "context": {"tool": "t"},
         "expected_manifest_version": "1.0",
         "expected_manifest_sha256": SHA,
     }
     base.update(over)
     return base
+
+
+def bound(interaction):
+    """What a target sees of `interaction`: the three fields a receipt binds."""
+    return {k: interaction[k] for k in ("tool", "args", "principal")}
 
 
 # ---------------------------------------------------------------------------
@@ -190,8 +197,9 @@ def test_issue_eligible_receipt_verifies_end_to_end(key):
     assert env["policy"] == ManifestPolicy().pin()
     assert env["decision_id"]
     assert datetime.fromisoformat(env["not_after"]) == now + timedelta(seconds=DEFAULT_TTL_SECONDS)
-    v = verify_envelope(env, call(), TARGET, pinned_public_keys={"k1": key.public_key()})
+    v = verify_envelope(env, bound(call()), TARGET, pinned_public_keys={"k1": key.public_key()})
     assert (v["accepted"], v["reason"]) == (True, ACCEPT_REASSERTED_AND_BOUND)
+    assert set(env["request_context"]) == {"tool", "args_sha256", "principal"}
 
 
 def test_issue_gives_each_receipt_its_own_decision_id(key):
@@ -224,8 +232,15 @@ def test_issue_fails_closed_on_a_misbehaving_policy(key, policy, reason):
     assert r.envelope is None and r.decision.outcome == REFUSE and r.decision.reason == reason
 
 
-def test_issue_refuses_an_eligible_call_it_cannot_bind(key):
-    r = issue(FixedPolicy(Decision(ELIGIBLE)), TARGET, {"tool": "t"}, signing_key=key, key_id="k1")
+@pytest.mark.parametrize("unbindable", [
+    {"tool": "t"},                                      # no args, no principal
+    {"tool": "t", "args": {}},                          # no principal
+    {"tool": "t", "args": {}, "principal": ""},         # nobody
+    {"tool": "", "args": {}, "principal": "agent-7"},   # no tool
+    {"tool": "t", "args": object(), "principal": "agent-7"},  # unserializable args
+])
+def test_issue_refuses_an_eligible_call_it_cannot_bind(key, unbindable):
+    r = issue(FixedPolicy(Decision(ELIGIBLE)), TARGET, unbindable, signing_key=key, key_id="k1")
     assert r.envelope is None and r.decision.reason == ISSUE_UNBINDABLE_CALL
 
 

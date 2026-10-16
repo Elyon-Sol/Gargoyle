@@ -19,10 +19,10 @@ from fastapi.testclient import TestClient
 
 from gargoyle.policy import ManifestPolicy
 from gargoyle.envelope import build_envelope, canonical_json, sign_envelope
-from gargoyle.policy import load_manifest, manifest_sha256
 from gargoyle.published_source import anchor_sha256, load_record_from_bytes
 from gargoyle.reference_target import (
     REF_TARGET_ANCHOR_MISMATCH,
+    REF_TARGET_NO_PRINCIPAL,
     REF_TARGET_NOT_CONFIGURED,
     build_reference_target_app,
 )
@@ -30,6 +30,7 @@ from gargoyle.verifier import (
     ACCEPT_REASSERTED_AND_BOUND,
     REF_VERIFY_BINDING_MISMATCH,
     REF_VERIFY_ENVELOPE_ABSENT,
+    REF_VERIFY_PRINCIPAL_MISMATCH,
     REF_VERIFY_SIGNATURE_INVALID,
     REF_VERIFY_REPLAY,
 )
@@ -55,13 +56,15 @@ def _pinned_root():
     return anchor_sha256(_published_bytes())
 
 
-def _normalized_interaction(ap=None, op=None, context=None):
+PRINCIPAL_HEADER = "X-Peer"  # the front proxy's identity header, in the config
+PRINCIPAL = "agent-7"
+
+
+def _normalized_interaction(tool="transfer", args=None, principal=PRINCIPAL):
     return {
-        "AP": ["identity", "role"] if ap is None else ap,
-        "OP": ["session", "request"] if op is None else op,
-        "context": {} if context is None else context,
-        "expected_manifest_version": "1.0",
-        "expected_manifest_sha256": manifest_sha256(),
+        "tool": tool,
+        "args": {"amount": 5} if args is None else args,
+        "principal": principal,
     }
 
 
@@ -74,7 +77,7 @@ def _signed_envelope(gate_signing, interaction=None, target_url=TARGET_URL,
         policy_pin=ManifestPolicy().pin(),
         decision="ELIGIBLE",
         target_url=target_url,
-        normalized_interaction=interaction,
+        call=interaction,
         timestamp_utc=timestamp_utc,
     )
     return sign_envelope(env, gate_signing["private_key"], gate_signing["key_id"],
@@ -100,7 +103,8 @@ def _fetch_via(pub_client):
     return fetch
 
 
-def _make_target(gate_signing, target_url=TARGET_URL, serve_bytes=None, replay_cache=None):
+def _make_target(gate_signing, target_url=TARGET_URL, serve_bytes=None, replay_cache=None,
+                 principal_header=PRINCIPAL_HEADER, principal_resolver=None):
     """Build the reference target with injected config + fetch. Returns (app, client)."""
     if serve_bytes is None:
         serve_bytes = _published_bytes()
@@ -112,19 +116,28 @@ def _make_target(gate_signing, target_url=TARGET_URL, serve_bytes=None, replay_c
             gate_signing["key_id"]: gate_signing["public_key"]
         },
     }
+    if principal_header is not None:
+        config["principal_header"] = principal_header
     app = build_reference_target_app(
         config_provider=lambda: config,
         fetch=_fetch_via(_publisher_client(serve_bytes)),
         replay_cache=replay_cache,
+        principal_resolver=principal_resolver,
     )
     return app, TestClient(app)
 
 
-def _post(client, interaction, envelope=None):
+def _post(client, interaction, envelope=None, principal=PRINCIPAL, body=None):
+    """POST the call: tool and args in the body, the principal in the proxy
+    header (None sends no header), the receipt in its header."""
     headers = {}
     if envelope is not None:
         headers["X-Gargoyle-Envelope"] = canonical_json(envelope)
-    return client.post("/target", json=interaction, headers=headers)
+    if principal is not None:
+        headers[PRINCIPAL_HEADER] = principal
+    if body is None:
+        body = {"tool": interaction["tool"], "args": interaction["args"]}
+    return client.post("/target", json=body, headers=headers)
 
 
 # ---------------------------------------------------------------------------
@@ -178,7 +191,7 @@ def test_reference_target_refuses_tampered_signed_envelope_a2(gate_signing):
     """
     app, client = _make_target(gate_signing)
     env = _signed_envelope(gate_signing)
-    env["request_context"]["AP"] = ["identity", "role", "admin"]  # tamper post-sign
+    env["request_context"]["tool"] = "delete_database"  # tamper post-sign
     resp = _post(client, _normalized_interaction(), env)
     assert resp.status_code == 403
     assert resp.json()["detail"]["reason"] == REF_VERIFY_SIGNATURE_INVALID
@@ -191,13 +204,110 @@ def test_reference_target_refuses_replay_binding_mismatch_a3(gate_signing):
     refused by the binding check.
     """
     app, client = _make_target(gate_signing)
-    interaction_x = _normalized_interaction(ap=["identity", "role"])
+    interaction_x = _normalized_interaction(args={"amount": 5})
     env = _signed_envelope(gate_signing, interaction=interaction_x)
-    interaction_y = _normalized_interaction(ap=["identity", "role", "admin"])
+    interaction_y = _normalized_interaction(args={"amount": 5000})
     resp = _post(client, interaction_y, env)
     assert resp.status_code == 403
     assert resp.json()["detail"]["reason"] == REF_VERIFY_BINDING_MISMATCH
     assert app.state.received == []
+
+
+def test_reference_target_refuses_body_with_unbound_fields(gate_signing):
+    """The body is exactly {"tool", "args"}; anything more is unbound data."""
+    app, client = _make_target(gate_signing)
+    interaction = _normalized_interaction()
+    env = _signed_envelope(gate_signing, interaction=interaction)
+    for body in ({"tool": "transfer", "args": {"amount": 5}, "mode": "force"},
+                 {"tool": "transfer"},
+                 ["transfer"]):
+        resp = _post(client, interaction, env, body=body)
+        assert resp.status_code == 403, body
+        assert resp.json()["detail"]["reason"] == REF_VERIFY_BINDING_MISMATCH, body
+    assert app.state.received == []
+
+
+# ---------------------------------------------------------------------------
+# The principal: the target's own authentication, never the body.
+# ---------------------------------------------------------------------------
+
+
+def test_reference_target_refuses_receipt_issued_to_another_principal(gate_signing):
+    """agent-8 presents agent-7's receipt for the same call: refused."""
+    app, client = _make_target(gate_signing)
+    interaction = _normalized_interaction(principal="agent-7")
+    env = _signed_envelope(gate_signing, interaction=interaction)
+    resp = _post(client, interaction, env, principal="agent-8")
+    assert resp.status_code == 403
+    assert resp.json()["detail"]["reason"] == REF_VERIFY_PRINCIPAL_MISMATCH
+    assert app.state.received == []
+
+
+def test_reference_target_refuses_unauthenticated_caller(gate_signing):
+    """No proxy header, an empty one, or two of them: nobody is calling, and
+    nobody gets nothing, before the receipt is even looked at."""
+    app, client = _make_target(gate_signing)
+    interaction = _normalized_interaction()
+    env = _signed_envelope(gate_signing, interaction=interaction)
+    for principal in (None, "", "   "):
+        resp = _post(client, interaction, env, principal=principal)
+        assert resp.status_code == 403, principal
+        assert resp.json()["detail"]["reason"] == REF_TARGET_NO_PRINCIPAL, principal
+    body = {"tool": interaction["tool"], "args": interaction["args"]}
+    resp = client.post("/target", json=body,
+                       headers=[("X-Gargoyle-Envelope", canonical_json(env)),
+                                (PRINCIPAL_HEADER, "agent-7"), (PRINCIPAL_HEADER, "agent-7")])
+    assert resp.status_code == 403
+    assert resp.json()["detail"]["reason"] == REF_TARGET_NO_PRINCIPAL
+    assert app.state.received == []
+
+
+def test_reference_target_ignores_principal_in_body(gate_signing):
+    """A principal written into the body is not identity; it is an unbound
+    field and the call is refused."""
+    app, client = _make_target(gate_signing)
+    interaction = _normalized_interaction(principal="agent-7")
+    env = _signed_envelope(gate_signing, interaction=interaction)
+    body = {"tool": "transfer", "args": {"amount": 5}, "principal": "agent-7"}
+    resp = _post(client, interaction, env, principal="agent-8", body=body)
+    assert resp.status_code == 403
+    assert resp.json()["detail"]["reason"] == REF_VERIFY_BINDING_MISMATCH
+    assert app.state.received == []
+
+
+def test_reference_target_without_principal_source_refuses_everyone(gate_signing):
+    """No principal header configured and no resolver injected: the default
+    resolver authenticates nobody, so every call is refused."""
+    app, client = _make_target(gate_signing, principal_header=None)
+    interaction = _normalized_interaction()
+    env = _signed_envelope(gate_signing, interaction=interaction)
+    resp = _post(client, interaction, env)
+    assert resp.status_code == 403
+    assert resp.json()["detail"]["reason"] == REF_TARGET_NO_PRINCIPAL
+    assert app.state.received == []
+
+
+def test_reference_target_uses_an_injected_principal_resolver(gate_signing):
+    """An integrator's resolver (an mTLS peer, a token subject) replaces the
+    header; the header is then ignored, and a resolver that raises or
+    returns nothing refuses."""
+    app, client = _make_target(gate_signing, principal_header=None,
+                               principal_resolver=lambda request, config: "agent-7")
+    interaction = _normalized_interaction(principal="agent-7")
+    env = _signed_envelope(gate_signing, interaction=interaction)
+    assert _post(client, interaction, env, principal="agent-8").status_code == 200
+    assert len(app.state.received) == 1
+
+    def broken(request, config):
+        raise RuntimeError("identity provider down")
+
+    for resolver in (broken, lambda request, config: None, lambda request, config: 42):
+        app, client = _make_target(gate_signing, principal_resolver=resolver)
+        env = _signed_envelope(gate_signing, interaction=interaction)
+        resp = _post(client, interaction, env)
+        assert resp.status_code == 403
+        assert resp.json()["detail"]["reason"] == REF_TARGET_NO_PRINCIPAL
+        assert app.state.received == []
 
 
 def test_reference_target_refuses_target_url_swap(gate_signing):
@@ -322,8 +432,9 @@ def test_reference_target_refuses_duplicate_envelope_header_p01(gate_signing):
     interaction = _normalized_interaction()
     env = _signed_envelope(gate_signing, interaction=interaction)
     body = canonical_json(env)
-    resp = client.post("/target", json=interaction,
-                       headers=[("X-Gargoyle-Envelope", body), ("X-Gargoyle-Envelope", body)])
+    resp = client.post("/target", json={"tool": interaction["tool"], "args": interaction["args"]},
+                       headers=[("X-Gargoyle-Envelope", body), ("X-Gargoyle-Envelope", body),
+                                (PRINCIPAL_HEADER, PRINCIPAL)])
     assert resp.status_code == 403
     assert resp.json()["detail"]["reason"] == REF_VERIFY_ENVELOPE_ABSENT
     assert app.state.received == []

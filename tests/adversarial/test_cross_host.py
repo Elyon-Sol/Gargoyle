@@ -25,7 +25,7 @@ from gargoyle.envelope import (
     canonical_json,
     reassert,
 )
-from gargoyle.policy import MANIFEST_POLICY_ID, load_manifest, manifest_sha256
+from gargoyle.policy import MANIFEST_POLICY_ID
 from gargoyle.published_source import (
     anchor_sha256,
     fetch_published_record,
@@ -67,13 +67,14 @@ def _pinned_root():
     return anchor_sha256(_published_bytes())
 
 
-def _normalized_interaction(ap=None, op=None, context=None):
+PRINCIPAL_HEADER = "X-Peer"  # stands in for the front proxy's identity header
+
+
+def _normalized_interaction(tool="transfer", args=None, principal="agent-7"):
     return {
-        "AP": ["identity", "role"] if ap is None else ap,
-        "OP": ["session", "request"] if op is None else op,
-        "context": {} if context is None else context,
-        "expected_manifest_version": "1.0",
-        "expected_manifest_sha256": manifest_sha256(),
+        "tool": tool,
+        "args": {"amount": 5} if args is None else args,
+        "principal": principal,
     }
 
 
@@ -85,8 +86,18 @@ def _build_valid_envelope(interaction=None, target_url=TARGET_URL,
         policy_pin=ManifestPolicy().pin(),
         decision="ELIGIBLE",
         target_url=target_url,
-        normalized_interaction=interaction,
+        call=interaction,
         timestamp_utc=timestamp_utc,
+    )
+
+
+def _post_call(client, path, call, env):
+    """POST tool and args as the body, the principal as the proxy header."""
+    return client.post(
+        path,
+        json={"tool": call["tool"], "args": call["args"]},
+        headers={"X-Gargoyle-Envelope": canonical_json(env),
+                 PRINCIPAL_HEADER: call["principal"]},
     )
 
 
@@ -118,7 +129,11 @@ def _build_cross_host_target_app(publisher_base, pinned_root, fetch=fetch_publis
 
     @app.post("/act")
     async def act(request: Request):
-        interaction = await request.json()
+        body = await request.json()
+        # The principal is what the target authenticated (here: the proxy
+        # header), never a field of the body.
+        interaction = {"tool": body["tool"], "args": body["args"],
+                       "principal": request.headers.get(PRINCIPAL_HEADER)}
 
         raw = request.headers.get("X-Gargoyle-Envelope")
         envelope = None
@@ -208,7 +223,7 @@ def test_verify_envelope_refuses_forged_despite_divergent_local_disk(monkeypatch
     whatever the record or local state says.
     """
     env = _build_valid_envelope()
-    env["request_context"]["AP"] = ["identity", "role", "admin"]  # tamper, no rehash
+    env["request_context"]["tool"] = "delete_database"  # tamper, no rehash
     record = _published_record()
     monkeypatch.setattr(
         "gargoyle.policy.ManifestPolicy.pin",
@@ -278,11 +293,7 @@ def test_cross_host_target_honors_routed_valid_call():
 
     interaction = _normalized_interaction()
     env = _build_valid_envelope(interaction=interaction)
-    resp = client.post(
-        "/act",
-        json=interaction,
-        headers={"X-Gargoyle-Envelope": canonical_json(env)},
-    )
+    resp = _post_call(client, "/act", interaction, env)
     assert resp.status_code == 200
     assert resp.json()["honored"] is True
     assert resp.json()["reason"] == ACCEPT_REASSERTED_AND_BOUND
@@ -311,11 +322,7 @@ def test_cross_host_target_refuses_when_fetched_record_fails_anchor():
 
     interaction = _normalized_interaction()
     env = _build_valid_envelope(interaction=interaction)
-    resp = client.post(
-        "/act",
-        json=interaction,
-        headers={"X-Gargoyle-Envelope": canonical_json(env)},
-    )
+    resp = _post_call(client, "/act", interaction, env)
     assert resp.status_code == 403
     assert resp.json()["detail"]["reason"] == REF_TARGET_ANCHOR_MISMATCH
     assert received == []

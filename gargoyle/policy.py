@@ -21,12 +21,18 @@ policy engine computes both from whatever identifies that engine's state.
 Policies must be fail-closed: any exception inside decide() is treated by the
 issuer as REFUSE, and an implementation should prefer REFUSE over guessing.
 
+The interaction a policy sees is the call the receipt will bind ("tool",
+"args", "principal", with principal the identity the issuing service
+authenticated) plus whatever claims the integrator attaches for the policy.
+A policy may decide on any of it; the receipt records only the call and the
+policy pin.
+
 ManifestPolicy is the reference implementation: a JSON manifest names the
 authority tokens (AR) and operation tokens (R) a call must declare, the call
 declares its tokens (AP, OP), and the call is ELIGIBLE when AP covers AR and
-OP covers R. The tokens are caller-asserted strings; nothing here
-authenticates who the caller is. Use it for tests and examples, and put a
-real policy engine behind the Policy interface for anything else.
+OP covers R. The tokens are caller-asserted claims and the policy ignores
+tool, args and principal. Use it for tests and examples, and put a real
+policy engine behind the Policy interface for anything else.
 """
 
 import hashlib

@@ -13,7 +13,6 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from gargoyle.policy import ManifestPolicy
 from gargoyle.envelope import build_envelope, sign_envelope
-from gargoyle.policy import load_manifest, manifest_sha256
 from gargoyle.verifier import verify_envelope
 
 TARGET_URL = "http://127.0.0.1:9000/target"
@@ -21,13 +20,7 @@ KEY_ID = "gate-ed25519-001"
 
 
 def _interaction():
-    return {
-        "AP": ["identity", "role"],
-        "OP": ["session", "request"],
-        "context": {"k": "v"},
-        "expected_manifest_version": "1.0",
-        "expected_manifest_sha256": manifest_sha256(),
-    }
+    return {"tool": "act", "args": {"k": "v"}, "principal": "agent-7"}
 
 
 def _signed(priv, not_after=None, decision_id=None):
@@ -35,7 +28,7 @@ def _signed(priv, not_after=None, decision_id=None):
         policy_pin=ManifestPolicy().pin(),
         decision="ELIGIBLE",
         target_url=TARGET_URL,
-        normalized_interaction=_interaction(),
+        call=_interaction(),
         timestamp_utc="2026-07-09T00:00:00+00:00",
     )
     return sign_envelope(env, priv, KEY_ID, not_after=not_after, decision_id=decision_id)

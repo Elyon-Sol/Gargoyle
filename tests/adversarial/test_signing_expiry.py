@@ -14,7 +14,7 @@ import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from gargoyle.envelope import (
-    canonical_json, _sha256_text, _HASH_EXCLUDED_KEYS, _SIGNATURE_EXCLUDED_KEYS,
+    args_sha256, canonical_json, _sha256_text, _HASH_EXCLUDED_KEYS, _SIGNATURE_EXCLUDED_KEYS,
     sign_envelope,
 )
 from gargoyle.verifier import (
@@ -26,18 +26,15 @@ P, M = "b" * 64, "c" * 64
 TARGET = "https://target.example/act"
 NOW = datetime(2026, 6, 2, 12, 0, 0, tzinfo=timezone.utc)
 REC = {"policy_id": "test-policy/1", "policy_sha256": P}
-INTER = {"AP": ["role", "identity"], "OP": ["request", "session"],
-         "context": {"k": "v"}, "expected_manifest_version": "1.0",
-         "expected_manifest_sha256": M}
+INTER = {"tool": "act", "args": {"k": "v"}, "principal": "agent-7"}
 
 
 def _env():
     env = {
         "envelope_version": "gargoyle/1", "decision": "ELIGIBLE", "target_url": TARGET,
         "policy": dict(REC),
-        "request_context": {"AP": ["identity", "role"], "OP": ["session", "request"],
-                            "context": {"k": "v"}, "expected_manifest_version": "1.0",
-                            "expected_manifest_sha256": M},
+        "request_context": {"tool": "act", "args_sha256": args_sha256({"k": "v"}),
+                            "principal": "agent-7"},
         "timestamp_utc": "2026-06-02T00:00:00+00:00",
     }
     hashable = {k: v for k, v in env.items() if k not in _HASH_EXCLUDED_KEYS}

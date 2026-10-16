@@ -9,7 +9,6 @@ from fastapi.testclient import TestClient
 
 from gargoyle.policy import ManifestPolicy
 from gargoyle.envelope import build_envelope, sign_envelope
-from gargoyle.policy import load_manifest, manifest_sha256
 from gargoyle.reference_target import build_reference_target_app
 from gargoyle.replay_cache import InMemoryReplayCache
 from gargoyle.verifier import REF_VERIFY_PUBLISHED_RECORD_STALE
@@ -19,12 +18,11 @@ KID = "gate-ed25519-001"
 priv = Ed25519PrivateKey.generate()
 
 def inter():
-    return {"AP": ["identity","role"], "OP": ["session","request"], "context": {},
-            "expected_manifest_version": "1.0", "expected_manifest_sha256": manifest_sha256()}
+    return {"tool": "transfer", "args": {"amount": 5}, "principal": "agent-7"}
 
 def signed_env(did):
     e = build_envelope(
-        policy_pin=ManifestPolicy().pin(),decision="ELIGIBLE", target_url=TARGET, normalized_interaction=inter(),
+        policy_pin=ManifestPolicy().pin(),decision="ELIGIBLE", target_url=TARGET, call=inter(),
                        timestamp_utc="2026-07-11T00:00:00+00:00")
     return sign_envelope(e, priv, KID, decision_id=did)
 
@@ -33,7 +31,7 @@ PINS = dict(_e0["policy"])
 
 def make():
     cfg = {"target_url": TARGET, "publisher_url": "http://pub", "pinned_root_sha256": "x",
-           "pinned_public_keys": {KID: priv.public_key()},
+           "pinned_public_keys": {KID: priv.public_key()}, "principal_header": "X-Peer",
            "pinned_publisher_keys": {"pub-1": object()},  # truthy -> signed mode
            "signed_record_url": "http://pub/signed"}
     st = {"serial": 200, "seen": []}
@@ -48,7 +46,8 @@ def make():
     return TestClient(app), st
 
 def post(c, env):
-    return c.post("/target", json=inter(), headers={"X-Gargoyle-Envelope": json.dumps(env)})
+    return c.post("/target", json={"tool": "transfer", "args": {"amount": 5}},
+                  headers={"X-Gargoyle-Envelope": json.dumps(env), "X-Peer": "agent-7"})
 
 def test_rollback_refused():
     c, st = make()

@@ -9,7 +9,7 @@ issuer key, and refuses records that are badly signed, stale or rolled back.
 
 Records are built inline with the same signed region the generator uses
 (canonical_json of the record minus publisher_signature). Run from the repo
-root: build_envelope reads MANIFEST/manifest.json for the reference policy pin.
+root: ManifestPolicy().pin() reads MANIFEST/manifest.json for the reference pin.
 """
 
 import base64
@@ -46,14 +46,8 @@ def _pub_b64(public_key):
 
 def _interaction():
     # The same dict feeds build_envelope (request_context) and verify_envelope
-    # (live interaction), so the binding check passes by construction.
-    return {
-        "AP": ["auth.read", "auth.write"],
-        "OP": ["op.forward"],
-        "context": {"tenant": "t1"},
-        "expected_manifest_version": "1",
-        "expected_manifest_sha256": "pinned-manifest-sha-placeholder",
-    }
+    # (live call), so the binding check passes by construction.
+    return {"tool": "forward", "args": {"tenant": "t1"}, "principal": "svc-a"}
 
 
 def _signed_envelope(issuer_private, key_id, not_after=None):
@@ -62,7 +56,7 @@ def _signed_envelope(issuer_private, key_id, not_after=None):
         policy_pin=ManifestPolicy().pin(),
         decision="ELIGIBLE",
         target_url=TARGET_URL,
-        normalized_interaction=interaction,
+        call=interaction,
     )
     signed = sign_envelope(env, issuer_private, key_id, not_after=not_after)
     return signed, interaction
@@ -313,7 +307,7 @@ def test_unsigned_path_unchanged():
         policy_pin=ManifestPolicy().pin(),
         decision="ELIGIBLE",
         target_url=TARGET_URL,
-        normalized_interaction=interaction,
+        call=interaction,
     )
     result = verify_envelope(env, interaction, TARGET_URL)
     assert result["accepted"] is True
