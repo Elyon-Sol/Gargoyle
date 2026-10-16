@@ -116,14 +116,25 @@ replay, issuance_log, envelope_inspector, governance_wiring, request_validator.
    policy (reference_policy(), reference_pin()) and the record bytes a publisher would
    serve for it (reference_record_bytes()), so no published record is committed.
    Suite: 293 pass.
-5. Write the wire spec as a standalone document (envelope fields, canonical JSON
-   rules, signature coverage, replay semantics, grant format) so the format is not
-   defined by one Python file.
+5. DONE (2026-10-16). SPEC.md at the repo root: terms, encodings (canonical JSON,
+   SHA-256 hex, Ed25519 hex signatures, raw keys hex/base64, offset-bearing timestamps),
+   the receipt field table with hashed/signed columns, the decision_sha256 and
+   issuer-signature regions, the ordered verification procedure with every refusal
+   code, replay semantics (decision_id single use, retention to not_after + skew,
+   store scope), the grant format and its ordered checks, the anchored and signed
+   published records, the key record, deterministic test vectors (seed =
+   sha256(label)), transport (HTTP header, MCP _meta, 403 body) and versioning.
+   tests/fixtures/wire_vectors.json holds the complete vector objects and
+   tests/test_wire_spec.py recomputes them from the seeds, verifies them with the
+   reference implementation, checks the excluded-key sets and region bytes, asserts
+   SPEC.md quotes every vector verbatim, and asserts every REF_* code the package
+   defines is named in SPEC.md. The spec is written as authoritative: where it and the
+   code disagree, the code is the bug. Suite: 298 pass.
 6. Collapse reference_target + executor_sdk into one "consumer" module; keep
    mcp_server as the primary integration surface.
 7. Choose the license (permissive recommended for adoption), add README, pyproject.
 8. Re-run the suite after each step; the suite at the last DONE step is the
-   regression floor (293 at step 4).
+   regression floor (298 at step 5).
 
 ## Known weaknesses carried over (fix or document)
 - requires_approval is not in the signed receipt, so a target cannot tell a held
