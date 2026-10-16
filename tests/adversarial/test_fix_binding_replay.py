@@ -15,7 +15,7 @@ from reference import reference_policy
 from gargoyle.policy import ManifestPolicy
 from gargoyle.envelope import build_envelope, sign_envelope
 from gargoyle.verifier import verify_envelope, REF_VERIFY_BINDING_MISMATCH, REF_VERIFY_REPLAY
-from gargoyle.reference_target import build_reference_target_app, REF_TARGET_NO_DECISION_ID
+from gargoyle.consumer import build_reference_target_app, REF_TARGET_NO_DECISION_ID
 from gargoyle.replay_cache import InMemoryReplayCache
 
 TARGET = "https://target.example.com:9443/target"
@@ -80,7 +80,7 @@ def test_f3_retention_closes_skew_window():
     na = now0 + timedelta(seconds=10)
     skew = timedelta(seconds=60)
     c = InMemoryReplayCache()
-    # reference_target now claims with exp = not_after + skew:
+    # the consumer claims with exp = not_after + skew:
     assert c.check_and_claim("d", na + skew, now=now0) is True
     later = now0 + timedelta(seconds=20)          # past not_after, within skew
     assert c.check_and_claim("d", na + skew, now=later) is False   # still retained -> replay refused

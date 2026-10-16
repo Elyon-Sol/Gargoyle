@@ -1,5 +1,5 @@
 """
-Tests for gargoyle.reference_target, the deployable enforcing target.
+Tests for the reference target in gargoyle.consumer, the deployable enforcing target.
 
 The app is driven through TestClient with an injected config_provider (the
 out-of-band pins) and an injected fetch (the published-record request goes to
@@ -21,7 +21,7 @@ from reference import reference_policy, reference_record_bytes
 from gargoyle.policy import ManifestPolicy
 from gargoyle.envelope import build_envelope, canonical_json, sign_envelope
 from gargoyle.published_source import anchor_sha256, load_record_from_bytes
-from gargoyle.reference_target import (
+from gargoyle.consumer import (
     REF_TARGET_ANCHOR_MISMATCH,
     REF_TARGET_NO_PRINCIPAL,
     REF_TARGET_NOT_CONFIGURED,

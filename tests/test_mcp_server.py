@@ -14,7 +14,7 @@ from gargoyle.mcp_server import (
 )
 from gargoyle.policy import ManifestPolicy, manifest_sha256
 from gargoyle.published_source import anchor_sha256
-from gargoyle.reference_target import REF_TARGET_NO_DECISION_ID, REF_TARGET_NOT_CONFIGURED
+from gargoyle.consumer import REF_TARGET_NO_DECISION_ID, REF_TARGET_NOT_CONFIGURED
 from gargoyle.verifier import REF_VERIFY_BINDING_MISMATCH, REF_VERIFY_PRINCIPAL_MISMATCH, REF_VERIFY_REPLAY
 
 TARGET_ID = "mcp://tools.example.com"
@@ -108,8 +108,7 @@ def test_config_from_env_requires_principal_and_record_path(monkeypatch, tmp_pat
 
 def test_signed_receipt_without_decision_id_is_refused():
     """Without a decision_id there is nothing to claim, so the receipt could be
-    replayed until it expires. Refuse it, as ExecutorGate and the reference
-    target do."""
+    replayed until it expires. Refuse it, as every Consumer does."""
     key = Ed25519PrivateKey.generate()
     state = _state(key)
     env = sign_envelope(

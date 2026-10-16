@@ -105,9 +105,9 @@ def test_spec_quotes_the_vectors_verbatim():
 def test_spec_names_every_refusal_code():
     """Every REF_* code the package can emit is documented."""
     import re
-    import gargoyle.approval, gargoyle.reference_target, gargoyle.verifier
+    import gargoyle.approval, gargoyle.consumer, gargoyle.verifier
     codes = set()
-    for mod in (gargoyle.verifier, gargoyle.approval, gargoyle.reference_target):
+    for mod in (gargoyle.verifier, gargoyle.approval, gargoyle.consumer):
         codes |= {v for k, v in vars(mod).items() if k.startswith("REF_") and isinstance(v, str)}
     documented = set(re.findall(r"REF_[A-Z_]+", SPEC))
     assert codes <= documented, sorted(codes - documented)

@@ -16,9 +16,11 @@ that this file quotes them verbatim.
 - **Policy**: anything that answers allow/deny and exposes a **pin**,
   `{policy_id, policy_sha256}`, identifying its logic and configuration.
   Gargoyle never decides; it records which policy did.
-- **Target** (or executor): the party that runs the tool call and must
-  refuse it without a valid receipt (`gargoyle.verifier`, `executor_sdk`,
-  `reference_target`, `mcp_server`).
+- **Target** (or executor, consumer): the party that runs the tool call and
+  must refuse it without a valid receipt (`gargoyle.verifier` is the pure
+  check, `gargoyle.consumer` packages it with the live pin, key trust and
+  the replay claim, `gargoyle.mcp_server` and the reference target in
+  `gargoyle.consumer` are the two shipped consumers).
 - **Principal**: the authenticated identity of the party on whose behalf the
   call is made. The issuer records the principal it authenticated; the
   target compares it with the principal it authenticated itself. Gargoyle
@@ -184,7 +186,7 @@ error and raises.
 **Unsigned mode.** A verifier given no trusted keys skips step 2 and accepts
 any receipt whose hash recomputes, which anyone can produce. It exists to
 show what a target sees without key material; a deployed target must pin
-issuer keys. `ExecutorGate` refuses to be built without them.
+issuer keys. A `Consumer` refuses to be built without them.
 
 ## 7. Replay semantics
 

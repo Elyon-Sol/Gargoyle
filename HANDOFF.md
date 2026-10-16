@@ -130,11 +130,33 @@ replay, issuance_log, envelope_inspector, governance_wiring, request_validator.
    SPEC.md quotes every vector verbatim, and asserts every REF_* code the package
    defines is named in SPEC.md. The spec is written as authoritative: where it and the
    code disagree, the code is the bug. Suite: 298 pass.
-6. Collapse reference_target + executor_sdk into one "consumer" module; keep
-   mcp_server as the primary integration surface.
+6. DONE (2026-10-16). gargoyle/consumer.py replaces executor_sdk.py and
+   reference_target.py (both deleted). Consumer (was ExecutorGate) is the one check
+   every executor runs: exactly one pin source (record dict, anchored record_bytes, or
+   record_source(last_seen_serial) -> {"record","reason"}), issuer-key trust
+   (pinned_public_keys, key_record_view, or key_record_source(last_seen_serial) ->
+   {"trust_view","reason","serial"}; no trust at all is a ValueError), replay cache,
+   clock skew, and a HighWater holding the highest record / key-record serial seen so
+   a rolled-back record is refused; sources are called on every check, a source
+   that raises or returns nothing refuses with its reason and never falls back to a
+   static value. Verdict(honored, reason) replaces executor_sdk.Decision (the name
+   clash with policy.Decision is gone). The reference target lives in the same
+   module (build_reference_target_app, config_from_env, principal_from_header, the
+   module-level `app`; run `uvicorn gargoyle.consumer:app`): per request it resolves
+   config, authenticates the caller, reads body and header, then builds a Consumer
+   from the config with the injected fetchers wrapped as sources and the app-shared
+   replay cache and HighWater, and runs it on the thread pool. mcp_server builds one
+   Consumer in ServerState from its config (anchored record bytes, pinned key) and
+   gate_tool_call delegates to it; the duplicated verify/claim sequence is gone and
+   mcp_server stays the primary integration surface. REF_TARGET_* codes and
+   ENVELOPE_HEADER now live in consumer.py. tests/test_consumer.py added (construction
+   rules, honor/replay, decision_id, skew retention, anchored bytes, record-source
+   serial threading and rollback, key-record-source precedence and fail-closed, shared
+   state across consumers); the reference-target, MCP and principal tests repointed.
+   Suite: 316 pass.
 7. Choose the license (permissive recommended for adoption), add README, pyproject.
 8. Re-run the suite after each step; the suite at the last DONE step is the
-   regression floor (298 at step 5).
+   regression floor (316 at step 6).
 
 ## Known weaknesses carried over (fix or document)
 - requires_approval is not in the signed receipt, so a target cannot tell a held
@@ -145,7 +167,6 @@ replay, issuance_log, envelope_inspector, governance_wiring, request_validator.
   mandatory (refuse when none are configured) - a code change, not yet made.
 - Test names still carry old labels (_a1/_a2/_a3, _p01, _REVERT_CATCHER,
   test_three_model_forge_refused_on_signed_path); docstrings are clean. Rename freely.
-- executor_sdk.Decision (honored, reason) shares its name with policy.Decision.
 - Replay cache scope and restart behavior are per-store; the shared (Redis) variant
   is opt-in.
 - "Currently valid" depends on knobs with non-default wiring (expiry, clock skew).

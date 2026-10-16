@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 from reference import reference_policy
 from gargoyle.policy import ManifestPolicy
 from gargoyle.envelope import build_envelope, sign_envelope
-from gargoyle.reference_target import build_reference_target_app
+from gargoyle.consumer import build_reference_target_app
 from gargoyle.replay_cache import InMemoryReplayCache
 from gargoyle.verifier import REF_VERIFY_PUBLISHED_RECORD_STALE
 

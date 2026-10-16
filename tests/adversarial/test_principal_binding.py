@@ -9,7 +9,7 @@ import pytest
 
 from reference import reference_policy
 from gargoyle.envelope import build_envelope, sign_envelope
-from gargoyle.executor_sdk import ExecutorGate
+from gargoyle.consumer import Consumer
 from gargoyle.issuer import ISSUE_UNBINDABLE_CALL, issue
 from gargoyle.policy import ELIGIBLE, Decision, ManifestPolicy
 from gargoyle.verifier import (
@@ -114,9 +114,8 @@ def test_principal_rewritten_after_signing_breaks_the_signature():
 
 
 # ---- an executor checks its own peer identity, not the receipt's word ----
-def test_executor_gate_refuses_a_receipt_issued_to_someone_else():
+def test_consumer_refuses_a_receipt_issued_to_someone_else():
     e = issue(AllowAll(), TARGET, call("agent-7"), signing_key=priv, key_id=KID).envelope
-    gate = ExecutorGate(pinned_public_keys={KID: pub}, target_id=TARGET,
-                        record_source=AllowAll().pin())
-    assert gate.check(e, call("agent-8")) == (False, REF_VERIFY_PRINCIPAL_MISMATCH)
-    assert gate.check(e, call("agent-7")).honored is True
+    consumer = Consumer(pinned_public_keys={KID: pub}, target_id=TARGET, record=AllowAll().pin())
+    assert consumer.check(e, call("agent-8")) == (False, REF_VERIFY_PRINCIPAL_MISMATCH)
+    assert consumer.check(e, call("agent-7")).honored is True

@@ -4,10 +4,10 @@ JSON-RPC 2.0 over stdio: initialize, tools/list, tools/call. This server is
 the executor, not the issuer. An agent obtains a signed receipt from the
 issuer (gargoyle.issuer.issue) and sends it in tools/call params._meta under
 "gargoyle/envelope". The server rebuilds the call from the actual tool name
-and arguments plus the principal it serves, runs verify_envelope (signature,
-policy pin, binding, expiry), then claims decision_id in the replay cache.
-The tool fires only after a positive verdict and a fresh claim; every other
-path leaves it unfired.
+and arguments plus the principal it serves and asks a gargoyle.consumer
+.Consumer (signature, policy pin, binding, expiry, then the single-use
+claim on decision_id). The tool fires only after a positive verdict; every
+other path leaves it unfired.
 
 The principal: a stdio server has exactly one client, the process that
 spawned it, and that client's identity is established by whoever wired the
@@ -21,18 +21,12 @@ Run as a stdio MCP server:  python3 -m gargoyle.mcp_server
 
 import json
 import sys
-from datetime import datetime
 from typing import Any, Dict, List, Optional
 
+from gargoyle.consumer import REF_TARGET_NOT_CONFIGURED, Consumer
 from gargoyle.envelope import valid_principal
-from gargoyle.published_source import anchor_sha256, load_record_from_bytes
+from gargoyle.published_source import anchor_sha256
 from gargoyle.replay_cache import InMemoryReplayCache
-from gargoyle.reference_target import (
-    REF_TARGET_ANCHOR_MISMATCH,
-    REF_TARGET_NO_DECISION_ID,
-    REF_TARGET_NOT_CONFIGURED,
-)
-from gargoyle.verifier import verify_envelope, REF_VERIFY_REPLAY
 
 # MCP protocol version this server speaks (a real MCP revision string).
 PROTOCOL_VERSION = "2025-06-18"
@@ -74,9 +68,10 @@ def call_for(tool: str, args: Any, principal: str) -> Dict[str, Any]:
 
 class ServerState:
     """The executor's out-of-band trust material (issuer keys, record anchor,
-    target id, the principal it serves), its replay cache and the list of
-    tool calls actually executed. `config` None means unconfigured: every
-    tools/call is refused with REF_TARGET_NOT_CONFIGURED."""
+    target id, the principal it serves) as a Consumer, and the list of tool
+    calls actually executed. `config` None, or a config without a usable
+    principal, means unconfigured: every tools/call is refused with
+    REF_TARGET_NOT_CONFIGURED."""
 
     def __init__(
         self,
@@ -84,64 +79,37 @@ class ServerState:
         replay_cache: Optional[InMemoryReplayCache] = None,
     ) -> None:
         self.config = config
-        self.replay_cache = replay_cache if replay_cache is not None else InMemoryReplayCache()
+        self.consumer: Optional[Consumer] = None
+        if config is not None and valid_principal(config.get("principal")):
+            self.consumer = Consumer(
+                target_id=config["target_id"],
+                pinned_public_keys=config["pinned_public_keys"],
+                record_bytes=config["record_bytes"],
+                pinned_root=config["pinned_root"],
+                replay_cache=replay_cache,
+            )
         self.executed: List[Dict[str, Any]] = []
         self.initialized = False
-
-
-def _parse_not_after(envelope: Dict[str, Any]) -> Optional[datetime]:
-    na = envelope.get("not_after")
-    if isinstance(na, str):
-        try:
-            return datetime.fromisoformat(na)
-        except ValueError:
-            return None
-    return None
 
 
 def gate_tool_call(state: ServerState, params: Dict[str, Any]) -> (bool, str):
     """Decide and, if honored, execute one tools/call. Returns (executed,
     reason). The side effect (appending to state.executed) happens only after
-    a positive verdict and a fresh replay claim."""
-    if state.config is None:
+    the consumer honored the receipt, which includes its single-use claim."""
+    if state.consumer is None:
         return False, REF_TARGET_NOT_CONFIGURED
 
     name = params.get("name")
     args = params.get("arguments", {})
     meta = params.get("_meta") or {}
     envelope = meta.get(ENVELOPE_META_KEY)
-    if not isinstance(envelope, dict):
-        envelope = None  # absent or not an object: an unattested call
 
-    record = load_record_from_bytes(
-        state.config["record_bytes"], state.config["pinned_root"]
-    )
-    if record is None:
-        return False, REF_TARGET_ANCHOR_MISMATCH
-
-    principal = state.config.get("principal")
-    if not valid_principal(principal):
-        return False, REF_TARGET_NOT_CONFIGURED
-    result = verify_envelope(
-        envelope,
-        call_for(name, args, principal),
-        state.config["target_id"],
-        record_source=record,
-        pinned_public_keys=state.config["pinned_public_keys"],
-    )
-    if not result["accepted"]:
-        return False, result["reason"]
-
-    # Exactly once over the validity window. decision_id is signed, so it cannot
-    # be altered; a receipt without one cannot be single-used and is refused.
-    decision_id = envelope.get("decision_id")
-    if not isinstance(decision_id, str) or not decision_id:
-        return False, REF_TARGET_NO_DECISION_ID
-    if not state.replay_cache.check_and_claim(decision_id, _parse_not_after(envelope)):
-        return False, REF_VERIFY_REPLAY
+    verdict = state.consumer.check(envelope, call_for(name, args, state.config["principal"]))
+    if not verdict.honored:
+        return False, verdict.reason
 
     state.executed.append({"tool": name, "args": args})  # THE side effect
-    return True, result["reason"]
+    return True, verdict.reason
 
 
 def _success(msg_id: Any, result: Dict[str, Any]) -> Dict[str, Any]:
