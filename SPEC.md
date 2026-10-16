@@ -1,6 +1,6 @@
 # Gargoyle wire specification
 
-Format version: `gargoyle/1` (pre-release; see section 12).
+Format version: `gargoyle/2` (pre-release; see section 12).
 This document defines the byte-level formats Gargoyle produces and checks:
 the receipt, its hash and signature regions, the verification procedure,
 replay semantics, the approval grant, the execution receipt and the offline
@@ -21,10 +21,14 @@ that this file quotes them verbatim.
   check, `gargoyle.consumer` packages it with the live pin, key trust and
   the replay claim, `gargoyle.mcp_server` and the reference target in
   `gargoyle.consumer` are the two shipped consumers).
-- **Principal**: the authenticated identity of the party on whose behalf the
-  call is made. The issuer records the principal it authenticated; the
+- **Principal**: the authenticated identity of the party making the call
+  (the agent). The issuer records the principal it authenticated; the
   target compares it with the principal it authenticated itself. Gargoyle
   compares principals; it does not authenticate them.
+- **On behalf of**: the party the principal acts for (a user), when the
+  issuer's identity input says so (section 12). The issuer's assertion,
+  bound into the decision; a target compares it only when it knows the
+  delegation itself.
 - **Receipt** (historically "envelope"): one signed, single-use, argument-bound
   authorization for one call at one target by one principal.
 - **Grant**: a human approver's signed release of a held (requires_approval)
@@ -47,7 +51,13 @@ computed over the UTF-8 bytes of the canonical JSON of an object:
 
 Producers should keep arguments to strings, integers, booleans, null, arrays
 and objects. Floats are permitted but two producers may render the same
-float differently; a target that hashes different bytes refuses the binding.
+float differently (Python writes `1.0`, JavaScript writes `1`; Python writes
+`1e+16`, JavaScript `10000000000000000`), and a target that hashes different
+bytes refuses the binding. Integers are safe up to 2^53 in every
+implementation. Object keys are sorted by code point in Python and by UTF-16
+code unit in JavaScript; the two agree for every key without characters
+outside the Basic Multilingual Plane, which is to say every key anyone
+should use.
 
 **Hashes** are SHA-256, written as 64 lowercase hexadecimal characters.
 
@@ -72,7 +82,7 @@ signature region (section 5).
 
 | Field | Type | Hashed | Signed | Meaning |
 |---|---|---|---|---|
-| `envelope_version` | string | yes | yes | `"gargoyle/1"` |
+| `envelope_version` | string | yes | yes | `"gargoyle/2"` |
 | `decision` | string | yes | yes | `"ELIGIBLE"`; a receipt is only ever issued for an eligible call |
 | `requires_approval` | boolean | yes | yes | the policy flagged the call for a human; the receipt is honored only with a grant (section 8) |
 | `target_url` | string | yes | yes | the target the call is addressed to; compared as an exact string, no normalization |
@@ -81,6 +91,7 @@ signature region (section 5).
 | `request_context.tool` | string | yes | yes | the operation name (MCP tool, route, function); non-empty |
 | `request_context.args_sha256` | 64 hex | yes | yes | `sha256(canonical_json(args))` |
 | `request_context.principal` | string | yes | yes | the authenticated caller; non-empty |
+| `request_context.on_behalf_of` | string | yes | yes | optional: the party the caller acts for; non-empty when present |
 | `timestamp_utc` | timestamp | no | no | when the receipt was built; informational only |
 | `decision_sha256` | 64 hex | - | yes | section 4 |
 | `issuer_key_id` | string | no | yes | names the issuer key in the target's trust material |
@@ -89,16 +100,20 @@ signature region (section 5).
 | `approval_request_id` | string | no | yes | present iff `requires_approval` is true: the hold a grant must name; unique per issuance |
 | `issuer_signature` | 128 hex | no | - | section 5 |
 
-`request_context` contains exactly the three members listed. Nothing the
-policy was shown beyond the call (the caller's claims, a manifest pin, an
+`request_context` contains exactly the three required members listed, plus
+`on_behalf_of` when the issuer recorded a delegation. Nothing the policy was
+shown beyond the call (the caller's claims, a manifest pin, an
 interaction type) is in the receipt; the policy pin stands for all of it.
 `args` themselves are not in the receipt; the target hashes the arguments it
 is about to run and compares.
 
 A receipt is **unusable** (refused `REF_VERIFY_ENVELOPE_ABSENT`) unless it is
 an object carrying `policy`, `request_context` (an object with all three
-members), `decision_sha256`, `target_url` and a boolean `requires_approval`,
-and, when that is true, a non-empty string `approval_request_id`.
+required members, and a non-empty `on_behalf_of` if that key is present),
+`decision_sha256`, `target_url` and a boolean `requires_approval`, and, when
+that is true, a non-empty string `approval_request_id`. A receipt whose
+`envelope_version` is not the one the verifier implements is refused
+`REF_VERIFY_VERSION_UNSUPPORTED` before anything else is read.
 
 ## 4. decision_sha256
 
@@ -175,12 +190,17 @@ only check a hash anyone can compute, so it is not offered.
      policy that has since changed is never honored; the call must be
      decided again.
 4. **Binding.**
-   - `call` is an object whose keys are exactly `tool`, `args`, `principal`;
-     else `REF_VERIFY_BINDING_MISMATCH`. Any extra member is unbound data.
+   - `call` is an object whose keys are `tool`, `args`, `principal` and
+     optionally `on_behalf_of`; else `REF_VERIFY_BINDING_MISMATCH`. Any
+     other member is unbound data.
    - Both principals are non-empty strings and equal, else
      `REF_VERIFY_PRINCIPAL_MISMATCH`. An unauthenticated caller never
      matches, whatever the receipt names. This runs before the tool and
      argument checks: the wrong holder is the finding.
+   - If `call` carries `on_behalf_of`, it is a non-empty string equal to
+     the receipt's, else `REF_VERIFY_PRINCIPAL_MISMATCH`. A target that does
+     not know the delegation omits it and the receipt's assertion stands; a
+     live claim of delegation the receipt does not record is a mismatch.
    - `target_url` equal as strings; `request_context.tool` equal to
      `call.tool` as strings; `request_context.args_sha256` equal to
      `sha256(canonical_json(call.args))`. Else `REF_VERIFY_BINDING_MISMATCH`.
@@ -373,7 +393,7 @@ checking only.
 | issuer | `gargoyle-spec-issuer` | `341860057bb6512b9050394d5e52912c16fbd22634fa1ee6ba1fa7697006c91f` |
 | approver | `gargoyle-spec-approver` | `7ae5829f4a4439acbd8e292219526b196568afd3f2f8f3bae83e2e00976647d1` |
 
-Call: `{"tool": "transfer_funds", "args": {"amount": 250, "to": "acct-9"}, "principal": "agent-7"}`
+Call: `{"tool": "transfer_funds", "args": {"amount": 250, "to": "acct-9"}, "principal": "agent-7", "on_behalf_of": "user-42"}`
 at `https://tools.example.com/target`, policy pin
 `{"policy_id": "opa:payments/3", "policy_sha256": "aaaa...a" (64 a's)}`,
 flagged (`requires_approval` true), built at `2026-10-16T12:00:00+00:00`,
@@ -383,27 +403,27 @@ signed under key id `issuer-2026-10` with `not_after`
 
 ```
 args_sha256      = e2363d59384e0a154faccbcc375337c59cc9c5fefa843519e0d5d311cf32bab7
-decision_sha256  = 6bc00001da83d7e81d6b2702558e447a0418a7140ad727571dadfd734492b272
-issuer_signature = 4f07d720213fe6e31eb4b73769e8d9fc810119808b608edf20ddbb3f8840716416525ee66ad92aab6ad3b708aca49d2a59f9ee55048889b6dbbc50e96b411b09
+decision_sha256  = 6186ac4baead392be19c380c691a3d9194210c4abee8d0fc717789e0bab4a8c4
+issuer_signature = 6850a23730113a14cdef04d973526edefec88fb8172640b142a91b25dd779f2d85cc68e2930cc7850942aa02a73185f3b1e01a43a08e52f8030e13d307654502
 ```
 
 Hash region bytes (section 4):
 
 ```
-{"decision":"ELIGIBLE","envelope_version":"gargoyle/1","policy":{"policy_id":"opa:payments/3","policy_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"request_context":{"args_sha256":"e2363d59384e0a154faccbcc375337c59cc9c5fefa843519e0d5d311cf32bab7","principal":"agent-7","tool":"transfer_funds"},"requires_approval":true,"target_url":"https://tools.example.com/target"}
+{"decision":"ELIGIBLE","envelope_version":"gargoyle/2","policy":{"policy_id":"opa:payments/3","policy_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"request_context":{"args_sha256":"e2363d59384e0a154faccbcc375337c59cc9c5fefa843519e0d5d311cf32bab7","on_behalf_of":"user-42","principal":"agent-7","tool":"transfer_funds"},"requires_approval":true,"target_url":"https://tools.example.com/target"}
 ```
 
 Signed region bytes (section 5):
 
 ```
-{"approval_request_id":"req-0001","decision":"ELIGIBLE","decision_id":"5b6b0c7e-6f1e-4d5b-9c3a-1e2f3a4b5c6d","decision_sha256":"6bc00001da83d7e81d6b2702558e447a0418a7140ad727571dadfd734492b272","envelope_version":"gargoyle/1","issuer_key_id":"issuer-2026-10","not_after":"2026-10-16T12:05:00+00:00","policy":{"policy_id":"opa:payments/3","policy_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"request_context":{"args_sha256":"e2363d59384e0a154faccbcc375337c59cc9c5fefa843519e0d5d311cf32bab7","principal":"agent-7","tool":"transfer_funds"},"requires_approval":true,"target_url":"https://tools.example.com/target"}
+{"approval_request_id":"req-0001","decision":"ELIGIBLE","decision_id":"5b6b0c7e-6f1e-4d5b-9c3a-1e2f3a4b5c6d","decision_sha256":"6186ac4baead392be19c380c691a3d9194210c4abee8d0fc717789e0bab4a8c4","envelope_version":"gargoyle/2","issuer_key_id":"issuer-2026-10","not_after":"2026-10-16T12:05:00+00:00","policy":{"policy_id":"opa:payments/3","policy_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"request_context":{"args_sha256":"e2363d59384e0a154faccbcc375337c59cc9c5fefa843519e0d5d311cf32bab7","on_behalf_of":"user-42","principal":"agent-7","tool":"transfer_funds"},"requires_approval":true,"target_url":"https://tools.example.com/target"}
 ```
 
 Grant releasing that decision for hold `req-0001`, `grant_id` `grant-0001`,
 `not_after` `2026-10-16T12:10:00+00:00`, under key id `approver-alice`:
 
 ```
-approver_signature = 32d80613c5776bbd12b8170f2fb5254db14405e81bef3aec56cfcdf42f111a54e69f83e72dfb1dd9ed85eb0d84c02eaa6bc563010a0ea204ca09e2f6d86b3d09
+approver_signature = 8116b67b02bbf96448a1998af6740a388b5fb6be183beb6f88f69fc123416ea1ca2d512db0a68cccd295fec18d731527dd30d0190b61fa4113d588d03292da04
 ```
 
 Execution receipt (section 13) for that call, signed under key id
@@ -416,14 +436,18 @@ Execution receipt (section 13) for that call, signed under key id
 
 ```
 outputs_sha256     = a6cb76237119491aa9d6b1976bf763cb08d72f07dda4becf8bb32c0c4ee5914c
-executor_signature = 6646f700a03f71d8dd53dc8d5845c74fa5b557b7ee9643a56fa4495a75325440d3807725943829f75e96e2eb50ae8035462cf75b0660c80ec003f2b98781e804
+executor_signature = de7575a5f3bbecf644b5cf6f30a03d19c6d8225759ab8e4cd8c488b86145cdcf54c4aefe390d705822c5e168ee926ce92d864bf6a176abf682ff403d7454cd04
 ```
 
 Execution signed region bytes:
 
 ```
-{"decision_id":"5b6b0c7e-6f1e-4d5b-9c3a-1e2f3a4b5c6d","decision_sha256":"6bc00001da83d7e81d6b2702558e447a0418a7140ad727571dadfd734492b272","executed_at":"2026-10-16T12:01:00+00:00","execution_version":"gargoyle-execution/1","executor_key_id":"executor-2026-10","outputs_sha256":"a6cb76237119491aa9d6b1976bf763cb08d72f07dda4becf8bb32c0c4ee5914c","policy":{"policy_id":"opa:payments/3","policy_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"request_context":{"args_sha256":"e2363d59384e0a154faccbcc375337c59cc9c5fefa843519e0d5d311cf32bab7","principal":"agent-7","tool":"transfer_funds"},"target_url":"https://tools.example.com/target"}
+{"decision_id":"5b6b0c7e-6f1e-4d5b-9c3a-1e2f3a4b5c6d","decision_sha256":"6186ac4baead392be19c380c691a3d9194210c4abee8d0fc717789e0bab4a8c4","executed_at":"2026-10-16T12:01:00+00:00","execution_version":"gargoyle-execution/1","executor_key_id":"executor-2026-10","outputs_sha256":"a6cb76237119491aa9d6b1976bf763cb08d72f07dda4becf8bb32c0c4ee5914c","policy":{"policy_id":"opa:payments/3","policy_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"request_context":{"args_sha256":"e2363d59384e0a154faccbcc375337c59cc9c5fefa843519e0d5d311cf32bab7","on_behalf_of":"user-42","principal":"agent-7","tool":"transfer_funds"},"target_url":"https://tools.example.com/target"}
 ```
+
+JWS form (section 14) of the same signed receipt: the header segment is
+`eyJhbGciOiJFZERTQSIsImtpZCI6Imlzc3Vlci0yMDI2LTEwIiwidHlwIjoiSldUIn0` (`{"alg":"EdDSA","kid":"issuer-2026-10","typ":"JWT"}`); the full token
+is the `jws` member of the fixture.
 
 The complete objects are in `tests/fixtures/wire_vectors.json`.
 
@@ -453,10 +477,21 @@ The complete objects are in `tests/fixtures/wire_vectors.json`.
 - Redis key prefixes used by the reference stores: `gargoyle:replay:` and
   `gargoyle:pending:`; grant ids are claimed in the replay store as
   `grant:<grant_id>`.
+- Identity input at the issuer: an issuing service that receives the
+  caller's identity as a token (an OAuth bearer JWT, a Transaction Token,
+  an RFC 8693 delegation token) maps it to the two receipt fields with
+  `gargoyle.identity`: `act.sub` is the principal and `sub` the party acted
+  for; else `agentic_ctx.actor` / `agentic_ctx.principal` (Transaction
+  Tokens for Agents); else `sub` alone. The token must be EdDSA-signed by a
+  key the service trusts, unexpired, and for the service's audience when one
+  is configured.
 - `envelope_version` names this format. Any change to a field set, a hash
   or signature region, or the verification order is a new version;
-  verifiers do not accept a version they do not implement. `gargoyle/1` is
-  pre-release and may still change before the first release.
+  verifiers do not accept a version they do not implement
+  (`REF_VERIFY_VERSION_UNSUPPORTED`). `gargoyle/2` added `on_behalf_of`, the
+  version check and the JWS form to `gargoyle/1`; nothing issued under
+  `gargoyle/1` is honored. The format is pre-release and may still change
+  before the first release.
 
 ## 13. The execution receipt and the offline chain
 
@@ -519,3 +554,33 @@ when it holds an executor key (`GARGOYLE_EXECUTOR_KEY_ID` /
 server puts the receipt in the response `_meta["gargoyle/execution"]`
 (`GARGOYLE_MCP_EXECUTOR_KEY_ID` / `_HEX`); the outputs it attests to are
 the tool result minus `_meta`.
+
+## 14. JWS encoding
+
+A receipt may travel as a JWS in compact serialization (RFC 7515) with
+EdDSA (RFC 8037), so that any JWT library verifies it:
+
+```
+header  = {"alg":"EdDSA","kid":<issuer_key_id>,"typ":"JWT"}
+payload = {"iss":<issuer_key_id>,"jti":<decision_id>,"aud":<target_url>,
+           "exp":<not_after as epoch seconds>,"iat":<timestamp_utc as epoch seconds>,
+           "gargoyle":<the signed receipt, section 3, issuer_signature included>}
+token   = b64url(canonical_json(header)) "." b64url(canonical_json(payload))
+          "." b64url(ed25519_sign(issuer_key, ascii(b64url(header) "." b64url(payload))))
+```
+
+Both signatures are the issuer's. A JWT library checks the outer one and
+enforces `exp` and `aud` on its own; a Gargoyle verifier decodes the token
+(`decode_receipt`), checks the outer signature with the key named by `kid`,
+refuses any `alg` but `EdDSA` (`REF_JWS_ALG_UNSUPPORTED`), an unknown `kid`
+(`REF_JWS_KEY_UNKNOWN`), a bad signature (`REF_JWS_SIGNATURE_INVALID`), a
+malformed token (`REF_JWS_MALFORMED`), an expired `exp` (`REF_JWS_EXPIRED`),
+an `aud` other than its own (`REF_JWS_AUDIENCE_MISMATCH`), and registered
+claims that disagree with the wrapped receipt (`REF_JWS_PAYLOAD_MISMATCH`),
+then hands the inner receipt to the ordinary procedure of section 6. The
+inner canonical signature is what binds the decision; the outer one exists
+for the libraries that cannot compute canonical JSON.
+
+The same encoding, read with the same rules, is accepted as the issuer's
+identity input (section 12); a token with no usable subject is
+`REF_IDENTITY_NO_SUBJECT`.

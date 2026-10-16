@@ -3,7 +3,7 @@ import type { KeyObject } from "node:crypto";
 import { canonicalJson, Json } from "./canonical.js";
 import { sha256Hex, signHex } from "./crypto.js";
 
-export const ENVELOPE_VERSION = "gargoyle/1";
+export const ENVELOPE_VERSION = "gargoyle/2";
 export const REASSERTED = "REASSERTED";
 export const INVALIDATED = "INVALIDATED";
 export const RE_EVALUATE_REQUIRED = "RE-EVALUATE-REQUIRED";
@@ -15,7 +15,7 @@ export const HASH_EXCLUDED_KEYS = [
 export const SIGNATURE_EXCLUDED_KEYS = ["issuer_signature", "timestamp_utc"] as const;
 
 export interface PolicyPin { policy_id: string; policy_sha256: string }
-export interface Call { tool: string; args: Json; principal: string }
+export interface Call { tool: string; args: Json; principal: string; on_behalf_of?: string }
 export type Envelope = Record<string, Json>;
 
 export function argsSha256(args: Json): string {
@@ -50,6 +50,8 @@ export function buildEnvelope(opts: {
   if (!validPin(opts.policyPin)) throw new Error("policy_pin must be {policy_id, policy_sha256 (64 hex)}");
   if (typeof opts.call.tool !== "string" || !opts.call.tool) throw new Error("call.tool must be a non-empty string");
   if (!validPrincipal(opts.call.principal)) throw new Error("call.principal must be a non-empty string");
+  const obo = opts.call.on_behalf_of;
+  if (obo !== undefined && !validPrincipal(obo)) throw new Error("call.on_behalf_of, when present, must be a non-empty string");
   const envelope: Envelope = {
     envelope_version: ENVELOPE_VERSION,
     decision: opts.decision,
@@ -59,6 +61,7 @@ export function buildEnvelope(opts: {
     request_context: { tool: opts.call.tool, args_sha256: argsSha256(opts.call.args), principal: opts.call.principal },
     timestamp_utc: opts.timestampUtc ?? new Date().toISOString().replace("Z", "+00:00"),
   };
+  if (obo !== undefined) (envelope.request_context as Record<string, Json>).on_behalf_of = obo;
   envelope.decision_sha256 = decisionSha256Of(envelope);
   return envelope;
 }

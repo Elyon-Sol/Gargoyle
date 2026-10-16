@@ -19,6 +19,7 @@ from gargoyle.envelope import (
 )
 from gargoyle.consumer import REF_TARGET_APPROVAL_REQUIRED, Consumer
 from gargoyle.execution import ACCEPT_CHAIN_VERIFIED, build_execution_receipt, sign_execution_receipt, verify_chain
+from gargoyle.jws import b64url_decode, decode_receipt, encode_receipt
 from gargoyle.verifier import ACCEPT_REASSERTED_AND_BOUND, verify_envelope
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -73,6 +74,17 @@ def test_execution_vector_recomputes_and_the_chain_verifies():
     assert [s[0] for s in chain["steps"]] == ["authorization", "approval", "execution"]
 
 
+def test_jws_vector_recomputes_and_decodes():
+    issuer, approver, env, signed, grant = _recompute()
+    assert encode_receipt(signed, issuer) == VECTORS["jws"]
+    header, payload, _ = VECTORS["jws"].split(".")
+    assert json.loads(b64url_decode(header)) == {"alg": "EdDSA", "kid": signed["issuer_key_id"], "typ": "JWT"}
+    assert json.loads(b64url_decode(payload))["gargoyle"] == signed
+    res = decode_receipt(VECTORS["jws"], {signed["issuer_key_id"]: issuer.public_key()},
+                         audience=signed["target_url"], now=datetime(2026, 10, 16, 12, 1, tzinfo=timezone.utc))
+    assert res["reason"] is None and res["envelope"] == signed
+
+
 def test_vectors_recompute_from_the_seeds():
     issuer, approver, env, signed, grant = _recompute()
     assert _pub_hex(issuer) == VECTORS["issuer_public_key_hex"]
@@ -115,8 +127,8 @@ def test_regions_match_the_spec():
     assert hash_region == VECTORS["hash_region"]
     assert signed_region == VECTORS["signed_region"]
     assert hashlib.sha256(hash_region.encode()).hexdigest() == signed["decision_sha256"]
-    assert set(signed["request_context"]) == {"tool", "args_sha256", "principal"}
-    assert ENVELOPE_VERSION == "gargoyle/1"
+    assert set(signed["request_context"]) == {"tool", "args_sha256", "principal", "on_behalf_of"}
+    assert ENVELOPE_VERSION == "gargoyle/2"
 
 
 def test_spec_quotes_the_vectors_verbatim():
@@ -131,6 +143,7 @@ def test_spec_quotes_the_vectors_verbatim():
         VECTORS["executor_public_key_hex"], VECTORS["execution"]["outputs_sha256"],
         VECTORS["execution"]["executor_signature"], VECTORS["execution_signed_region"],
         VECTORS["execution"]["executor_key_id"], "gargoyle-execution/1",
+        VECTORS["call"]["on_behalf_of"], VECTORS["jws"].split(".")[0],
         ENVELOPE_VERSION,
     ):
         assert value in SPEC, value
@@ -139,9 +152,9 @@ def test_spec_quotes_the_vectors_verbatim():
 def test_spec_names_every_refusal_code():
     """Every REF_* code the package can emit is documented."""
     import re
-    import gargoyle.approval, gargoyle.consumer, gargoyle.execution, gargoyle.verifier
+    import gargoyle.approval, gargoyle.consumer, gargoyle.execution, gargoyle.identity, gargoyle.jws, gargoyle.verifier
     codes = set()
-    for mod in (gargoyle.verifier, gargoyle.approval, gargoyle.consumer, gargoyle.execution):
+    for mod in (gargoyle.verifier, gargoyle.approval, gargoyle.consumer, gargoyle.execution, gargoyle.jws, gargoyle.identity):
         codes |= {v for k, v in vars(mod).items() if k.startswith("REF_") and isinstance(v, str)}
     documented = set(re.findall(r"REF_[A-Z_]+", SPEC))
     assert codes <= documented, sorted(codes - documented)

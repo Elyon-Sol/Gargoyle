@@ -19,7 +19,7 @@ is included); the caller is authenticated by your transport (the
 proxy-verified client certificate, by default); Gargoyle sits in front of
 your MCP server and lets through only what both agreed to.
 
-Status: pre-release (`0.1.0.dev0`). The wire format is `gargoyle/1` and may
+Status: pre-release (`0.1.0.dev0`). The wire format is `gargoyle/2` and may
 still change before the first release; it is specified in [SPEC.md](SPEC.md).
 
 ## What a receipt gives you
@@ -29,7 +29,12 @@ still change before the first release; it is specified in [SPEC.md](SPEC.md).
   target but the one it names.
 - **A principal.** The receipt carries the identity the issuer
   authenticated; the target compares it with the identity it authenticated.
-  A receipt obtained by one agent cannot be spent by another.
+  A receipt obtained by one agent cannot be spent by another. When the agent
+  acts for a user, the receipt records that too (`on_behalf_of`).
+- **Standard encodings.** A receipt can travel as a JWS (EdDSA) that any
+  JWT library verifies, and the issuer can take the caller's identity from
+  an OAuth bearer token, an RFC 8693 delegation token or a Transaction
+  Token.
 - **Single use.** Every receipt carries a signed `decision_id`; an executor
   claims it exactly once. A replayed receipt is refused.
 - **Expiry.** Every receipt carries a signed `not_after` (default 300 s). A
@@ -67,11 +72,13 @@ the policy pin.
 ```python
 from gargoyle.issuer import ENVELOPE_HEADER, issue
 
+who = principal_from_token(bearer_or_transaction_token, IDP_KEYS, audience="issuer")  # gargoyle.identity
 interaction = {
     "tool": "transfer_funds",
     "args": {"amount": 250, "to": "acct-9"},
-    "principal": principal,          # who you authenticated, never what they claimed
-    **claims,                        # whatever your policy decides on
+    "principal": who["principal"],         # the agent, as the identity provider authenticated it
+    "on_behalf_of": who["on_behalf_of"],   # the user it acts for, when the token says so
+    **claims,                              # whatever your policy decides on
 }
 result = issue(policy, "https://tools.example.com/target", interaction,
                signing_key=issuer_private_key, key_id="issuer-2026-10")
@@ -82,6 +89,7 @@ elif result.decision.requires_approval:
     hold(result.envelope)            # see "Approval holds"
 else:
     send(call, headers={ENVELOPE_HEADER: json.dumps(result.envelope)})
+    # or, for a target that speaks JWT: gargoyle.jws.encode_receipt(result.envelope, issuer_private_key)
 ```
 
 **Open Policy Agent.** `gargoyle.opa.OpaPolicy` asks OPA's data API and
@@ -220,6 +228,8 @@ on it.
 | `policy` | the decision interface and the reference manifest policy |
 | `opa` | the Open Policy Agent adapter |
 | `issuer` | ask the policy, sign the receipt |
+| `identity` | the issuer's identity input: bearer, delegation and transaction tokens to principal and on_behalf_of |
+| `jws` | the receipt as a JWS any JWT library verifies |
 | `envelope` | receipt construction, hash region, signature region, currency check |
 | `verifier` | the pure target-side check and every refusal code |
 | `consumer` | `Consumer` (pin, keys, verify, claim, attest) and the reference HTTP target |

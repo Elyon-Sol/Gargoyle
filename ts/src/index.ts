@@ -5,3 +5,4 @@ export * from "./verifier.js";
 export * from "./approval.js";
 export * from "./execution.js";
 export * from "./consumer.js";
+export * from "./jws.js";

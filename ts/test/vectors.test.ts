@@ -15,7 +15,7 @@ import {
   REF_TARGET_APPROVAL_REQUIRED, REF_VERIFY_BINDING_MISMATCH, REF_VERIFY_PRINCIPAL_MISMATCH, REF_VERIFY_REPLAY,
   REF_VERIFY_SIGNATURE_INVALID, buildEnvelope, buildExecutionReceipt, buildGrant, canonicalJson, decisionSha256Of,
   privateKeyFromSeed, publicKeyFromRaw, publicKeyRawHex, signEnvelope, signExecutionReceipt, signGrant,
-  verifyChain, verifyEnvelope,
+  verifyChain, verifyEnvelope, encodeReceipt, decodeReceipt, REF_JWS_PAYLOAD_MISMATCH, REF_JWS_ALG_UNSUPPORTED, encode,
 } from "../src/index.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -92,4 +92,30 @@ test("binding, principal, tamper and replay refusals", () => {
   assert.equal(free.check({ ...signed }, V.call, { now }).reason, REF_TARGET_APPROVAL_REQUIRED);
   assert.throws(() => verifyEnvelope(signed, V.call, signed.target_url as string, { recordSource: V.signed.policy, now }));
   void REF_VERIFY_REPLAY;
+});
+
+test("the JWS form recomputes and decodes to the same receipt", () => {
+  const { issuer, signed } = recompute();
+  assert.equal(encodeReceipt(signed, issuer), V.jws);
+  const issuerKeys = { [V.signed.issuer_key_id]: publicKeyFromRaw(V.issuer_public_key_hex) };
+  const now = new Date("2026-10-16T12:01:00+00:00");
+  const res = decodeReceipt(V.jws, issuerKeys, { audience: signed.target_url as string, now });
+  assert.equal(res.reason, null);
+  assert.deepEqual(res.envelope, V.signed);
+  const [h, p, s] = (V.jws as string).split(".");
+  const payload = JSON.parse(Buffer.from(p, "base64url").toString("utf8"));
+  assert.equal(decodeReceipt(encode({ ...payload, jti: "other" }, issuer, V.signed.issuer_key_id), issuerKeys, { now }).reason, REF_JWS_PAYLOAD_MISMATCH);
+  assert.equal(decodeReceipt(Buffer.from('{"alg":"none","kid":"x"}').toString("base64url") + "." + p + "." + s, issuerKeys, { now }).reason, REF_JWS_ALG_UNSUPPORTED);
+  void h;
+});
+
+test("delegation: on_behalf_of is bound when the target knows it", () => {
+  const { signed } = recompute();
+  const issuerKeys = { [V.signed.issuer_key_id]: publicKeyFromRaw(V.issuer_public_key_hex) };
+  const opts = { recordSource: V.signed.policy, pinnedPublicKeys: issuerKeys, now: new Date("2026-10-16T12:01:00+00:00") };
+  const { on_behalf_of, ...withoutDelegation } = V.call;
+  assert.equal(verifyEnvelope(signed, V.call, signed.target_url as string, opts).accepted, true);
+  assert.equal(verifyEnvelope(signed, withoutDelegation, signed.target_url as string, opts).accepted, true);
+  assert.equal(verifyEnvelope(signed, { ...V.call, on_behalf_of: "user-43" }, signed.target_url as string, opts).reason, REF_VERIFY_PRINCIPAL_MISMATCH);
+  void on_behalf_of;
 });

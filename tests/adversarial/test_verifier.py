@@ -335,3 +335,33 @@ def test_verify_checks_who_before_what():
     env = _build_valid_envelope(call=_call(tool="transfer", principal="agent-7"))
     result = _verify(env, _call(tool="delete_database", principal="agent-8"), TARGET_URL)
     assert result["reason"] == REF_VERIFY_PRINCIPAL_MISMATCH
+
+
+# ---------------------------------------------------------------------------
+# Delegation and format version
+# ---------------------------------------------------------------------------
+
+
+def test_on_behalf_of_is_bound_when_the_target_knows_it():
+    """The issuer's assertion of whom the caller acts for is in the
+    decision. A target that knows the delegation must match it; one that
+    does not omits it; a live claim the receipt lacks is a mismatch."""
+    delegated = _build_valid_envelope(call=dict(_call(), on_behalf_of="user-42"))
+    assert delegated["request_context"]["on_behalf_of"] == "user-42"
+    assert delegated["decision_sha256"] != _build_valid_envelope()["decision_sha256"]
+    assert _verify(delegated, dict(_call(), on_behalf_of="user-42"))["accepted"] is True
+    assert _verify(delegated, _call())["accepted"] is True                      # target does not know
+    assert _verify(delegated, dict(_call(), on_behalf_of="user-43"))["reason"] == REF_VERIFY_PRINCIPAL_MISMATCH
+    plain = _build_valid_envelope()
+    assert _verify(plain, dict(_call(), on_behalf_of="user-42"))["reason"] == REF_VERIFY_PRINCIPAL_MISMATCH
+    assert _verify(delegated, dict(_call(), on_behalf_of=""))["reason"] == REF_VERIFY_PRINCIPAL_MISMATCH
+    with pytest.raises(ValueError):
+        _build_valid_envelope(call=dict(_call(), on_behalf_of=""))
+
+
+def test_unsupported_format_version_is_refused():
+    from gargoyle.verifier import REF_VERIFY_VERSION_UNSUPPORTED
+    env = _build_valid_envelope()
+    env["envelope_version"] = "gargoyle/1"
+    _rehash_decision_sha256(env)
+    assert _verify(env, _call())["reason"] == REF_VERIFY_VERSION_UNSUPPORTED

@@ -45,6 +45,7 @@ from typing import Any, Dict, Optional
 from datetime import datetime, timedelta, timezone
 
 from gargoyle.envelope import (
+    ENVELOPE_VERSION,
     INVALIDATED,
     REASSERTED,
     RE_EVALUATE_REQUIRED,
@@ -62,6 +63,8 @@ from gargoyle.policy import Policy
 # ---------------------------------------------------------------------------
 
 REF_VERIFY_ENVELOPE_ABSENT = "REF_VERIFY_ENVELOPE_ABSENT"
+# A receipt in a format version this verifier does not implement.
+REF_VERIFY_VERSION_UNSUPPORTED = "REF_VERIFY_VERSION_UNSUPPORTED"
 REF_VERIFY_REASSERT_INVALIDATED = "REF_VERIFY_REASSERT_INVALIDATED"
 REF_VERIFY_REASSERT_RE_EVALUATE_REQUIRED = "REF_VERIFY_REASSERT_RE_EVALUATE_REQUIRED"
 REF_VERIFY_BINDING_MISMATCH = "REF_VERIFY_BINDING_MISMATCH"
@@ -126,8 +129,9 @@ _REQUEST_CONTEXT_KEYS = (
     "principal",
 )
 
-# The live call's keys: exactly these, no more.
+# The live call's keys: exactly these, plus optionally on_behalf_of.
 _CALL_KEYS = ("tool", "args", "principal")
+_OPTIONAL_CALL_KEYS = ("on_behalf_of",)
 
 
 def _reject(reason: str) -> Dict[str, Any]:
@@ -187,12 +191,16 @@ def verify_provenance(
     for key in _REQUIRED_ENVELOPE_KEYS:
         if key not in envelope:
             return _reject(REF_VERIFY_ENVELOPE_ABSENT)
+    if envelope.get("envelope_version") != ENVELOPE_VERSION:
+        return _reject(REF_VERIFY_VERSION_UNSUPPORTED)
     rc = envelope["request_context"]
     if not isinstance(rc, dict):
         return _reject(REF_VERIFY_ENVELOPE_ABSENT)
     for key in _REQUEST_CONTEXT_KEYS:
         if key not in rc:
             return _reject(REF_VERIFY_ENVELOPE_ABSENT)
+    if "on_behalf_of" in rc and not valid_principal(rc["on_behalf_of"]):
+        return _reject(REF_VERIFY_ENVELOPE_ABSENT)
     # A flagged receipt names the hold a grant must release; a receipt that
     # says so without naming it is unusable.
     if not isinstance(envelope["requires_approval"], bool):
@@ -272,9 +280,11 @@ def verify_envelope(
         envelope: The receipt presented with the call. May be None or
             malformed (an unattested or fabricated call).
         call: The call about to be executed: {"tool": str, "args": <JSON>,
-            "principal": str}. `principal` is the identity this target
-            authenticated for the presenting party (see the module
-            docstring); the other two are what the target is about to run.
+            "principal": str, "on_behalf_of"?: str}. `principal` is the
+            identity this target authenticated for the presenting party
+            (see the module docstring); `on_behalf_of`, when the target
+            knows it, the party that identity acts for; the other two are
+            what the target is about to run.
         target_url: The target the call is addressed to.
         record_source: A fetched published record whose policy pin the
             receipt is checked against (a remote target). Takes precedence
@@ -346,7 +356,8 @@ def verify_envelope(
 
     # Binding is exact: any field in the live call beyond the bound set is a
     # refusal, or a receipt holder could smuggle unbound data past the check.
-    if set(call.keys()) != set(_CALL_KEYS):
+    extra = set(call.keys()) - set(_CALL_KEYS) - set(_OPTIONAL_CALL_KEYS)
+    if extra or not set(_CALL_KEYS) <= set(call.keys()):
         return _reject(REF_VERIFY_BINDING_MISMATCH)
 
     # principal: the receipt's must equal the one the target authenticated.
@@ -355,6 +366,13 @@ def verify_envelope(
         return _reject(REF_VERIFY_PRINCIPAL_MISMATCH)
     if rc["principal"] != call["principal"]:
         return _reject(REF_VERIFY_PRINCIPAL_MISMATCH)
+    # on_behalf_of: the issuer's assertion of whom the caller acts for. A
+    # target that knows the delegation itself supplies it and it must match;
+    # a target that does not know omits it. A live claim of delegation the
+    # receipt does not record is a mismatch.
+    if "on_behalf_of" in call:
+        if not valid_principal(call["on_behalf_of"]) or rc.get("on_behalf_of") != call["on_behalf_of"]:
+            return _reject(REF_VERIFY_PRINCIPAL_MISMATCH)
 
     # target_url: exact string equality, no URL normalization.
     if envelope["target_url"] != target_url:

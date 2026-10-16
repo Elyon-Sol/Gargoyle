@@ -74,4 +74,20 @@ verifying itself for no external user; that is the failure mode to avoid.
   Not ported yet: the published-record and key-record readers (SPEC.md 9-10).
   The spec proved complete enough to implement from, with one addition worth
   making at step 3: a note on float formatting differences between producers.
-- Step 3: next.
+- Step 3: DONE (2026-10-16). Format bumped to gargoyle/2 (verifiers refuse other
+  versions: REF_VERIFY_VERSION_UNSUPPORTED). request_context.on_behalf_of, optional,
+  hashed and signed, bound when the target knows the delegation. gargoyle/jws.py:
+  compact JWS/EdDSA with the signed receipt under "gargoyle" and iss/jti/aud/exp/iat
+  mirroring it; decode_receipt refuses alg != EdDSA, unknown kid, bad signature,
+  expiry, audience, and claims that disagree with the receipt. gargoyle/identity.py:
+  principal_from_token maps act.sub / sub (RFC 8693), agentic_ctx.actor /
+  .principal (Transaction Tokens for Agents), or sub alone, into principal and
+  on_behalf_of. Vectors regenerated (delegated, flagged receipt; JWS form); the
+  TypeScript port recomputes the JWS byte for byte. SPEC.md: sections 1, 2 (float
+  note), 3, 6, 11, 12 and new 14.
+
+**Gate reached.** Steps 1-3 are done. The next work is outreach and measurement,
+not step 4: publish the Python and npm packages, post the spec and vectors where
+the MCP discussion (#3215) and the OAuth agent-token drafts are being read, and
+wire the middleware into one real MCP server. Steps 4-6 wait for a signal from
+outside.

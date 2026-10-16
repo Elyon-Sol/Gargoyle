@@ -1,7 +1,8 @@
 """Issue receipts: ask the policy, and sign the answer if it is ELIGIBLE.
 
     interaction = {"tool": "transfer_funds", "args": {...},
-                   "principal": principal,        # who the issuer authenticated
+                   "principal": principal,        # who the issuer authenticated (the agent)
+                   "on_behalf_of": user,          # optional: whom it acts for (gargoyle.identity)
                    **claims}                      # whatever the policy reads
     result = issue(policy, target_url, interaction,
                    signing_key=key, key_id="issuer-1")

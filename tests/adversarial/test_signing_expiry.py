@@ -15,7 +15,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from reference import reference_policy
 from gargoyle.envelope import (
-    args_sha256, canonical_json, _sha256_text, _HASH_EXCLUDED_KEYS, _SIGNATURE_EXCLUDED_KEYS,
+    ENVELOPE_VERSION, args_sha256, canonical_json, _sha256_text, _HASH_EXCLUDED_KEYS, _SIGNATURE_EXCLUDED_KEYS,
     sign_envelope,
 )
 from gargoyle.verifier import (
@@ -32,7 +32,7 @@ INTER = {"tool": "act", "args": {"k": "v"}, "principal": "agent-7"}
 
 def _env():
     env = {
-        "envelope_version": "gargoyle/1", "decision": "ELIGIBLE", "requires_approval": False,
+        "envelope_version": ENVELOPE_VERSION, "decision": "ELIGIBLE", "requires_approval": False,
         "target_url": TARGET,
         "policy": dict(REC),
         "request_context": {"tool": "act", "args_sha256": args_sha256({"k": "v"}),

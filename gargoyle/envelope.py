@@ -26,8 +26,13 @@ A receipt binds exactly what a target can observe about a call: the tool
 name, a SHA-256 of the canonical arguments, and the principal, the
 authenticated identity of the caller. The issuer records the principal it
 authenticated; the target compares it with the identity it authenticated
-itself. Whatever else the policy was shown (the caller's claims, a manifest
-pin) is not in the receipt: the policy pin stands for it.
+itself. When the caller acts for someone else (an agent for a user), the
+issuer also records `on_behalf_of`, the party acted for, as it learned it
+from its identity input (gargoyle.identity); that is the issuer's
+assertion, bound into the decision, and a target compares it only when it
+knows the delegation itself. Whatever else the policy was shown (the
+caller's claims, a manifest pin) is not in the receipt: the policy pin
+stands for it.
 
 Binding a receipt to the call being executed, and checking the signature,
 expiry and replay, is verifier.verify_envelope()'s job.
@@ -48,7 +53,7 @@ REASSERTED = "REASSERTED"
 INVALIDATED = "INVALIDATED"
 RE_EVALUATE_REQUIRED = "RE-EVALUATE-REQUIRED"
 
-ENVELOPE_VERSION = "gargoyle/1"
+ENVELOPE_VERSION = "gargoyle/2"
 
 # Excluded from decision_sha256: the hash itself, and every field that varies
 # per issuance of the same decision. Keeping the issuer fields, not_after and
@@ -128,10 +133,12 @@ def build_envelope(
 
     `call` must carry the three bound fields: "tool" (a non-empty string),
     "args" (any JSON value; the receipt stores its args_sha256) and
-    "principal" (the caller's authenticated identity, a non-empty string).
-    Other keys are policy inputs and are not recorded. A missing or
-    malformed bound field raises (KeyError, TypeError, ValueError); the
-    issuer turns that into a refusal."""
+    "principal" (the caller's authenticated identity, a non-empty string),
+    and may carry "on_behalf_of" (the party the caller acts for, a
+    non-empty string; recorded when present). Other keys are policy inputs
+    and are not recorded. A missing or malformed bound field raises
+    (KeyError, TypeError, ValueError); the issuer turns that into a
+    refusal."""
     if not valid_pin(policy_pin):
         raise ValueError("policy_pin must be {'policy_id': str, 'policy_sha256': <64 hex>}")
     if not isinstance(requires_approval, bool):
@@ -144,6 +151,9 @@ def build_envelope(
     principal = call["principal"]
     if not valid_principal(principal):
         raise ValueError("call['principal'] must be a non-empty string")
+    on_behalf_of = call.get("on_behalf_of")
+    if on_behalf_of is not None and not valid_principal(on_behalf_of):
+        raise ValueError("call['on_behalf_of'], when present, must be a non-empty string")
     args_hash = args_sha256(call["args"])
     if timestamp_utc is None:
         timestamp_utc = datetime.now(timezone.utc).isoformat()
@@ -164,6 +174,8 @@ def build_envelope(
         },
         "timestamp_utc": timestamp_utc,
     }
+    if on_behalf_of is not None:
+        envelope["request_context"]["on_behalf_of"] = on_behalf_of
     envelope["decision_sha256"] = decision_sha256_of(envelope)
     return envelope
 

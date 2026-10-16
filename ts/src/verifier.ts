@@ -2,9 +2,10 @@
 import type { KeyObject } from "node:crypto";
 import { canonicalJson, Json } from "./canonical.js";
 import { verifyHex } from "./crypto.js";
-import { argsSha256, Call, Envelope, INVALIDATED, PolicyPin, REASSERTED, RE_EVALUATE_REQUIRED, reassert, signedRegion, validPrincipal } from "./envelope.js";
+import { argsSha256, Call, Envelope, ENVELOPE_VERSION, INVALIDATED, PolicyPin, REASSERTED, RE_EVALUATE_REQUIRED, reassert, signedRegion, validPrincipal } from "./envelope.js";
 
 export const REF_VERIFY_ENVELOPE_ABSENT = "REF_VERIFY_ENVELOPE_ABSENT";
+export const REF_VERIFY_VERSION_UNSUPPORTED = "REF_VERIFY_VERSION_UNSUPPORTED";
 export const REF_VERIFY_REASSERT_INVALIDATED = "REF_VERIFY_REASSERT_INVALIDATED";
 export const REF_VERIFY_REASSERT_RE_EVALUATE_REQUIRED = "REF_VERIFY_REASSERT_RE_EVALUATE_REQUIRED";
 export const REF_VERIFY_BINDING_MISMATCH = "REF_VERIFY_BINDING_MISMATCH";
@@ -29,6 +30,7 @@ export type KeyRecordView = Record<string, KeyRecordEntry>;
 const REQUIRED_ENVELOPE_KEYS = ["policy", "request_context", "decision_sha256", "target_url", "requires_approval"];
 const REQUEST_CONTEXT_KEYS = ["tool", "args_sha256", "principal"];
 const CALL_KEYS = ["tool", "args", "principal"];
+const OPTIONAL_CALL_KEYS = ["on_behalf_of"];
 
 const reject = (reason: string): Verdict => ({ accepted: false, reason });
 
@@ -61,9 +63,11 @@ export function verifyProvenance(envelope: unknown, opts: ProvenanceOptions): Ve
   if (typeof envelope !== "object" || envelope === null || Array.isArray(envelope)) return reject(REF_VERIFY_ENVELOPE_ABSENT);
   const env = envelope as Record<string, Json>;
   for (const k of REQUIRED_ENVELOPE_KEYS) if (!(k in env)) return reject(REF_VERIFY_ENVELOPE_ABSENT);
+  if (env.envelope_version !== ENVELOPE_VERSION) return reject(REF_VERIFY_VERSION_UNSUPPORTED);
   const rc = env.request_context;
   if (typeof rc !== "object" || rc === null || Array.isArray(rc)) return reject(REF_VERIFY_ENVELOPE_ABSENT);
   for (const k of REQUEST_CONTEXT_KEYS) if (!(k in rc)) return reject(REF_VERIFY_ENVELOPE_ABSENT);
+  if ("on_behalf_of" in rc && !validPrincipal(rc.on_behalf_of)) return reject(REF_VERIFY_ENVELOPE_ABSENT);
   if (typeof env.requires_approval !== "boolean") return reject(REF_VERIFY_ENVELOPE_ABSENT);
   if (env.requires_approval && !validPrincipal(env.approval_request_id)) return reject(REF_VERIFY_ENVELOPE_ABSENT);
 
@@ -108,10 +112,11 @@ export function verifyEnvelope(envelope: unknown, call: unknown, targetUrl: stri
 
   if (typeof call !== "object" || call === null || Array.isArray(call)) return reject(REF_VERIFY_BINDING_MISMATCH);
   const c = call as Record<string, unknown>;
-  const keys = Object.keys(c).sort();
-  if (keys.length !== CALL_KEYS.length || keys.some((k) => !CALL_KEYS.includes(k))) return reject(REF_VERIFY_BINDING_MISMATCH);
+  const keys = Object.keys(c);
+  if (keys.some((k) => !CALL_KEYS.includes(k) && !OPTIONAL_CALL_KEYS.includes(k)) || CALL_KEYS.some((k) => !keys.includes(k))) return reject(REF_VERIFY_BINDING_MISMATCH);
   if (!validPrincipal(c.principal) || !validPrincipal(rc.principal)) return reject(REF_VERIFY_PRINCIPAL_MISMATCH);
   if (rc.principal !== c.principal) return reject(REF_VERIFY_PRINCIPAL_MISMATCH);
+  if ("on_behalf_of" in c && (!validPrincipal(c.on_behalf_of) || rc.on_behalf_of !== c.on_behalf_of)) return reject(REF_VERIFY_PRINCIPAL_MISMATCH);
   if (env.target_url !== targetUrl) return reject(REF_VERIFY_BINDING_MISMATCH);
   if (typeof rc.tool !== "string" || rc.tool !== c.tool) return reject(REF_VERIFY_BINDING_MISMATCH);
   let liveHash: string;
