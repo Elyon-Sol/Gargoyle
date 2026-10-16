@@ -10,6 +10,12 @@ issuing service holds only the approver public key. make_grant() is the
 testable core and main() the thin CLI around it. Grants are built and signed
 by gargoyle.approval, so what this emits is exactly what verify_grant
 accepts.
+
+Two ways in. From a file or stdin: the flagged receipt (or a bare hold)
+is shown and, on confirmation, the grant is printed. Against an issuing
+service (--issuer URL, with GARGOYLE_APPROVER_TOKEN for the Bearer): every
+pending flagged receipt is fetched, shown one by one, and each confirmed
+grant is posted back, so the middleware waiting on it proceeds.
 """
 
 import argparse
@@ -66,14 +72,10 @@ def main(argv=None) -> int:
         description="Emit a signed approval grant for a held decision.",
     )
     parser.add_argument("--pending", help="file with the flagged receipt or hold JSON; default stdin")
+    parser.add_argument("--issuer", help="issuing service URL: fetch its pending holds and post grants back")
     parser.add_argument("--ttl", type=int, default=300, help="grant lifetime (s)")
     parser.add_argument("--yes", action="store_true", help="skip the confirm prompt")
     args = parser.parse_args(argv)
-
-    raw = open(args.pending).read() if args.pending else sys.stdin.read()
-    pending = json.loads(raw)
-    decision_sha256 = pending["decision_sha256"]
-    approval_request_id = pending["approval_request_id"]
 
     key_hex = os.environ.get("GARGOYLE_APPROVER_KEY_HEX")
     key_id = os.environ.get("GARGOYLE_APPROVER_KEY_ID")
@@ -82,24 +84,23 @@ def main(argv=None) -> int:
               file=sys.stderr)
         return 2
 
-    # Show the human exactly what they are releasing.
-    lines = ["About to APPROVE a held high-impact decision:",
-             "  decision_sha256     : %s" % decision_sha256,
-             "  approval_request_id : %s" % approval_request_id]
-    rc = pending.get("request_context")
-    if isinstance(rc, dict):
-        lines += ["  tool                : %s" % rc.get("tool"),
-                  "  args_sha256         : %s" % rc.get("args_sha256"),
-                  "  principal           : %s" % rc.get("principal"),
-                  "  target_url          : %s" % pending.get("target_url"),
-                  "  policy              : %s" % pending.get("policy")]
-    sys.stderr.write("\n".join(lines) + "\n")
-    if not args.yes:
-        sys.stderr.write("Type 'approve' to sign a grant: ")
-        sys.stderr.flush()
-        if sys.stdin.readline().strip() != "approve":
-            print("aborted (no grant emitted)", file=sys.stderr)
-            return 1
+    if args.issuer:
+        token = os.environ.get("GARGOYLE_APPROVER_TOKEN")
+        if not token:
+            print("GARGOYLE_APPROVER_TOKEN must be set to talk to the issuer", file=sys.stderr)
+            return 2
+        return approve_at_issuer(args.issuer, token, key_hex=key_hex, key_id=key_id,
+                                 ttl=args.ttl, yes=args.yes)
+
+    raw = open(args.pending).read() if args.pending else sys.stdin.read()
+    pending = json.loads(raw)
+    decision_sha256 = pending["decision_sha256"]
+    approval_request_id = pending["approval_request_id"]
+
+    describe(pending)
+    if not args.yes and not confirm():
+        print("aborted (no grant emitted)", file=sys.stderr)
+        return 1
 
     grant = make_grant(
         approver_private_hex=key_hex,
@@ -110,6 +111,76 @@ def main(argv=None) -> int:
     )
     print(json.dumps(grant))
     return 0
+
+
+def describe(pending: Dict[str, Any]) -> None:
+    """Show the human exactly what they are releasing: everything inside the
+    issuer's signature that identifies the call."""
+    lines = ["About to APPROVE a held high-impact decision:",
+             "  decision_sha256     : %s" % pending.get("decision_sha256"),
+             "  approval_request_id : %s" % pending.get("approval_request_id")]
+    rc = pending.get("request_context")
+    if isinstance(rc, dict):
+        lines += ["  tool                : %s" % rc.get("tool"),
+                  "  args_sha256         : %s" % rc.get("args_sha256"),
+                  "  principal           : %s" % rc.get("principal")]
+        if rc.get("on_behalf_of"):
+            lines.append("  on_behalf_of        : %s" % rc.get("on_behalf_of"))
+        lines += ["  target_url          : %s" % pending.get("target_url"),
+                  "  policy              : %s" % pending.get("policy"),
+                  "  not_after           : %s" % pending.get("not_after")]
+    sys.stderr.write("\n".join(lines) + "\n")
+
+
+def confirm() -> bool:
+    sys.stderr.write("Type 'approve' to sign a grant: ")
+    sys.stderr.flush()
+    return sys.stdin.readline().strip() == "approve"
+
+
+def approve_at_issuer(issuer_url: str, token: str, *, key_hex: str, key_id: str, ttl: int = 300,
+                      yes: bool = False, http: Any = None) -> int:
+    """Fetch the issuer's pending holds, confirm each, sign and post the
+    grant. Exit 0 when every grant posted was accepted, 1 when one was
+    declined or refused, 2 when the issuer could not be reached."""
+    import requests
+
+    http = http if http is not None else requests.Session()
+    headers = {"Authorization": "Bearer " + token}
+    base = issuer_url.rstrip("/")
+    try:
+        r = http.get(base + "/pending", headers=headers, timeout=10)
+        if r.status_code != 200:
+            print("issuer refused: %s" % r.text[:200], file=sys.stderr)
+            return 2
+        pending = r.json().get("pending", [])
+    except Exception as exc:
+        print("issuer unreachable: %s" % exc, file=sys.stderr)
+        return 2
+    if not pending:
+        print("nothing pending", file=sys.stderr)
+        return 0
+    status = 0
+    for env in pending:
+        describe(env)
+        if not yes and not confirm():
+            print("skipped", file=sys.stderr)
+            status = 1
+            continue
+        grant = make_grant(approver_private_hex=key_hex, approver_key_id=key_id,
+                           decision_sha256=env["decision_sha256"],
+                           approval_request_id=env["approval_request_id"], not_after_seconds=ttl)
+        try:
+            r = http.post(base + "/grants", json=grant, headers=headers, timeout=10)
+            body = r.json() if r.status_code == 200 else {"accepted": False, "reason": r.text[:200]}
+        except Exception as exc:
+            body = {"accepted": False, "reason": str(exc)}
+        if body.get("accepted"):
+            print("granted %s" % env["approval_request_id"], file=sys.stderr)
+        else:
+            print("refused %s: %s" % (env["approval_request_id"], body.get("reason")), file=sys.stderr)
+            status = 1
+    return status
 
 
 if __name__ == "__main__":

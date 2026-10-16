@@ -1,0 +1,7 @@
+FROM python:3.14-slim
+WORKDIR /app
+COPY pyproject.toml README.md LICENSE NOTICE ./
+COPY gargoyle ./gargoyle
+RUN pip install --no-cache-dir .
+EXPOSE 8080
+CMD ["python", "-c", "import uvicorn; from gargoyle.issuer_service import app_from_env; uvicorn.run(app_from_env(), host='0.0.0.0', port=8080)"]

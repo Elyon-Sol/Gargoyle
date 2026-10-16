@@ -91,3 +91,11 @@ not step 4: publish the Python and npm packages, post the spec and vectors where
 the MCP discussion (#3215) and the OAuth agent-token drafts are being read, and
 wire the middleware into one real MCP server. Steps 4-6 wait for a signal from
 outside.
+
+- Deployable example (2026-10-16): examples/filesystem-agent. To make an
+  unmodified MCP client usable, the middleware gained self-issue mode
+  (GARGOYLE_MCP_ISSUER_URL + client token: obtain the receipt, wait for the
+  grant) and gargoyle/issuer_service.py became the HTTP issuing service
+  (/issue, /pending, /grants, /record, /keys, OPA-backed); gargoyle-approver
+  gained --issuer to fetch holds and post grants. The verification model did
+  not change: the middleware still pins the issuer's and approver's keys.

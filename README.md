@@ -172,6 +172,16 @@ policy version authorized a specific call for a specific principal, a
 human's key released it, and exactly that call ran once, verifiable offline
 by anyone, in Python or TypeScript.
 
+## Deploy it
+
+[examples/filesystem-agent](examples/filesystem-agent/) is a complete
+deployment for an unmodified MCP client: a filesystem MCP server behind the
+Gargoyle middleware, an issuing service backed by OPA in Docker, a human
+approver with their own key, and an offline audit script. Reads are free,
+writes block until the human's grant arrives, deletes are refused by
+policy. The middleware obtains receipts itself (`GARGOYLE_MCP_ISSUER_URL`
+and a client token), so the client needs no changes.
+
 ## Two shipped consumers
 
 **MCP middleware** (`python -m gargoyle.mcp_server -- <upstream command>`):
@@ -181,8 +191,11 @@ forwarded only when `params._meta["gargoyle/envelope"]` carries a valid
 receipt for that tool, those arguments and the principal the server serves
 (and `params._meta["gargoyle/grant"]` a grant, when the receipt is
 flagged); a refused call is answered here and never reaches the upstream.
-Without an upstream command it runs a built-in demo executor.
-Configuration is by environment:
+Without an upstream command it runs a built-in demo executor. With
+`GARGOYLE_MCP_ISSUER_URL` and `GARGOYLE_MCP_CLIENT_TOKEN` it obtains a
+receipt from the issuing service for any call that carries none, and
+waits for the human's grant when the call is flagged, so clients that
+cannot attach receipts work unchanged. Configuration is by environment:
 
 | Variable | Meaning |
 |---|---|
@@ -192,6 +205,12 @@ Configuration is by environment:
 | `GARGOYLE_MCP_RECORD_PATH` | the published policy record |
 | `GARGOYLE_MCP_APPROVER_KEY_ID`, `GARGOYLE_MCP_APPROVER_PUBLIC_KEY_HEX` | the approver key whose grants release flagged calls (optional, both or neither) |
 | `GARGOYLE_MCP_EXECUTOR_KEY_ID`, `GARGOYLE_MCP_EXECUTOR_KEY_HEX` | this server's own signing key, so honored calls carry an execution receipt in `_meta["gargoyle/execution"]` (optional, both or neither) |
+| `GARGOYLE_MCP_ISSUER_URL`, `GARGOYLE_MCP_CLIENT_TOKEN` | self-issue mode: the issuing service and the identity token (whose subject is this server's principal) to obtain receipts with; `GARGOYLE_MCP_APPROVAL_TIMEOUT_SECONDS` and `GARGOYLE_MCP_POLL_SECONDS` tune the wait for a grant |
+
+**Issuing service** (`gargoyle.issuer_service`, run with uvicorn from
+`app_from_env()`): identity token in, receipt out, with the hold and grant
+exchange for flagged calls (`/issue`, `/pending`, `/grants`, `/record`,
+`/keys`). Backed by `OpaPolicy`.
 
 **Reference HTTP target** (`uvicorn gargoyle.consumer:app`): a FastAPI
 service that authenticates the caller by transport, reads `{"tool", "args"}`
@@ -234,7 +253,8 @@ on it.
 | `verifier` | the pure target-side check and every refusal code |
 | `consumer` | `Consumer` (pin, keys, verify, claim, attest) and the reference HTTP target |
 | `execution` | execution receipts and the offline chain check |
-| `mcp_server` | the stdio MCP middleware (and demo executor) |
+| `mcp_server` | the stdio MCP middleware (and demo executor), with self-issue mode |
+| `issuer_service` | the HTTP issuing service: identity in, receipts out, holds and grants |
 | `replay_cache`, `pending_store` | single use for receipts and holds; in-memory or Redis |
 | `approval`, `approver_cli`, `approver_trust` | grants, the human's tool, approver key trust |
 | `published_source`, `published_record_source` | the live policy pin, anchored or signed |

@@ -24,6 +24,18 @@ receipt issued to any other principal is refused (REF_VERIFY_PRINCIPAL_MISMATCH)
 so a receipt obtained by one agent cannot be spent through another agent's
 server.
 
+Self-issue mode, for clients that cannot attach a receipt themselves (an
+IDE, a desktop app): with GARGOYLE_MCP_ISSUER_URL and
+GARGOYLE_MCP_CLIENT_TOKEN set, a tools/call that carries no receipt is
+taken to the issuing service (gargoyle.issuer_service) under the client
+token, whose subject must be this server's principal. A refusal there is
+answered here. A flagged receipt is held until the human's grant appears
+at the issuer (polled every GARGOYLE_MCP_POLL_SECONDS, up to
+GARGOYLE_MCP_APPROVAL_TIMEOUT_SECONDS; default 2 and 300), then checked
+and single-used exactly as a receipt the client brought. Verification does
+not change: the issuer's key is still pinned here, so a compromised path
+to the issuer yields nothing this server would honor.
+
 Run as a stdio MCP server:  python3 -m gargoyle.mcp_server
 """
 
@@ -31,6 +43,7 @@ import json
 import subprocess
 import sys
 import threading
+import time
 from typing import Any, Dict, List, Optional
 
 from gargoyle.consumer import REF_TARGET_NOT_CONFIGURED, Consumer
@@ -49,6 +62,10 @@ GRANT_META_KEY = "gargoyle/grant"
 EXECUTED_META_KEY = "gargoyle/executed"
 REASON_META_KEY = "gargoyle/reason"
 EXECUTION_META_KEY = "gargoyle/execution"   # the signed execution receipt, when configured
+# In self-issue mode the client never saw the receipt or the grant; they are
+# returned with the honored result so the caller holds the whole audit chain.
+RECEIPT_META_KEY = "gargoyle/receipt"
+USED_GRANT_META_KEY = "gargoyle/used_grant"
 
 # JSON-RPC error codes (subset).
 JSONRPC_PARSE_ERROR = -32700
@@ -74,6 +91,71 @@ ENV_APPROVER_KEY_ID = "GARGOYLE_MCP_APPROVER_KEY_ID"
 ENV_APPROVER_PUBLIC_KEY_HEX = "GARGOYLE_MCP_APPROVER_PUBLIC_KEY_HEX"
 ENV_EXECUTOR_KEY_ID = "GARGOYLE_MCP_EXECUTOR_KEY_ID"
 ENV_EXECUTOR_KEY_HEX = "GARGOYLE_MCP_EXECUTOR_KEY_HEX"
+ENV_ISSUER_URL = "GARGOYLE_MCP_ISSUER_URL"
+ENV_CLIENT_TOKEN = "GARGOYLE_MCP_CLIENT_TOKEN"
+ENV_APPROVAL_TIMEOUT = "GARGOYLE_MCP_APPROVAL_TIMEOUT_SECONDS"
+ENV_POLL_SECONDS = "GARGOYLE_MCP_POLL_SECONDS"
+
+# Self-issue refusals.
+REF_TARGET_ISSUER_UNAVAILABLE = "REF_TARGET_ISSUER_UNAVAILABLE"
+REF_TARGET_APPROVAL_TIMEOUT = "REF_TARGET_APPROVAL_TIMEOUT"
+
+
+class IssuerClient:
+    """The middleware's view of the issuing service. `http` is any object
+    with requests-style get/post (a requests.Session by default; a test
+    passes a TestClient). Every failure is a refusal reason, never an
+    exception out of the gate."""
+
+    def __init__(self, url: str, token: str, *, http: Any = None, approval_timeout: float = 300.0,
+                 poll_seconds: float = 2.0, request_timeout: float = 10.0, sleep=time.sleep) -> None:
+        import requests
+        self.url = url.rstrip("/")
+        self._headers = {"Authorization": "Bearer " + token}
+        self._http = http if http is not None else requests.Session()
+        self.approval_timeout = approval_timeout
+        self.poll_seconds = poll_seconds
+        self.request_timeout = request_timeout
+        self._sleep = sleep
+
+    def _post(self, path: str, body: Dict[str, Any]) -> Any:
+        return self._http.post(self.url + path, json=body, headers=self._headers, timeout=self.request_timeout)
+
+    def _get(self, path: str) -> Any:
+        return self._http.get(self.url + path, headers=self._headers, timeout=self.request_timeout)
+
+    def issue(self, target_url: str, tool: str, args: Any) -> Dict[str, Any]:
+        """{"envelope": ...} or {"envelope": None, "reason": ...}."""
+        try:
+            r = self._post("/issue", {"target_url": target_url, "tool": tool, "args": args})
+            if r.status_code != 200:
+                detail = r.json().get("detail", {}) if r.headers.get("content-type", "").startswith("application/json") else {}
+                return {"envelope": None, "reason": detail.get("reason", REF_TARGET_ISSUER_UNAVAILABLE)}
+            body = r.json()
+        except Exception:
+            return {"envelope": None, "reason": REF_TARGET_ISSUER_UNAVAILABLE}
+        if not body.get("issued"):
+            return {"envelope": None, "reason": body.get("reason") or REF_TARGET_ISSUER_UNAVAILABLE}
+        return {"envelope": body.get("envelope"), "reason": None}
+
+    def wait_for_grant(self, approval_request_id: str) -> Optional[Dict[str, Any]]:
+        """Poll until the hold has a grant, the hold disappears, or the
+        timeout passes. None means no grant."""
+        deadline = time.monotonic() + self.approval_timeout
+        while True:
+            try:
+                r = self._get("/grants/" + approval_request_id)
+                body = r.json() if r.status_code == 200 else {}
+            except Exception:
+                body = {}
+            if isinstance(body.get("grant"), dict):
+                return body["grant"]
+            if body and not body.get("pending", True):
+                return None
+            if time.monotonic() >= deadline:
+                return None
+            self._sleep(self.poll_seconds)
+
 
 
 JSONRPC_INTERNAL_ERROR = -32603
@@ -156,9 +238,11 @@ class ServerState:
         config: Optional[Dict[str, Any]],
         replay_cache: Optional[InMemoryReplayCache] = None,
         upstream: Optional[StdioUpstream] = None,
+        issuer_client: Optional[IssuerClient] = None,
     ) -> None:
         self.config = config
         self.upstream = upstream
+        self.issuer_client = issuer_client
         self.consumer: Optional[Consumer] = None
         if config is not None and valid_principal(config.get("principal")):
             self.consumer = Consumer(
@@ -179,30 +263,68 @@ def gate_tool_call(state: ServerState, params: Dict[str, Any]) -> (bool, str):
     """Decide and, if honored, execute one tools/call. Returns (executed,
     reason). The side effect (appending to state.executed) happens only after
     the consumer honored the receipt, which includes its single-use claim."""
+    g = _gate(state, params)
+    return g["executed"], g["reason"]
+
+
+def _gate(state: ServerState, params: Dict[str, Any]) -> Dict[str, Any]:
+    """{"executed", "reason", "envelope", "grant", "self_issued"}: the
+    receipt and grant that were honored, whether the client brought them or
+    this server obtained them."""
+    refused = lambda reason: {"executed": False, "reason": reason, "envelope": None, "grant": None, "self_issued": False}
     if state.consumer is None:
-        return False, REF_TARGET_NOT_CONFIGURED
+        return refused(REF_TARGET_NOT_CONFIGURED)
 
     name = params.get("name")
     args = params.get("arguments", {})
     meta = params.get("_meta") or {}
     envelope = meta.get(ENVELOPE_META_KEY)
     grant = meta.get(GRANT_META_KEY)
+    self_issued = False
+
+    if envelope is None and state.issuer_client is not None:
+        # Self-issue: ask the issuing service, and wait for the human if it
+        # flagged the call. Nothing below trusts the answer: the receipt is
+        # verified against the pinned issuer key like any other.
+        res = state.issuer_client.issue(state.config["target_id"], name, args)
+        if res["envelope"] is None:
+            return refused(res["reason"])
+        envelope, self_issued = res["envelope"], True
+        if isinstance(envelope, dict) and envelope.get("requires_approval") is True and grant is None:
+            grant = state.issuer_client.wait_for_grant(str(envelope.get("approval_request_id")))
+            if grant is None:
+                return refused(REF_TARGET_APPROVAL_TIMEOUT)
 
     verdict = state.consumer.check(envelope, call_for(name, args, state.config["principal"]),
                                    grant=grant)
     if not verdict.honored:
-        return False, verdict.reason
+        return refused(verdict.reason)
 
     state.executed.append({"tool": name, "args": args})  # THE side effect
-    return True, verdict.reason
+    return {"executed": True, "reason": verdict.reason, "envelope": envelope, "grant": grant,
+            "self_issued": self_issued}
 
 
-def _attest(state: ServerState, params: Dict[str, Any], outputs: Any) -> Optional[Dict[str, Any]]:
+def _audit_meta(state: ServerState, gate: Dict[str, Any], outputs: Any) -> Dict[str, Any]:
+    """What an honored result's _meta carries beyond executed/reason: the
+    execution receipt when this server attests, and, when the receipt was
+    self-issued, the receipt and grant the client never saw."""
+    meta: Dict[str, Any] = {}
+    execution = _attest(state, gate["envelope"], outputs)
+    if execution is not None:
+        meta[EXECUTION_META_KEY] = execution
+    if gate["self_issued"]:
+        meta[RECEIPT_META_KEY] = gate["envelope"]
+        if gate["grant"] is not None:
+            meta[USED_GRANT_META_KEY] = gate["grant"]
+    return meta
+
+
+def _attest(state: ServerState, envelope: Optional[Dict[str, Any]], outputs: Any) -> Optional[Dict[str, Any]]:
     """The signed execution receipt for an honored call, or None when this
     server has no executor key."""
-    if state.consumer is None or not state.consumer.attests:
+    if state.consumer is None or not state.consumer.attests or envelope is None:
         return None
-    envelope = (params.get("_meta") or {}).get(ENVELOPE_META_KEY)
     return state.consumer.attest(envelope, outputs)
 
 
@@ -264,7 +386,8 @@ def handle_message(state: ServerState, msg: Dict[str, Any]) -> Optional[Dict[str
         return _success(msg_id, {"tools": ADVERTISED_TOOLS})
 
     if method == "tools/call":
-        executed, reason = gate_tool_call(state, params)
+        gate = _gate(state, params)
+        executed, reason = gate["executed"], gate["reason"]
         if executed and state.upstream is not None:
             # Honored: the upstream runs it. Its answer is the answer, plus
             # the verdict in _meta.
@@ -280,9 +403,7 @@ def handle_message(state: ServerState, msg: Dict[str, Any]) -> Optional[Dict[str
                 # The outputs the execution receipt attests to are the
                 # upstream's result minus the metadata we are adding.
                 outputs = {k: v for k, v in reply["result"].items() if k != "_meta"}
-                execution = _attest(state, params, outputs)
-                if execution is not None:
-                    meta[EXECUTION_META_KEY] = execution
+                meta.update(_audit_meta(state, gate, outputs))
                 reply["result"]["_meta"] = meta
             return reply
         text = ("executed %s" % params.get("name")) if executed else ("refused: %s" % reason)
@@ -292,9 +413,7 @@ def handle_message(state: ServerState, msg: Dict[str, Any]) -> Optional[Dict[str
             "_meta": {EXECUTED_META_KEY: executed, REASON_META_KEY: reason},
         }
         if executed:
-            execution = _attest(state, params, {k: v for k, v in result.items() if k != "_meta"})
-            if execution is not None:
-                result["_meta"][EXECUTION_META_KEY] = execution
+            result["_meta"].update(_audit_meta(state, gate, {k: v for k, v in result.items() if k != "_meta"}))
         return _success(msg_id, result)
 
     if state.upstream is not None:
@@ -390,6 +509,22 @@ def serve_stdio(state: ServerState, stdin=None, stdout=None) -> None:
             stdout.flush()
 
 
+def issuer_client_from_env() -> Optional[IssuerClient]:
+    """Self-issue mode when GARGOYLE_MCP_ISSUER_URL and
+    GARGOYLE_MCP_CLIENT_TOKEN are both set; None otherwise. One without the
+    other is a configuration error and raises."""
+    import os
+
+    url, token = os.environ.get(ENV_ISSUER_URL), os.environ.get(ENV_CLIENT_TOKEN)
+    if not url and not token:
+        return None
+    if not (url and token):
+        raise RuntimeError("%s and %s go together" % (ENV_ISSUER_URL, ENV_CLIENT_TOKEN))
+    return IssuerClient(url, token,
+                        approval_timeout=float(os.environ.get(ENV_APPROVAL_TIMEOUT, "300")),
+                        poll_seconds=float(os.environ.get(ENV_POLL_SECONDS, "2")))
+
+
 def upstream_from_argv(argv: List[str]) -> Optional[StdioUpstream]:
     """`-- <command...>` names the upstream MCP server to front; nothing
     after `--` (or no `--`) means the built-in demo executor."""
@@ -402,7 +537,7 @@ def upstream_from_argv(argv: List[str]) -> Optional[StdioUpstream]:
 if __name__ == "__main__":
     _upstream = upstream_from_argv(sys.argv[1:])
     try:
-        serve_stdio(ServerState(config_from_env(), upstream=_upstream))
+        serve_stdio(ServerState(config_from_env(), upstream=_upstream, issuer_client=issuer_client_from_env()))
     finally:
         if _upstream is not None:
             _upstream.close()

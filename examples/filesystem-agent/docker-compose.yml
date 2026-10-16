@@ -1,0 +1,20 @@
+# The issuing side: OPA decides, the issuer signs. Run from this directory
+# after `python setup.py` has written issuer.env.
+services:
+  opa:
+    image: openpolicyagent/opa:1.5.1
+    command: ["run", "--server", "--addr", "0.0.0.0:8181", "--watch", "/policy"]
+    volumes:
+      - ./policy.rego:/policy/policy.rego:ro
+  issuer:
+    build:
+      context: ../..
+      dockerfile: examples/filesystem-agent/Dockerfile.issuer
+    env_file: issuer.env
+    environment:
+      GARGOYLE_OPA_URL: http://opa:8181
+      GARGOYLE_OPA_DECISION_PATH: gargoyle/decision
+    ports:
+      - "127.0.0.1:8080:8080"
+    depends_on:
+      - opa
