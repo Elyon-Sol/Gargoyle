@@ -8,10 +8,19 @@ version = "0.1.0.dev0"
 description = "Signed, single-use, argument-bound receipts and human-approval holds for agent tool calls."
 readme = "README.md"
 requires-python = ">=3.14"
-# Placeholder: carried over from Elyon-Sol. The license is chosen at HANDOFF step 7.
-license = "AGPL-3.0-only"
-license-files = ["LICENSE"]
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
 authors = [{ name = "Justin LaPorte" }]
+keywords = ["agents", "mcp", "authorization", "receipts", "ed25519", "human-in-the-loop"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Security",
+    "Topic :: Security :: Cryptography",
+]
 dependencies = [
     "cryptography==44.0.0",
     "fastapi==0.141.1",
@@ -22,6 +31,12 @@ dependencies = [
 [project.optional-dependencies]
 redis = ["redis"]
 dev = ["httpx==0.28.1", "pytest==9.1.1", "redis"]
+
+[project.urls]
+Homepage = "https://github.com/Elyon-Sol/Gargoyle"
+Source = "https://github.com/Elyon-Sol/Gargoyle"
+Specification = "https://github.com/Elyon-Sol/Gargoyle/blob/main/SPEC.md"
+Issues = "https://github.com/Elyon-Sol/Gargoyle/issues"
 
 [project.scripts]
 gargoyle-approver = "gargoyle.approver_cli:main"

@@ -154,9 +154,21 @@ replay, issuance_log, envelope_inspector, governance_wiring, request_validator.
    serial threading and rollback, key-record-source precedence and fail-closed, shared
    state across consumers); the reference-target, MCP and principal tests repointed.
    Suite: 316 pass.
-7. Choose the license (permissive recommended for adoption), add README, pyproject.
+7. DONE (2026-10-16). License: Apache-2.0 (permissive, with the patent grant; the
+   owner's choice of "permissive", Apache over MIT for the patent clause). LICENSE is
+   the canonical text (sha256 cfc7749b...3d30) plus a NOTICE naming the owner;
+   pyproject: license = "Apache-2.0", license-files LICENSE + NOTICE, classifiers,
+   keywords, project URLs (repo, SPEC.md, issues); a wheel builds and carries both
+   license files and License-Expression: Apache-2.0. README rewritten: what a receipt
+   gives (binding, principal, single use, expiry, currency, holds), install, issuing,
+   checking with Consumer, the two shipped consumers and their env, approval holds,
+   the module table, what Gargoyle does not do, license. The MCP server stays the
+   primary integration surface. Visibility: NOT changed here; the repo is still
+   PRIVATE and flipping it is the owner's call (gh repo edit --visibility public).
+   Suite: 316 pass.
 8. Re-run the suite after each step; the suite at the last DONE step is the
-   regression floor (316 at step 6).
+   regression floor (316 at step 7). All eight steps are done;
+   what remains is the list below.
 
 ## Known weaknesses carried over (fix or document)
 - requires_approval is not in the signed receipt, so a target cannot tell a held
