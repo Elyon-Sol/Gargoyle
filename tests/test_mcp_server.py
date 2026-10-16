@@ -162,3 +162,40 @@ def test_config_from_env_approver_key_both_or_neither(monkeypatch, tmp_path):
     assert config_from_env() is None                       # id without key: a partial pin refuses
     monkeypatch.setenv(ENV_APPROVER_PUBLIC_KEY_HEX, approver.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw).hex())
     assert set(config_from_env()["approver_public_keys"]) == {"approver-alice"}
+
+
+def test_honored_call_carries_an_execution_receipt_when_the_server_has_a_key():
+    from gargoyle.execution import verify_chain
+    from gargoyle.mcp_server import EXECUTION_META_KEY, handle_message
+    key = Ed25519PrivateKey.generate(); executor = Ed25519PrivateKey.generate()
+    state = _state(key)
+    state.consumer._executor_signing_key = executor; state.consumer.executor_key_id = "executor-1"
+    state.initialized = True
+    env = _issue(key)
+    reply = handle_message(state, {"jsonrpc": "2.0", "id": 9, "method": "tools/call", "params": _params(env)})
+    execution = reply["result"]["_meta"][EXECUTION_META_KEY]
+    outputs = {k: v for k, v in reply["result"].items() if k != "_meta"}
+    chain = verify_chain(env, execution, issuer_public_keys={"k1": key.public_key()},
+                         executor_public_keys={"executor-1": executor.public_key()},
+                         outputs=outputs, check_outputs=True)
+    assert chain["accepted"] is True, chain
+    refused = handle_message(state, {"jsonrpc": "2.0", "id": 10, "method": "tools/call", "params": _params(env)})
+    assert EXECUTION_META_KEY not in refused["result"]["_meta"]
+
+
+def test_config_from_env_executor_key_both_or_neither(monkeypatch, tmp_path):
+    from cryptography.hazmat.primitives.serialization import NoEncryption, PrivateFormat
+    from gargoyle.mcp_server import ENV_EXECUTOR_KEY_HEX, ENV_EXECUTOR_KEY_ID
+    key = Ed25519PrivateKey.generate(); executor = Ed25519PrivateKey.generate()
+    record = tmp_path / "record.json"; record.write_bytes(reference_record_bytes())
+    monkeypatch.setenv(ENV_GATE_KEY_ID, "k1")
+    monkeypatch.setenv(ENV_GATE_PUBLIC_KEY_HEX, key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw).hex())
+    monkeypatch.setenv(ENV_TARGET_ID, TARGET_ID); monkeypatch.setenv(ENV_PRINCIPAL, PRINCIPAL)
+    monkeypatch.setenv(ENV_RECORD_PATH, str(record))
+    for v in ("GARGOYLE_MCP_APPROVER_KEY_ID", "GARGOYLE_MCP_APPROVER_PUBLIC_KEY_HEX", ENV_EXECUTOR_KEY_ID, ENV_EXECUTOR_KEY_HEX):
+        monkeypatch.delenv(v, raising=False)
+    assert config_from_env()["executor_signing_key"] is None
+    monkeypatch.setenv(ENV_EXECUTOR_KEY_ID, "executor-1")
+    assert config_from_env() is None
+    monkeypatch.setenv(ENV_EXECUTOR_KEY_HEX, executor.private_bytes(Encoding.Raw, PrivateFormat.Raw, NoEncryption()).hex())
+    assert ServerState(config_from_env()).consumer.attests is True

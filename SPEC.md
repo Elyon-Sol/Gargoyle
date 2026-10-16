@@ -3,8 +3,8 @@
 Format version: `gargoyle/1` (pre-release; see section 12).
 This document defines the byte-level formats Gargoyle produces and checks:
 the receipt, its hash and signature regions, the verification procedure,
-replay semantics, the approval grant, and the two published records a
-target consumes. Where this document and the reference implementation in
+replay semantics, the approval grant, the execution receipt and the offline
+chain, and the two published records a target consumes. Where this document and the reference implementation in
 `gargoyle/` disagree, the implementation is the bug: `tests/test_wire_spec.py`
 recomputes every vector in section 11 from the seeds given there and checks
 that this file quotes them verbatim.
@@ -29,6 +29,8 @@ that this file quotes them verbatim.
   authorization for one call at one target by one principal.
 - **Grant**: a human approver's signed release of a held (requires_approval)
   receipt.
+- **Execution receipt**: the executor's signed statement that the
+  authorized call ran, and what it produced (section 13).
 
 ## 2. Encodings
 
@@ -404,6 +406,25 @@ Grant releasing that decision for hold `req-0001`, `grant_id` `grant-0001`,
 approver_signature = 32d80613c5776bbd12b8170f2fb5254db14405e81bef3aec56cfcdf42f111a54e69f83e72dfb1dd9ed85eb0d84c02eaa6bc563010a0ea204ca09e2f6d86b3d09
 ```
 
+Execution receipt (section 13) for that call, signed under key id
+`executor-2026-10` at `2026-10-16T12:01:00+00:00`, with outputs
+`{"status": "ok", "transfer_id": "tx-42"}`:
+
+| | Label | Public key (hex) |
+|---|---|---|
+| executor | `gargoyle-spec-executor` | `39e2607fb14d5ce3b64b60f4828da01a17f56d9824d8d783afe601f5b51b6313` |
+
+```
+outputs_sha256     = a6cb76237119491aa9d6b1976bf763cb08d72f07dda4becf8bb32c0c4ee5914c
+executor_signature = 6646f700a03f71d8dd53dc8d5845c74fa5b557b7ee9643a56fa4495a75325440d3807725943829f75e96e2eb50ae8035462cf75b0660c80ec003f2b98781e804
+```
+
+Execution signed region bytes:
+
+```
+{"decision_id":"5b6b0c7e-6f1e-4d5b-9c3a-1e2f3a4b5c6d","decision_sha256":"6bc00001da83d7e81d6b2702558e447a0418a7140ad727571dadfd734492b272","executed_at":"2026-10-16T12:01:00+00:00","execution_version":"gargoyle-execution/1","executor_key_id":"executor-2026-10","outputs_sha256":"a6cb76237119491aa9d6b1976bf763cb08d72f07dda4becf8bb32c0c4ee5914c","policy":{"policy_id":"opa:payments/3","policy_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"request_context":{"args_sha256":"e2363d59384e0a154faccbcc375337c59cc9c5fefa843519e0d5d311cf32bab7","principal":"agent-7","tool":"transfer_funds"},"target_url":"https://tools.example.com/target"}
+```
+
 The complete objects are in `tests/fixtures/wire_vectors.json`.
 
 ## 12. Transport and versioning
@@ -436,3 +457,65 @@ The complete objects are in `tests/fixtures/wire_vectors.json`.
   or signature region, or the verification order is a new version;
   verifiers do not accept a version they do not implement. `gargoyle/1` is
   pre-release and may still change before the first release.
+
+## 13. The execution receipt and the offline chain
+
+After the side effect, an executor that holds a signing key issues an
+execution receipt: its statement that the authorized call ran, chained to
+the authorization receipt it honored.
+
+| Field | Type | Signed | Meaning |
+|---|---|---|---|
+| `execution_version` | string | yes | `"gargoyle-execution/1"` |
+| `decision_id` | string | yes | copied from the authorization receipt |
+| `decision_sha256` | 64 hex | yes | copied; the decision this run fulfilled |
+| `policy` | object | yes | copied; which policy version allowed this run |
+| `target_url` | string | yes | copied |
+| `request_context` | object | yes | copied: tool, args_sha256, principal |
+| `outputs_sha256` | 64 hex | yes | `sha256(canonical_json(outputs))` |
+| `executed_at` | timestamp | yes | when it ran; evidence, so inside the signature |
+| `executor_key_id` | string | yes | names the executor key |
+| `executor_signature` | 128 hex | - | `ed25519_sign(executor_key, canonical_json(receipt minus executor_signature))` |
+
+The five copied fields are taken from the honored receipt byte for byte
+(compared as canonical JSON), so the execution receipt names exactly what
+was authorized and carries the policy pin inside its own signature.
+
+**Verification** (`verify_execution_receipt`), first failure wins:
+structure and version (`REF_EXEC_MALFORMED`); a trusted executor key
+(`REF_EXEC_KEY_UNKNOWN`); the signature (`REF_EXEC_SIGNATURE_INVALID`);
+every copied field equal to the authorization receipt's
+(`REF_EXEC_BINDING_MISMATCH`); and, when the outputs are supplied, their
+hash (`REF_EXEC_OUTPUTS_MISMATCH`).
+
+**The chain** (`verify_chain`) audits one call offline with no live state:
+the issuer's, approver's and executor's public keys and the three artifacts
+are all it needs. With `now` set to the execution receipt's `executed_at`,
+because what matters is that the authorization was valid when the call
+ran, it checks in order:
+
+1. the authorization receipt's structure, issuer signature and expiry
+   (section 6 steps 1 and 2; `verify_provenance`);
+2. if `requires_approval` is true, a grant that a trusted approver signed
+   for that `decision_sha256` and `approval_request_id` (section 8; no grant
+   is `REF_EXEC_GRANT_MISSING`);
+3. the execution receipt (above).
+
+The result lists each step's outcome, so an auditor sees where a chain
+breaks. Currency (section 6 step 3) is not re-checked: the pin inside the
+execution receipt records which policy version was live when the executor
+honored the call, and that is the historical fact an audit wants.
+
+What the chain does not prove: that the side effect happened as the outputs
+claim (the executor is trusted for that, as for everything else it runs),
+and that no second execution receipt exists for the same `decision_id`
+(single use is enforced by the replay store at execution time; proving it
+afterwards is an evidence log's job).
+
+**Transport.** The reference HTTP target answers an honored call with
+`{"honored": true, "reason": ..., "outputs": ..., "execution": <receipt>}`
+when it holds an executor key (`GARGOYLE_EXECUTOR_KEY_ID` /
+`GARGOYLE_EXECUTOR_KEY_HEX`), and without `execution` otherwise. The MCP
+server puts the receipt in the response `_meta["gargoyle/execution"]`
+(`GARGOYLE_MCP_EXECUTOR_KEY_ID` / `_HEX`); the outputs it attests to are
+the tool result minus `_meta`.

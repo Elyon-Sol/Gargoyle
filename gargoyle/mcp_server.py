@@ -48,6 +48,7 @@ ENVELOPE_META_KEY = "gargoyle/envelope"
 GRANT_META_KEY = "gargoyle/grant"
 EXECUTED_META_KEY = "gargoyle/executed"
 REASON_META_KEY = "gargoyle/reason"
+EXECUTION_META_KEY = "gargoyle/execution"   # the signed execution receipt, when configured
 
 # JSON-RPC error codes (subset).
 JSONRPC_PARSE_ERROR = -32700
@@ -71,6 +72,8 @@ ENV_RECORD_PATH = "GARGOYLE_MCP_RECORD_PATH"
 ENV_PRINCIPAL = "GARGOYLE_MCP_PRINCIPAL"
 ENV_APPROVER_KEY_ID = "GARGOYLE_MCP_APPROVER_KEY_ID"
 ENV_APPROVER_PUBLIC_KEY_HEX = "GARGOYLE_MCP_APPROVER_PUBLIC_KEY_HEX"
+ENV_EXECUTOR_KEY_ID = "GARGOYLE_MCP_EXECUTOR_KEY_ID"
+ENV_EXECUTOR_KEY_HEX = "GARGOYLE_MCP_EXECUTOR_KEY_HEX"
 
 
 JSONRPC_INTERNAL_ERROR = -32603
@@ -165,6 +168,8 @@ class ServerState:
                 pinned_root=config["pinned_root"],
                 replay_cache=replay_cache,
                 approver_public_keys=config.get("approver_public_keys"),
+                executor_signing_key=config.get("executor_signing_key"),
+                executor_key_id=config.get("executor_key_id"),
             )
         self.executed: List[Dict[str, Any]] = []
         self.initialized = False
@@ -190,6 +195,15 @@ def gate_tool_call(state: ServerState, params: Dict[str, Any]) -> (bool, str):
 
     state.executed.append({"tool": name, "args": args})  # THE side effect
     return True, verdict.reason
+
+
+def _attest(state: ServerState, params: Dict[str, Any], outputs: Any) -> Optional[Dict[str, Any]]:
+    """The signed execution receipt for an honored call, or None when this
+    server has no executor key."""
+    if state.consumer is None or not state.consumer.attests:
+        return None
+    envelope = (params.get("_meta") or {}).get(ENVELOPE_META_KEY)
+    return state.consumer.attest(envelope, outputs)
 
 
 def _success(msg_id: Any, result: Dict[str, Any]) -> Dict[str, Any]:
@@ -263,6 +277,12 @@ def handle_message(state: ServerState, msg: Dict[str, Any]) -> Optional[Dict[str
             if isinstance(reply, dict) and isinstance(reply.get("result"), dict):
                 meta = dict(reply["result"].get("_meta") or {})
                 meta.update({EXECUTED_META_KEY: True, REASON_META_KEY: reason})
+                # The outputs the execution receipt attests to are the
+                # upstream's result minus the metadata we are adding.
+                outputs = {k: v for k, v in reply["result"].items() if k != "_meta"}
+                execution = _attest(state, params, outputs)
+                if execution is not None:
+                    meta[EXECUTION_META_KEY] = execution
                 reply["result"]["_meta"] = meta
             return reply
         text = ("executed %s" % params.get("name")) if executed else ("refused: %s" % reason)
@@ -271,6 +291,10 @@ def handle_message(state: ServerState, msg: Dict[str, Any]) -> Optional[Dict[str
             "isError": (not executed),
             "_meta": {EXECUTED_META_KEY: executed, REASON_META_KEY: reason},
         }
+        if executed:
+            execution = _attest(state, params, {k: v for k, v in result.items() if k != "_meta"})
+            if execution is not None:
+                result["_meta"][EXECUTION_META_KEY] = execution
         return _success(msg_id, result)
 
     if state.upstream is not None:
@@ -315,10 +339,15 @@ def config_from_env() -> Optional[Dict[str, Any]]:
     ap_key_hex = os.environ.get(ENV_APPROVER_PUBLIC_KEY_HEX)
     if bool(ap_key_id) != bool(ap_key_hex):
         return None
+    ex_key_id = os.environ.get(ENV_EXECUTOR_KEY_ID)
+    ex_key_hex = os.environ.get(ENV_EXECUTOR_KEY_HEX)
+    if bool(ex_key_id) != bool(ex_key_hex):
+        return None
     try:
-        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 
         public_key = Ed25519PublicKey.from_public_bytes(bytes.fromhex(key_hex))
+        executor_key = Ed25519PrivateKey.from_private_bytes(bytes.fromhex(ex_key_hex)) if ex_key_id else None
         approver_keys = (
             {ap_key_id: Ed25519PublicKey.from_public_bytes(bytes.fromhex(ap_key_hex))}
             if ap_key_id else None
@@ -334,6 +363,8 @@ def config_from_env() -> Optional[Dict[str, Any]]:
         "target_id": target_id,
         "principal": principal,
         "approver_public_keys": approver_keys,
+        "executor_signing_key": executor_key,
+        "executor_key_id": ex_key_id,
     }
 
 

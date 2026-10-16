@@ -61,5 +61,31 @@
     "approver_signature": "32d80613c5776bbd12b8170f2fb5254db14405e81bef3aec56cfcdf42f111a54e69f83e72dfb1dd9ed85eb0d84c02eaa6bc563010a0ea204ca09e2f6d86b3d09"
   },
   "signed_region": "{\"approval_request_id\":\"req-0001\",\"decision\":\"ELIGIBLE\",\"decision_id\":\"5b6b0c7e-6f1e-4d5b-9c3a-1e2f3a4b5c6d\",\"decision_sha256\":\"6bc00001da83d7e81d6b2702558e447a0418a7140ad727571dadfd734492b272\",\"envelope_version\":\"gargoyle/1\",\"issuer_key_id\":\"issuer-2026-10\",\"not_after\":\"2026-10-16T12:05:00+00:00\",\"policy\":{\"policy_id\":\"opa:payments/3\",\"policy_sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"request_context\":{\"args_sha256\":\"e2363d59384e0a154faccbcc375337c59cc9c5fefa843519e0d5d311cf32bab7\",\"principal\":\"agent-7\",\"tool\":\"transfer_funds\"},\"requires_approval\":true,\"target_url\":\"https://tools.example.com/target\"}",
-  "hash_region": "{\"decision\":\"ELIGIBLE\",\"envelope_version\":\"gargoyle/1\",\"policy\":{\"policy_id\":\"opa:payments/3\",\"policy_sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"request_context\":{\"args_sha256\":\"e2363d59384e0a154faccbcc375337c59cc9c5fefa843519e0d5d311cf32bab7\",\"principal\":\"agent-7\",\"tool\":\"transfer_funds\"},\"requires_approval\":true,\"target_url\":\"https://tools.example.com/target\"}"
+  "hash_region": "{\"decision\":\"ELIGIBLE\",\"envelope_version\":\"gargoyle/1\",\"policy\":{\"policy_id\":\"opa:payments/3\",\"policy_sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"request_context\":{\"args_sha256\":\"e2363d59384e0a154faccbcc375337c59cc9c5fefa843519e0d5d311cf32bab7\",\"principal\":\"agent-7\",\"tool\":\"transfer_funds\"},\"requires_approval\":true,\"target_url\":\"https://tools.example.com/target\"}",
+  "executor_seed_label": "gargoyle-spec-executor",
+  "executor_public_key_hex": "39e2607fb14d5ce3b64b60f4828da01a17f56d9824d8d783afe601f5b51b6313",
+  "outputs": {
+    "status": "ok",
+    "transfer_id": "tx-42"
+  },
+  "execution": {
+    "execution_version": "gargoyle-execution/1",
+    "decision_id": "5b6b0c7e-6f1e-4d5b-9c3a-1e2f3a4b5c6d",
+    "decision_sha256": "6bc00001da83d7e81d6b2702558e447a0418a7140ad727571dadfd734492b272",
+    "policy": {
+      "policy_id": "opa:payments/3",
+      "policy_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "target_url": "https://tools.example.com/target",
+    "request_context": {
+      "tool": "transfer_funds",
+      "args_sha256": "e2363d59384e0a154faccbcc375337c59cc9c5fefa843519e0d5d311cf32bab7",
+      "principal": "agent-7"
+    },
+    "outputs_sha256": "a6cb76237119491aa9d6b1976bf763cb08d72f07dda4becf8bb32c0c4ee5914c",
+    "executed_at": "2026-10-16T12:01:00+00:00",
+    "executor_key_id": "executor-2026-10",
+    "executor_signature": "6646f700a03f71d8dd53dc8d5845c74fa5b557b7ee9643a56fa4495a75325440d3807725943829f75e96e2eb50ae8035462cf75b0660c80ec003f2b98781e804"
+  },
+  "execution_signed_region": "{\"decision_id\":\"5b6b0c7e-6f1e-4d5b-9c3a-1e2f3a4b5c6d\",\"decision_sha256\":\"6bc00001da83d7e81d6b2702558e447a0418a7140ad727571dadfd734492b272\",\"executed_at\":\"2026-10-16T12:01:00+00:00\",\"execution_version\":\"gargoyle-execution/1\",\"executor_key_id\":\"executor-2026-10\",\"outputs_sha256\":\"a6cb76237119491aa9d6b1976bf763cb08d72f07dda4becf8bb32c0c4ee5914c\",\"policy\":{\"policy_id\":\"opa:payments/3\",\"policy_sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"request_context\":{\"args_sha256\":\"e2363d59384e0a154faccbcc375337c59cc9c5fefa843519e0d5d311cf32bab7\",\"principal\":\"agent-7\",\"tool\":\"transfer_funds\"},\"target_url\":\"https://tools.example.com/target\"}"
 }

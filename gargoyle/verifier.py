@@ -104,8 +104,9 @@ REF_VERIFY_ROOT_OUT_OF_WINDOW = "REF_VERIFY_ROOT_OUT_OF_WINDOW"
 REF_VERIFY_PUBLISHED_RECORD_INVALID = "REF_VERIFY_PUBLISHED_RECORD_INVALID"
 REF_VERIFY_PUBLISHED_RECORD_STALE = "REF_VERIFY_PUBLISHED_RECORD_STALE"
 
-# Accept reason (not a refusal code).
+# Accept reasons (not refusal codes).
 ACCEPT_REASSERTED_AND_BOUND = "REASSERTED_AND_BOUND"
+ACCEPT_PROVENANCE = "PROVENANCE_VERIFIED"  # verify_provenance only
 
 
 # Top-level receipt keys the later checks read. Missing any of them makes
@@ -159,6 +160,99 @@ def not_after_valid(not_after_raw, now=None, clock_skew=timedelta(0)):
         return False
     current = now if now is not None else datetime.now(timezone.utc)
     return current < na + clock_skew
+
+
+def verify_provenance(
+    envelope: Any,
+    *,
+    pinned_public_keys: Dict[str, Any] = None,
+    key_record_view: Dict[str, Any] = None,
+    now: datetime = None,
+    clock_skew: timedelta = timedelta(0),
+) -> Dict[str, Any]:
+    """Steps 1 and 2 of verify_envelope on their own: the receipt is
+    structurally usable, a trusted issuer key signed it, and it had not
+    expired at `now`. No live call is needed, so an auditor can run this
+    offline on a stored receipt (with `now` set to when it was presented).
+    Returns {"accepted": bool, "reason": str}; the accept reason is
+    ACCEPT_PROVENANCE. Currency and binding are verify_envelope's steps 3
+    and 4 and are not checked here."""
+    if clock_skew < timedelta(0):
+        raise ValueError("clock_skew must be non-negative")
+    if pinned_public_keys is None and key_record_view is None:
+        raise ValueError("verify_provenance needs trusted issuer keys: pinned_public_keys or key_record_view")
+    # ----- Structure -----
+    if not isinstance(envelope, dict):
+        return _reject(REF_VERIFY_ENVELOPE_ABSENT)
+    for key in _REQUIRED_ENVELOPE_KEYS:
+        if key not in envelope:
+            return _reject(REF_VERIFY_ENVELOPE_ABSENT)
+    rc = envelope["request_context"]
+    if not isinstance(rc, dict):
+        return _reject(REF_VERIFY_ENVELOPE_ABSENT)
+    for key in _REQUEST_CONTEXT_KEYS:
+        if key not in rc:
+            return _reject(REF_VERIFY_ENVELOPE_ABSENT)
+    # A flagged receipt names the hold a grant must release; a receipt that
+    # says so without naming it is unusable.
+    if not isinstance(envelope["requires_approval"], bool):
+        return _reject(REF_VERIFY_ENVELOPE_ABSENT)
+    if envelope["requires_approval"]:
+        arid = envelope.get("approval_request_id")
+        if not isinstance(arid, str) or not arid:
+            return _reject(REF_VERIFY_ENVELOPE_ABSENT)
+
+    # ----- Signature -----
+    # A missing, malformed or unverifiable signature, or an unknown key, is
+    # a refusal. Duck-typed: the public key object supplies
+    # .verify(signature, message) (e.g. Ed25519PublicKey).
+    key_id = envelope.get("issuer_key_id")
+    signature_hex = envelope.get("issuer_signature")
+    if not isinstance(key_id, str) or not isinstance(signature_hex, str):
+        return _reject(REF_VERIFY_SIGNATURE_INVALID)
+    # The key record vouches for the key (present, unrevoked, issuer
+    # role, in window); the receipt must still be signed by that key.
+    if key_record_view is not None:
+        entry = key_record_view.get(key_id)
+        if entry is None:
+            return _reject(REF_VERIFY_KEY_UNKNOWN)
+        if entry.get("revoked"):
+            return _reject(REF_VERIFY_KEY_REVOKED)
+        if entry.get("role") not in (None, "issuer"):
+            return _reject(REF_VERIFY_KEY_ROLE_NOT_ISSUER)
+        current = now if now is not None else datetime.now(timezone.utc)
+        key_not_before = entry.get("not_before")
+        key_not_after = entry.get("not_after")
+        if (key_not_before is None or key_not_after is None
+                or not (key_not_before - clock_skew <= current
+                        < key_not_after + clock_skew)):
+            return _reject(REF_VERIFY_KEY_OUT_OF_WINDOW)
+        public_key = entry.get("public_key")
+        if public_key is None:
+            return _reject(REF_VERIFY_KEY_UNKNOWN)
+    else:
+        public_key = pinned_public_keys.get(key_id)
+        if public_key is None:
+            return _reject(REF_VERIFY_SIGNATURE_UNKNOWN_KEY)
+    signed_region = {
+        k: v
+        for k, v in envelope.items()
+        if k not in ("issuer_signature", "timestamp_utc")
+    }
+    message = canonical_json(signed_region).encode("utf-8")
+    try:
+        public_key.verify(bytes.fromhex(signature_hex), message)
+    except Exception:
+        return _reject(REF_VERIFY_SIGNATURE_INVALID)
+
+    # ----- Receipt expiry -----
+    # not_after is inside the signed region, so it cannot be extended
+    # without breaking the signature. Expiry bounds how long a leaked
+    # signing key stays useful without anyone having to detect the leak.
+    if not not_after_valid(envelope.get("not_after"), now=now, clock_skew=clock_skew):
+        return _reject(REF_VERIFY_SIGNATURE_EXPIRED)
+
+    return _accept(ACCEPT_PROVENANCE)
 
 
 def verify_envelope(
@@ -222,77 +316,13 @@ def verify_envelope(
     if pinned_public_keys is None and key_record_view is None:
         raise ValueError("verify_envelope needs trusted issuer keys: pinned_public_keys or key_record_view")
 
-    # ----- Structure -----
-    if not isinstance(envelope, dict):
-        return _reject(REF_VERIFY_ENVELOPE_ABSENT)
-    for key in _REQUIRED_ENVELOPE_KEYS:
-        if key not in envelope:
-            return _reject(REF_VERIFY_ENVELOPE_ABSENT)
+    provenance = verify_provenance(
+        envelope, pinned_public_keys=pinned_public_keys, key_record_view=key_record_view,
+        now=now, clock_skew=clock_skew,
+    )
+    if not provenance["accepted"]:
+        return provenance
     rc = envelope["request_context"]
-    if not isinstance(rc, dict):
-        return _reject(REF_VERIFY_ENVELOPE_ABSENT)
-    for key in _REQUEST_CONTEXT_KEYS:
-        if key not in rc:
-            return _reject(REF_VERIFY_ENVELOPE_ABSENT)
-    # A flagged receipt names the hold a grant must release; a receipt that
-    # says so without naming it is unusable.
-    if not isinstance(envelope["requires_approval"], bool):
-        return _reject(REF_VERIFY_ENVELOPE_ABSENT)
-    if envelope["requires_approval"]:
-        arid = envelope.get("approval_request_id")
-        if not isinstance(arid, str) or not arid:
-            return _reject(REF_VERIFY_ENVELOPE_ABSENT)
-
-    # ----- Signature -----
-    # A missing, malformed or unverifiable signature, or an unknown key, is
-    # a refusal. Duck-typed: the public key object supplies
-    # .verify(signature, message) (e.g. Ed25519PublicKey).
-    if True:
-        key_id = envelope.get("issuer_key_id")
-        signature_hex = envelope.get("issuer_signature")
-        if not isinstance(key_id, str) or not isinstance(signature_hex, str):
-            return _reject(REF_VERIFY_SIGNATURE_INVALID)
-        # The key record vouches for the key (present, unrevoked, issuer
-        # role, in window); the receipt must still be signed by that key.
-        if key_record_view is not None:
-            entry = key_record_view.get(key_id)
-            if entry is None:
-                return _reject(REF_VERIFY_KEY_UNKNOWN)
-            if entry.get("revoked"):
-                return _reject(REF_VERIFY_KEY_REVOKED)
-            if entry.get("role") not in (None, "issuer"):
-                return _reject(REF_VERIFY_KEY_ROLE_NOT_ISSUER)
-            current = now if now is not None else datetime.now(timezone.utc)
-            key_not_before = entry.get("not_before")
-            key_not_after = entry.get("not_after")
-            if (key_not_before is None or key_not_after is None
-                    or not (key_not_before - clock_skew <= current
-                            < key_not_after + clock_skew)):
-                return _reject(REF_VERIFY_KEY_OUT_OF_WINDOW)
-            public_key = entry.get("public_key")
-            if public_key is None:
-                return _reject(REF_VERIFY_KEY_UNKNOWN)
-        else:
-            public_key = pinned_public_keys.get(key_id)
-            if public_key is None:
-                return _reject(REF_VERIFY_SIGNATURE_UNKNOWN_KEY)
-        signed_region = {
-            k: v
-            for k, v in envelope.items()
-            if k not in ("issuer_signature", "timestamp_utc")
-        }
-        message = canonical_json(signed_region).encode("utf-8")
-        try:
-            public_key.verify(bytes.fromhex(signature_hex), message)
-        except Exception:
-            return _reject(REF_VERIFY_SIGNATURE_INVALID)
-
-        # ----- Receipt expiry -----
-        # not_after is inside the signed region, so it cannot be extended
-        # without breaking the signature. Expiry bounds how long a leaked
-        # signing key stays useful without anyone having to detect the leak.
-        if not not_after_valid(envelope.get("not_after"), now=now, clock_skew=clock_skew):
-            return _reject(REF_VERIFY_SIGNATURE_EXPIRED)
 
     # ----- Currency and integrity -----
     # Any structural surprise reassert() trips over (e.g. a policy block that

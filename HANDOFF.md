@@ -228,3 +228,7 @@ substrate." README, pyproject description, SPEC.md section 1.
 "the first version of this project that answers a question somebody is asking"
 Open. Nothing outside has used it; the repo is public so that can now happen.
 Suite: 358 pass.
+
+## After the directive (2026-10-16)
+Further work is tracked in ROADMAP.md. Step 1 (execution receipts and the
+offline chain) is done; the suite count of record moves there.

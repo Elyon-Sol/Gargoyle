@@ -18,7 +18,8 @@ the grant and the decision_id in a replay cache. `Consumer` packages it:
     call = {"tool": name, "args": arguments, "principal": peer_identity}
     verdict = consumer.check(envelope, call, grant=grant_or_none)
     if verdict.honored:
-        do_the_side_effect()
+        outputs = do_the_side_effect()
+        execution = consumer.attest(envelope, outputs)   # signed execution receipt, if a key is configured
     else:
         refuse(verdict.reason)                           # REF_VERIFY_* / REF_TARGET_*
 
@@ -71,6 +72,7 @@ from fastapi.concurrency import run_in_threadpool
 
 from gargoyle.approval import verify_grant
 from gargoyle.approver_trust import resolve_approver_keys
+from gargoyle.execution import build_execution_receipt, sign_execution_receipt
 from gargoyle.key_record_source import fetch_key_record
 from gargoyle.published_record_source import fetch_signed_record
 from gargoyle.published_source import (
@@ -176,6 +178,8 @@ class Consumer:
         clock_skew: timedelta = timedelta(0),
         high_water: Optional[HighWater] = None,
         approver_public_keys: Optional[Dict[str, Any]] = None,
+        executor_signing_key: Any = None,
+        executor_key_id: Optional[str] = None,
     ) -> None:
         """The live pin comes from exactly one of `record` (a validated
         {policy_id, policy_sha256}), `record_bytes` (anchored on `pinned_root`,
@@ -188,7 +192,8 @@ class Consumer:
         at all is one too. Approver trust, needed only for flagged receipts,
         comes from a key record's `approver`-role keys when a key-record view
         or source is in use, else from the static `approver_public_keys`
-        map."""
+        map. `executor_signing_key` and `executor_key_id`, both or neither,
+        let attest() sign execution receipts (gargoyle.execution)."""
         supplied = [x is not None for x in (record, record_bytes, record_source)]
         if sum(supplied) != 1:
             raise ValueError("supply exactly one of record, record_bytes or record_source")
@@ -202,6 +207,10 @@ class Consumer:
             )
         if clock_skew < timedelta(0):
             raise ValueError("clock_skew must be non-negative")
+        if (executor_signing_key is None) != (executor_key_id is None):
+            raise ValueError("supply executor_signing_key and executor_key_id together")
+        self._executor_signing_key = executor_signing_key
+        self.executor_key_id = executor_key_id
         self.target_id = target_id
         self.pinned_public_keys = pinned_public_keys
         self.key_record_view = key_record_view
@@ -256,6 +265,21 @@ class Consumer:
             return Verdict(False, reason or REF_VERIFY_KEY_RECORD_INVALID)
         self.high_water.advance_key_record(kres.get("serial"))
         return view
+
+    @property
+    def attests(self) -> bool:
+        """True when this consumer can sign execution receipts."""
+        return self._executor_signing_key is not None
+
+    def attest(self, envelope: Dict[str, Any], outputs: Any,
+               executed_at: Optional[datetime] = None) -> Dict[str, Any]:
+        """The signed execution receipt for a call this consumer honored and
+        the caller has just run with `outputs`. Raises when no executor key
+        is configured: an unsigned statement of execution is not evidence."""
+        if not self.attests:
+            raise ValueError("this consumer has no executor signing key; cannot attest")
+        execution = build_execution_receipt(envelope=envelope, outputs=outputs, executed_at=executed_at)
+        return sign_execution_receipt(execution, self._executor_signing_key, self.executor_key_id)
 
     def _approver_keys(self, key_record_view, gate_key_id, now) -> Dict[str, Any]:
         """The approver map for a flagged receipt: from the key record when
@@ -393,6 +417,11 @@ class Consumer:
 #                                can be honored with that approver's grant.
 #                                Optional; in key-record mode the record's
 #                                approver-role keys are used instead.
+#   GARGOYLE_EXECUTOR_KEY_ID / GARGOYLE_EXECUTOR_KEY_HEX
+#                                this target's own Ed25519 signing key (raw
+#                                private bytes as hex, never logged), so each
+#                                honored call is answered with a signed
+#                                execution receipt. Optional, both or neither.
 #
 # Optional: GARGOYLE_PUBLISHER_KEY_ID / _KEY_HEX + GARGOYLE_SIGNED_RECORD_URL
 # for signed-record mode (freshness and serial instead of a byte anchor),
@@ -412,6 +441,8 @@ ENV_PRINCIPAL_HEADER = "GARGOYLE_PRINCIPAL_HEADER"
 XFCC_HEADER = "x-forwarded-client-cert"
 ENV_APPROVER_KEY_ID = "GARGOYLE_APPROVER_KEY_ID"
 ENV_APPROVER_PUBLIC_KEY_HEX = "GARGOYLE_APPROVER_PUBLIC_KEY_HEX"
+ENV_EXECUTOR_KEY_ID = "GARGOYLE_EXECUTOR_KEY_ID"
+ENV_EXECUTOR_KEY_HEX = "GARGOYLE_EXECUTOR_KEY_HEX"
 ENV_PUBLISHER_KEY_ID = "GARGOYLE_PUBLISHER_KEY_ID"
 ENV_PUBLISHER_KEY_HEX = "GARGOYLE_PUBLISHER_KEY_HEX"
 ENV_SIGNED_RECORD_URL = "GARGOYLE_SIGNED_RECORD_URL"
@@ -468,6 +499,17 @@ def config_from_env() -> Optional[Dict[str, Any]]:
             config["approver_public_keys"] = {
                 ap_key_id: Ed25519PublicKey.from_public_bytes(bytes.fromhex(ap_key_hex))
             }
+        except Exception:
+            return None
+    ex_key_id = os.environ.get(ENV_EXECUTOR_KEY_ID)
+    ex_key_hex = os.environ.get(ENV_EXECUTOR_KEY_HEX)
+    if ex_key_id or ex_key_hex:
+        if not (ex_key_id and ex_key_hex):
+            return None
+        try:
+            from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+            config["executor_signing_key"] = Ed25519PrivateKey.from_private_bytes(bytes.fromhex(ex_key_hex))
+            config["executor_key_id"] = ex_key_id
         except Exception:
             return None
     pub_key_id = os.environ.get(ENV_PUBLISHER_KEY_ID)
@@ -671,6 +713,8 @@ def build_reference_target_app(
             clock_skew=skew,
             high_water=app.state.high_water,
             approver_public_keys=config.get("approver_public_keys"),
+            executor_signing_key=config.get("executor_signing_key"),
+            executor_key_id=config.get("executor_key_id"),
         )
 
     def header_json(request: Request, name: str):
@@ -723,7 +767,11 @@ def build_reference_target_app(
             raise _refuse(verdict.reason)
 
         app.state.received.append(call)  # the target acts only here
-        return {"honored": True, "reason": verdict.reason}
+        outputs = {"executed": call["tool"], "args_sha256": envelope["request_context"]["args_sha256"]}
+        response = {"honored": True, "reason": verdict.reason, "outputs": outputs}
+        if consumer.attests:
+            response["execution"] = consumer.attest(envelope, outputs)
+        return response
 
     @app.get("/received")
     async def received():

@@ -41,6 +41,10 @@ still change before the first release; it is specified in [SPEC.md](SPEC.md).
 - **Holds.** A decision that requires approval is flagged inside the signed
   receipt. The target will not run it without a grant a human signed for
   that exact decision, under their own key, on their own device.
+- **Proof of execution.** An executor with a key answers each honored call
+  with a signed execution receipt: the decision it fulfilled, the policy
+  version that allowed it, and a hash of the outputs. Receipt, grant and
+  execution receipt verify together, offline, with three public keys.
 
 ## Install
 
@@ -136,6 +140,27 @@ For a live pin that can be reissued, give the consumer a record source
 anchored bytes; for issuer keys that can be rotated and revoked, a key
 record source. Both are consulted on every check and fail closed.
 
+## Proof that it ran
+
+Give a consumer an executor key and it signs an execution receipt after the
+side effect. Anyone holding the issuer's, approver's and executor's public
+keys can then audit one call with no network and no live state:
+
+```python
+from gargoyle.execution import verify_chain
+
+chain = verify_chain(receipt, execution,
+                     issuer_public_keys=ISSUER_KEYS, executor_public_keys=EXECUTOR_KEYS,
+                     grant=grant, approver_public_keys=APPROVER_KEYS,
+                     outputs=outputs, check_outputs=True)
+chain["accepted"], chain["steps"]   # True, [("authorization", ...), ("approval", ...), ("execution", ...)]
+```
+
+That is the sentence Gargoyle can say that nobody else can: a specific
+policy version authorized a specific call for a specific principal, a
+human's key released it, and exactly that call ran once, verifiable offline
+by anyone.
+
 ## Two shipped consumers
 
 **MCP middleware** (`python -m gargoyle.mcp_server -- <upstream command>`):
@@ -155,6 +180,7 @@ Configuration is by environment:
 | `GARGOYLE_MCP_PRINCIPAL` | the client this server serves |
 | `GARGOYLE_MCP_RECORD_PATH` | the published policy record |
 | `GARGOYLE_MCP_APPROVER_KEY_ID`, `GARGOYLE_MCP_APPROVER_PUBLIC_KEY_HEX` | the approver key whose grants release flagged calls (optional, both or neither) |
+| `GARGOYLE_MCP_EXECUTOR_KEY_ID`, `GARGOYLE_MCP_EXECUTOR_KEY_HEX` | this server's own signing key, so honored calls carry an execution receipt in `_meta["gargoyle/execution"]` (optional, both or neither) |
 
 **Reference HTTP target** (`uvicorn gargoyle.consumer:app`): a FastAPI
 service that authenticates the caller by transport, reads `{"tool", "args"}`
@@ -193,7 +219,8 @@ on it.
 | `issuer` | ask the policy, sign the receipt |
 | `envelope` | receipt construction, hash region, signature region, currency check |
 | `verifier` | the pure target-side check and every refusal code |
-| `consumer` | `Consumer` (pin, keys, verify, claim) and the reference HTTP target |
+| `consumer` | `Consumer` (pin, keys, verify, claim, attest) and the reference HTTP target |
+| `execution` | execution receipts and the offline chain check |
 | `mcp_server` | the stdio MCP middleware (and demo executor) |
 | `replay_cache`, `pending_store` | single use for receipts and holds; in-memory or Redis |
 | `approval`, `approver_cli`, `approver_trust` | grants, the human's tool, approver key trust |
