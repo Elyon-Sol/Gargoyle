@@ -49,7 +49,8 @@ verifying itself for no external user; that is the failure mode to avoid.
    hundred lines; never rules about how it may be amended.
 6. **Approval transport.** A webhook that posts the flagged receipt to
    Slack or an approval product, the key staying on the approver's device.
-   Integrate, do not build.
+   Integrate, do not build. (The browser console below covers the "a button,
+   not a terminal" half of this without a third party.)
 
 ## Not on the roadmap
 
@@ -113,6 +114,17 @@ outside.
   principal resolvers removed, leaving the MCP middleware as the one shipped
   consumer. 23 modules / 5,250 lines became 20 / 4,300; 50 environment variables became 33; six configuration
   choices became three. Nothing the spec guarantees changed.
+- Browser approval console (2026-10-16): gargoyle/static/approve.{html,js},
+  served by the issuer at /approve. The page lists holds with their full
+  arguments, re-hashes them against the receipt, and signs the grant in the
+  browser with WebCrypto Ed25519 from approver-web.json (written by init); the key
+  never reaches the issuer. POST /decline drops a hold and the middleware answers
+  REF_TARGET_APPROVAL_DECLINED at once. GARGOYLE_MCP_AUDIT_LOG writes every honored
+  chain as a JSON line; `gargoyle audit --log` verifies the file. init gained
+  --issuer-url, --client-python and --client-config-dir so a Linux issuer host can
+  write config for a Windows client. tests/test_console_js.py proves the page's
+  JavaScript signs byte for byte what the reference signs.
+  docs/guide-hyperv-ubuntu-apache.md is the single-instance build guide.
 - Enterprise identity (2026-10-16): identity tokens may be RS256 or ES256 from a
   provider's JWKS (keys_from_jwks, entra_keys; GARGOYLE_ENTRA_TENANT on the issuer);
   Entra's preferred_username/upn is the principal; groups and app roles are policy

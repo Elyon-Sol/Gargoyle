@@ -95,10 +95,12 @@ ENV_ISSUER_URL = "GARGOYLE_MCP_ISSUER_URL"
 ENV_CLIENT_TOKEN = "GARGOYLE_MCP_CLIENT_TOKEN"
 ENV_APPROVAL_TIMEOUT = "GARGOYLE_MCP_APPROVAL_TIMEOUT_SECONDS"
 ENV_POLL_SECONDS = "GARGOYLE_MCP_POLL_SECONDS"
+ENV_AUDIT_LOG = "GARGOYLE_MCP_AUDIT_LOG"   # append one JSON line per honored call: receipt, grant, execution
 
 # Self-issue refusals.
 REF_TARGET_ISSUER_UNAVAILABLE = "REF_TARGET_ISSUER_UNAVAILABLE"
 REF_TARGET_APPROVAL_TIMEOUT = "REF_TARGET_APPROVAL_TIMEOUT"
+REF_TARGET_APPROVAL_DECLINED = "REF_TARGET_APPROVAL_DECLINED"
 
 
 class IssuerClient:
@@ -138,9 +140,10 @@ class IssuerClient:
             return {"envelope": None, "reason": body.get("reason") or REF_TARGET_ISSUER_UNAVAILABLE}
         return {"envelope": body.get("envelope"), "reason": None}
 
-    def wait_for_grant(self, approval_request_id: str) -> Optional[Dict[str, Any]]:
-        """Poll until the hold has a grant, the hold disappears, or the
-        timeout passes. None means no grant."""
+    def wait_for_grant(self, approval_request_id: str) -> Dict[str, Any]:
+        """Poll until the hold has a grant, a human declined it, the hold
+        disappears, or the timeout passes: {"grant": <grant>|None,
+        "reason": None | REF_TARGET_APPROVAL_DECLINED | REF_TARGET_APPROVAL_TIMEOUT}."""
         deadline = time.monotonic() + self.approval_timeout
         while True:
             try:
@@ -149,11 +152,13 @@ class IssuerClient:
             except Exception:
                 body = {}
             if isinstance(body.get("grant"), dict):
-                return body["grant"]
+                return {"grant": body["grant"], "reason": None}
+            if body.get("declined") is True:
+                return {"grant": None, "reason": REF_TARGET_APPROVAL_DECLINED}
             if body and not body.get("pending", True):
-                return None
+                return {"grant": None, "reason": REF_TARGET_APPROVAL_TIMEOUT}
             if time.monotonic() >= deadline:
-                return None
+                return {"grant": None, "reason": REF_TARGET_APPROVAL_TIMEOUT}
             self._sleep(self.poll_seconds)
 
 
@@ -239,10 +244,12 @@ class ServerState:
         replay_cache: Optional[InMemoryReplayCache] = None,
         upstream: Optional[StdioUpstream] = None,
         issuer_client: Optional[IssuerClient] = None,
+        audit_log: Optional[str] = None,
     ) -> None:
         self.config = config
         self.upstream = upstream
         self.issuer_client = issuer_client
+        self.audit_log = audit_log
         self.consumer: Optional[Consumer] = None
         if config is not None and valid_principal(config.get("principal")):
             self.consumer = Consumer(
@@ -290,9 +297,10 @@ def _gate(state: ServerState, params: Dict[str, Any]) -> Dict[str, Any]:
             return refused(res["reason"])
         envelope, self_issued = res["envelope"], True
         if isinstance(envelope, dict) and envelope.get("requires_approval") is True and grant is None:
-            grant = state.issuer_client.wait_for_grant(str(envelope.get("approval_request_id")))
-            if grant is None:
-                return refused(REF_TARGET_APPROVAL_TIMEOUT)
+            waited = state.issuer_client.wait_for_grant(str(envelope.get("approval_request_id")))
+            if waited["grant"] is None:
+                return refused(waited["reason"])
+            grant = waited["grant"]
 
     verdict = state.consumer.check(envelope, call_for(name, args, state.config["principal"]),
                                    grant=grant)
@@ -307,7 +315,9 @@ def _gate(state: ServerState, params: Dict[str, Any]) -> Dict[str, Any]:
 def _audit_meta(state: ServerState, gate: Dict[str, Any], outputs: Any) -> Dict[str, Any]:
     """What an honored result's _meta carries beyond executed/reason: the
     execution receipt when this server attests, and, when the receipt was
-    self-issued, the receipt and grant the client never saw."""
+    self-issued, the receipt and grant the client never saw. The same chain
+    is appended to the audit log when one is configured, so a client that
+    discards _meta still leaves evidence."""
     meta: Dict[str, Any] = {}
     execution = _attest(state, gate["envelope"], outputs)
     if execution is not None:
@@ -316,6 +326,13 @@ def _audit_meta(state: ServerState, gate: Dict[str, Any], outputs: Any) -> Dict[
         meta[RECEIPT_META_KEY] = gate["envelope"]
         if gate["grant"] is not None:
             meta[USED_GRANT_META_KEY] = gate["grant"]
+    if state.audit_log:
+        entry = {"receipt": gate["envelope"], "grant": gate["grant"], "execution": execution}
+        try:
+            with open(state.audit_log, "a", encoding="utf-8") as f:
+                f.write(json.dumps(entry, sort_keys=True) + "\n")
+        except OSError as exc:
+            sys.stderr.write("gargoyle: audit log unwritable: %s\n" % exc)
     return meta
 
 
@@ -535,9 +552,11 @@ def upstream_from_argv(argv: List[str]) -> Optional[StdioUpstream]:
 
 
 if __name__ == "__main__":
+    import os as _os
     _upstream = upstream_from_argv(sys.argv[1:])
     try:
-        serve_stdio(ServerState(config_from_env(), upstream=_upstream, issuer_client=issuer_client_from_env()))
+        serve_stdio(ServerState(config_from_env(), upstream=_upstream, issuer_client=issuer_client_from_env(),
+                                audit_log=_os.environ.get(ENV_AUDIT_LOG) or None))
     finally:
         if _upstream is not None:
             _upstream.close()

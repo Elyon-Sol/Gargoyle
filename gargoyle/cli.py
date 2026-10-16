@@ -2,6 +2,9 @@
 policy engine, a container runtime, or any client changes.
 
     gargoyle init <dir-the-agent-may-touch> [--out DIR]   keys, config, rules file
+        --issuer-url URL        what the client reaches the issuer at (behind TLS: https://host)
+        --client-python PATH    the client's python.exe, for the MCP server entry
+        --client-config-dir DIR where middleware.env, record.json and the audit log live on the client
     gargoyle issuer [--out DIR] [--port 8080]            run the issuing service
     gargoyle approve [--out DIR] [--watch SECONDS]       sit and approve held calls
     gargoyle audit <receipt.json> <execution.json> [grant.json]
@@ -13,6 +16,8 @@ policy engine, a container runtime, or any client changes.
     middleware.env    what the MCP client's server entry needs (private)
     approver.env      the approver's key and token (private; move it to the
                       approver's machine)
+    approver-web.json the same key and token in the form the browser approval
+                      console loads (private; same machine as approver.env)
     mcp-config.json   the server entry to paste into the MCP client
     public-keys.json  issuer, approver and executor public keys, for audits
 
@@ -25,6 +30,7 @@ the response metadata; `gargoyle audit` verifies them later, offline.
 import argparse
 import json
 import os
+import re
 import stat
 import sys
 from datetime import datetime, timedelta, timezone
@@ -70,7 +76,12 @@ def cmd_init(args) -> int:
 
     out = Path(args.out).resolve()
     out.mkdir(parents=True, exist_ok=True)
-    allowed = str(Path(args.directory).resolve())
+    # A Windows path given on a Linux issuer host is the client's and is kept as typed.
+    windows = re.match(r"^[A-Za-z]:[\\/]", args.directory) is not None
+    allowed = args.directory if windows else str(Path(args.directory).resolve())
+    sep = "\\" if windows else "/"
+    client_dir = args.client_config_dir or str(out)
+    client_python = args.client_python or sys.executable
 
     def new_key():
         k = Ed25519PrivateKey.generate()
@@ -84,7 +95,7 @@ def cmd_init(args) -> int:
     exp = int((datetime.now(timezone.utc) + timedelta(days=args.token_days)).timestamp())
     client_token = encode({"sub": PRINCIPAL, "aud": "gargoyle-issuer", "exp": exp}, idp, "idp-1")
     approver_token = encode({"sub": "approver", "aud": "gargoyle-issuer", "exp": exp}, idp, "idp-1")
-    issuer_url = "http://%s:%d" % (args.host, args.port)
+    issuer_url = args.issuer_url or "http://%s:%d" % (args.host, args.port)
 
     rules = out / "rules.json"
     if not rules.exists():
@@ -99,29 +110,36 @@ def cmd_init(args) -> int:
     middleware_env = {
         "GARGOYLE_MCP_GATE_KEY_ID": "issuer-1", "GARGOYLE_MCP_GATE_PUBLIC_KEY_HEX": issuer_pub,
         "GARGOYLE_MCP_TARGET_ID": "mcp://filesystem/" + allowed, "GARGOYLE_MCP_PRINCIPAL": PRINCIPAL,
-        "GARGOYLE_MCP_RECORD_PATH": str(out / "record.json"),
+        "GARGOYLE_MCP_RECORD_PATH": client_dir + sep + "record.json",
         "GARGOYLE_MCP_APPROVER_KEY_ID": "approver-1", "GARGOYLE_MCP_APPROVER_PUBLIC_KEY_HEX": approver_pub,
         "GARGOYLE_MCP_EXECUTOR_KEY_ID": "executor-1", "GARGOYLE_MCP_EXECUTOR_KEY_HEX": executor_hex,
         "GARGOYLE_MCP_ISSUER_URL": issuer_url, "GARGOYLE_MCP_CLIENT_TOKEN": client_token,
         "GARGOYLE_MCP_APPROVAL_TIMEOUT_SECONDS": "300",
+        "GARGOYLE_MCP_AUDIT_LOG": client_dir + sep + "audit.jsonl",
     }
     _write(out / "middleware.env", _env_lines(middleware_env), private=True)
     _write(out / "approver.env", _env_lines({
         "GARGOYLE_APPROVER_KEY_ID": "approver-1", "GARGOYLE_APPROVER_KEY_HEX": approver_hex,
         "GARGOYLE_APPROVER_TOKEN": approver_token, "GARGOYLE_ISSUER_URL": issuer_url,
     }), private=True)
+    b64url = lambda b: __import__("base64").urlsafe_b64encode(b).rstrip(b"=").decode()
+    _write(out / "approver-web.json", json.dumps({
+        "key_id": "approver-1", "token": approver_token, "issuer_url": issuer_url, "grant_ttl_seconds": 300,
+        "jwk": {"kty": "OKP", "crv": "Ed25519", "d": b64url(bytes.fromhex(approver_hex)), "x": b64url(bytes.fromhex(approver_pub))},
+    }, indent=2) + "\n", private=True)
     _write(out / "public-keys.json", json.dumps({
         "issuer": {"issuer-1": issuer_pub}, "approver": {"approver-1": approver_pub},
         "executor": {"executor-1": executor_pub}, "identity_provider": {"idp-1": idp_pub},
     }, indent=2) + "\n")
     _write(out / "mcp-config.json", json.dumps({"mcpServers": {"filesystem-gargoyle": {
-        "command": sys.executable,
+        "command": client_python,
         "args": ["-m", "gargoyle.mcp_server", "--", "npx", "-y", "@modelcontextprotocol/server-filesystem", allowed],
         "env": middleware_env,
     }}}, indent=2) + "\n", private=True)
     print("\nnext:  gargoyle issuer --out %s        (keeps running; writes record.json on start)" % out)
     print("       paste mcp-config.json's server entry into your MCP client, restart it")
     print("       gargoyle approve --out %s --watch 2  (on the approver's machine)" % out)
+    print("       or open %s/approve in a browser and load approver-web.json" % issuer_url)
     return 0
 
 
@@ -161,11 +179,25 @@ def cmd_audit(args) -> int:
 
     keys = json.loads((Path(args.out).resolve() / "public-keys.json").read_text())
     load = lambda m: {k: Ed25519PublicKey.from_public_bytes(bytes.fromhex(v)) for k, v in m.items()}
+    trust = dict(issuer_public_keys=load(keys["issuer"]), executor_public_keys=load(keys["executor"]),
+                 approver_public_keys=load(keys["approver"]))
+    if args.log:
+        # Every honored call the middleware logged, one JSON line each.
+        bad = 0
+        for n, line in enumerate(Path(args.log).read_text(encoding="utf-8").splitlines(), 1):
+            if not line.strip():
+                continue
+            e = json.loads(line)
+            r = verify_chain(e["receipt"], e["execution"], grant=e.get("grant"), **trust)
+            rc = e["receipt"]["request_context"]
+            print("%4d %-9s %-24s %-28s %s" % (n, "ok" if r["accepted"] else "FAIL", rc["tool"][:24],
+                                              rc["principal"][:28], r["reason"]))
+            bad += 0 if r["accepted"] else 1
+        print("%d entries, %d failed" % (n, bad))
+        return 1 if bad else 0
     receipt, execution = json.load(open(args.receipt)), json.load(open(args.execution))
     grant = json.load(open(args.grant)) if args.grant else None
-    result = verify_chain(receipt, execution, issuer_public_keys=load(keys["issuer"]),
-                          executor_public_keys=load(keys["executor"]), grant=grant,
-                          approver_public_keys=load(keys["approver"]))
+    result = verify_chain(receipt, execution, grant=grant, **trust)
     for step, outcome in result["steps"]:
         print("%-14s %s" % (step, outcome))
     print("chain:", result["reason"])
@@ -180,6 +212,9 @@ def main(argv=None) -> int:
     p.add_argument("--out", default="gargoyle-deploy")
     p.add_argument("--host", default="127.0.0.1"); p.add_argument("--port", type=int, default=8080)
     p.add_argument("--token-days", type=int, default=30)
+    p.add_argument("--issuer-url", help="URL the client reaches the issuer at (default http://HOST:PORT)")
+    p.add_argument("--client-python", help="the client's Python executable for the MCP entry (default: this one)")
+    p.add_argument("--client-config-dir", help="where the client keeps middleware.env, record.json, audit.jsonl (default: --out)")
     p.set_defaults(fn=cmd_init)
     p = sub.add_parser("issuer", help="run the issuing service on the rules file")
     p.add_argument("--out", default="gargoyle-deploy")
@@ -189,8 +224,9 @@ def main(argv=None) -> int:
     p.add_argument("--out", default="gargoyle-deploy")
     p.add_argument("--watch", type=float, metavar="SECONDS"); p.add_argument("--yes", action="store_true")
     p.set_defaults(fn=cmd_approve)
-    p = sub.add_parser("audit", help="verify a receipt chain offline")
-    p.add_argument("receipt"); p.add_argument("execution"); p.add_argument("grant", nargs="?")
+    p = sub.add_parser("audit", help="verify a receipt chain offline, or every chain in an audit log")
+    p.add_argument("receipt", nargs="?"); p.add_argument("execution", nargs="?"); p.add_argument("grant", nargs="?")
+    p.add_argument("--log", help="the middleware's audit.jsonl: verify every entry")
     p.add_argument("--out", default="gargoyle-deploy")
     p.set_defaults(fn=cmd_audit)
     args = parser.parse_args(argv)

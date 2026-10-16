@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gargoyle approvals</title>
+<style>
+  :root { --bg:#f6f7f9; --card:#fff; --ink:#1a1d21; --muted:#5b6470; --line:#d9dee5; --ok:#1a7f37; --warn:#b54708; --bad:#b42318; --accent:#1f5eff; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#111417; --card:#1a1f24; --ink:#e8ecf0; --muted:#9aa4b1; --line:#2b333c; --ok:#3fb950; --warn:#e3a008; --bad:#f85149; --accent:#6ea0ff; } }
+  body { margin:0; background:var(--bg); color:var(--ink); font:15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  header { padding:16px 24px; border-bottom:1px solid var(--line); display:flex; gap:16px; align-items:center; flex-wrap:wrap; }
+  header h1 { font-size:17px; margin:0; }
+  header .status { color:var(--muted); font-size:13px; }
+  main { max-width:900px; margin:0 auto; padding:24px 16px; }
+  .setup { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:16px; margin-bottom:24px; }
+  .hold { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:16px 20px; margin-bottom:16px; }
+  .hold h2 { margin:0 0 4px; font-size:20px; }
+  .meta { display:grid; grid-template-columns:150px 1fr; gap:4px 12px; font-size:13.5px; margin:10px 0; }
+  .meta dt { color:var(--muted); } .meta dd { margin:0; word-break:break-all; }
+  pre { background:var(--bg); border:1px solid var(--line); border-radius:8px; padding:12px; font-size:13px; overflow:auto; margin:8px 0 12px; }
+  .badge { display:inline-block; font-size:12px; padding:2px 8px; border-radius:999px; border:1px solid currentColor; margin-left:8px; }
+  .ok { color:var(--ok); } .warn { color:var(--warn); } .bad { color:var(--bad); }
+  button { font:inherit; padding:8px 16px; border-radius:8px; border:1px solid var(--line); background:var(--card); color:var(--ink); cursor:pointer; }
+  button.approve { background:var(--accent); border-color:var(--accent); color:#fff; font-weight:600; }
+  button:disabled { opacity:.5; cursor:not-allowed; }
+  .actions { display:flex; gap:12px; align-items:center; }
+  .empty { color:var(--muted); text-align:center; padding:48px 0; }
+  .log { font-size:13px; color:var(--muted); margin-top:16px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Gargoyle approvals</h1>
+  <span class="status" id="status">not loaded</span>
+</header>
+<main>
+  <section class="setup" id="setup">
+    <strong>Load your approver file</strong> (the <code>approver-web.json</code> that <code>gargoyle init</code> wrote).
+    It holds your key and your token; they stay in this tab and are gone when you close it.
+    <div style="margin-top:10px"><input type="file" id="file" accept=".json,application/json"></div>
+  </section>
+  <section id="holds"><div class="empty">Load the approver file to see holds.</div></section>
+  <div class="log" id="log"></div>
+</main>
+<script type="module">
+import { argsSha256, buildGrant, importApproverKey, isoUtc, newGrantId, signGrant } from "./approve.js";
+
+const state = { token: null, key: null, keyId: null, ttl: 300, timer: null, seen: new Map() };
+const $ = (id) => document.getElementById(id);
+const log = (m) => { $("log").textContent = new Date().toLocaleTimeString() + "  " + m; };
+
+$("file").addEventListener("change", async (e) => {
+  const f = e.target.files[0]; if (!f) return;
+  try {
+    const cfg = JSON.parse(await f.text());
+    state.key = await importApproverKey(cfg.jwk); state.keyId = cfg.key_id; state.token = cfg.token;
+    if (cfg.grant_ttl_seconds) state.ttl = cfg.grant_ttl_seconds;
+    $("setup").style.display = "none"; $("status").textContent = "approving as " + state.keyId;
+    await refresh(); state.timer = setInterval(refresh, 3000);
+  } catch (err) { log("could not load approver file: " + err.message); }
+});
+
+async function api(path, opts = {}) {
+  const r = await fetch(path, { ...opts, headers: { "Authorization": "Bearer " + state.token, "content-type": "application/json", ...(opts.headers || {}) } });
+  if (!r.ok) throw new Error(path + " -> " + r.status);
+  return r.json();
+}
+
+async function refresh() {
+  let pending;
+  try { pending = (await api("pending")).pending; } catch (err) { log("issuer unreachable: " + err.message); return; }
+  const holds = $("holds");
+  if (!pending.length) { holds.innerHTML = '<div class="empty">Nothing waiting for you.</div>'; return; }
+  const ids = new Set();
+  for (const item of pending) {
+    const env = item.envelope, id = env.approval_request_id; ids.add(id);
+    if (state.seen.has(id)) continue;
+    const card = document.createElement("article"); card.className = "hold"; card.dataset.id = id;
+    const rc = env.request_context;
+    const bound = item.args !== null && item.args !== undefined ? (await argsSha256(item.args)) === rc.args_sha256 : false;
+    const expires = new Date(env.not_after);
+    card.innerHTML = `
+      <h2>${esc(rc.tool)} <span class="badge ${bound ? "ok" : "bad"}">${bound ? "arguments match the receipt" : "ARGUMENTS DO NOT MATCH; do not approve"}</span></h2>
+      <dl class="meta">
+        <dt>requested by</dt><dd>${esc(rc.principal)}${rc.on_behalf_of ? " on behalf of " + esc(rc.on_behalf_of) : ""}</dd>
+        <dt>target</dt><dd>${esc(env.target_url)}</dd>
+        <dt>policy</dt><dd>${esc(env.policy.policy_id)} <span class="badge">${esc(env.policy.policy_sha256.slice(0, 12))}</span></dd>
+        <dt>expires</dt><dd data-exp="${expires.toISOString()}">${expires.toLocaleTimeString()}</dd>
+        <dt>decision</dt><dd>${esc(env.decision_sha256.slice(0, 16))}&hellip;</dd>
+      </dl>
+      <pre>${esc(JSON.stringify(item.args, null, 2))}</pre>
+      <div class="actions">
+        <button class="approve" ${bound ? "" : "disabled"}>Approve</button>
+        <button class="decline">Decline</button>
+        <span class="result"></span>
+      </div>`;
+    card.querySelector(".approve").addEventListener("click", () => approve(card, env));
+    card.querySelector(".decline").addEventListener("click", () => decline(card, id));
+    holds.querySelector(".empty")?.remove();
+    holds.prepend(card);
+    state.seen.set(id, card);
+  }
+  for (const [id, card] of state.seen) if (!ids.has(id) && !card.dataset.done) { card.remove(); state.seen.delete(id); }
+  $("status").textContent = `approving as ${state.keyId} \u00b7 ${pending.length} waiting`;
+}
+
+async function approve(card, env) {
+  const buttons = card.querySelectorAll("button"); buttons.forEach((b) => b.disabled = true);
+  try {
+    const grant = await signGrant(buildGrant({
+      decisionSha256: env.decision_sha256, approvalRequestId: env.approval_request_id,
+      grantId: newGrantId(), notAfter: isoUtc(new Date(Date.now() + state.ttl * 1000)),
+    }), state.key, state.keyId);
+    const res = await api("grants", { method: "POST", body: JSON.stringify(grant) });
+    card.querySelector(".result").innerHTML = res.accepted ? '<span class="ok">approved; the call is running</span>' : `<span class="bad">refused: ${esc(res.reason)}</span>`;
+    card.dataset.done = "1"; setTimeout(() => { card.remove(); state.seen.delete(env.approval_request_id); }, 8000);
+  } catch (err) { card.querySelector(".result").innerHTML = `<span class="bad">${esc(err.message)}</span>`; buttons.forEach((b) => b.disabled = false); }
+}
+
+async function decline(card, id) {
+  card.querySelectorAll("button").forEach((b) => b.disabled = true);
+  try {
+    await api("decline", { method: "POST", body: JSON.stringify({ approval_request_id: id }) });
+    card.querySelector(".result").innerHTML = '<span class="warn">declined; the assistant is told</span>';
+    card.dataset.done = "1"; setTimeout(() => { card.remove(); state.seen.delete(id); }, 5000);
+  } catch (err) { card.querySelector(".result").innerHTML = `<span class="bad">${esc(err.message)}</span>`; }
+}
+
+function esc(s) { return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
+</script>
+</body>
+</html>

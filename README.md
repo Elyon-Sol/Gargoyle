@@ -189,10 +189,16 @@ Three commands, no policy engine, no containers, no client changes:
 
     gargoyle init /path/the/agent/may/touch     # keys, config, rules.json
     gargoyle issuer                             # the issuing service, on rules.json
-    gargoyle approve --watch 2                  # where the approver sits
+    gargoyle approve --watch 2                  # where the approver sits (terminal)
 
-then paste the server entry from `gargoyle-deploy/mcp-config.json` into
-your MCP client. Reads are free, writes block until the approver's key
+or approve in a browser: open the issuer's `/approve` page and load
+`approver-web.json`; the page shows each held call with its full arguments,
+checked against the receipt, and signs the grant locally with WebCrypto.
+The key never leaves the browser. Then paste the server entry from
+`gargoyle-deploy/mcp-config.json` into your MCP client.
+[docs/guide-hyperv-ubuntu-apache.md](docs/guide-hyperv-ubuntu-apache.md)
+is the full single-instance build: Ubuntu VM on Hyper-V, Apache with TLS,
+a Windows 11 client running Claude Code. Reads are free, writes block until the approver's key
 signs, deletes are refused; the policy is a JSON rules file you edit. Every
 honored call comes back with receipt, grant and execution receipt, and
 `gargoyle audit` verifies them later offline.
@@ -224,12 +230,14 @@ cannot attach receipts work unchanged. Configuration is by environment:
 | `GARGOYLE_MCP_APPROVER_KEY_ID`, `GARGOYLE_MCP_APPROVER_PUBLIC_KEY_HEX` | the approver key whose grants release flagged calls (optional, both or neither) |
 | `GARGOYLE_MCP_EXECUTOR_KEY_ID`, `GARGOYLE_MCP_EXECUTOR_KEY_HEX` | this server's own signing key, so honored calls carry an execution receipt in `_meta["gargoyle/execution"]` (optional, both or neither) |
 | `GARGOYLE_MCP_ISSUER_URL`, `GARGOYLE_MCP_CLIENT_TOKEN` | self-issue mode: the issuing service and the identity token (whose subject is this server's principal) to obtain receipts with; `GARGOYLE_MCP_APPROVAL_TIMEOUT_SECONDS` and `GARGOYLE_MCP_POLL_SECONDS` tune the wait for a grant |
+| `GARGOYLE_MCP_AUDIT_LOG` | append every honored call's receipt, grant and execution receipt as one JSON line; `gargoyle audit --log` verifies the file |
 
 **Issuing service** (`gargoyle.issuer_service`, run with uvicorn from
 `app_from_env()`): identity token in, receipt out, with the hold and grant
-exchange for flagged calls (`/issue`, `/pending`, `/grants`, `/record`,
-`/keys`). Policy from a rules file or OPA; identity from a pinned key or,
-with `GARGOYLE_ENTRA_TENANT`, the tenant's signing keys.
+exchange for flagged calls (`/issue`, `/pending`, `/grants`, `/decline`,
+`/record`, `/keys`) and the browser approval console at `/approve`. Policy
+from a rules file or OPA; identity from a pinned key or, with
+`GARGOYLE_ENTRA_TENANT`, the tenant's signing keys.
 
 
 ## Approval holds

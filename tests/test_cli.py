@@ -59,3 +59,51 @@ def test_init_then_issue_hold_approve_execute_audit(tmp_path, monkeypatch, capsy
     assert main(["audit", str(tmp_path / "receipt.json"), str(tmp_path / "execution.json"), str(tmp_path / "grant.json"),
                  "--out", str(out)]) == 0
     assert "chain: CHAIN_VERIFIED" in capsys.readouterr().out
+
+
+def test_init_for_a_windows_client_and_audit_log_verification(tmp_path, monkeypatch, capsys):
+    """Keys generated on the Linux issuer host, config written for a Windows
+    client: paths kept as typed, the client's python in the MCP entry, the
+    issuer reached at its TLS URL. The middleware's audit log is then
+    verified entry by entry."""
+    out = tmp_path / "deploy"
+    assert main(["init", r"C:\Users\jdoe\project", "--out", str(out), "--issuer-url", "https://gargoyle.lan",
+                 "--client-python", r"C:\Python314\python.exe", "--client-config-dir", r"C:\gargoyle"]) == 0
+    env = _read_env(out / "middleware.env")
+    assert env["GARGOYLE_MCP_TARGET_ID"] == r"mcp://filesystem/C:\Users\jdoe\project"
+    assert env["GARGOYLE_MCP_RECORD_PATH"] == r"C:\gargoyle\record.json"
+    assert env["GARGOYLE_MCP_AUDIT_LOG"] == r"C:\gargoyle\audit.jsonl"
+    assert env["GARGOYLE_MCP_ISSUER_URL"] == "https://gargoyle.lan"
+    cfg = json.loads((out / "mcp-config.json").read_text())["mcpServers"]["filesystem-gargoyle"]
+    assert cfg["command"] == r"C:\Python314\python.exe" and cfg["args"][-1] == r"C:\Users\jdoe\project"
+    web = json.loads((out / "approver-web.json").read_text())
+    assert web["issuer_url"] == "https://gargoyle.lan" and set(web["jwk"]) == {"kty", "crv", "d", "x"}
+
+    # An audit log as the middleware writes it, verified with the written public keys.
+    from gargoyle.mcp_server import ServerState, _audit_meta, _gate, IssuerClient
+    monkeypatch.setattr(os, "environ", dict(os.environ, **_read_env(out / "issuer.env")))
+    app = app_from_env(); client = TestClient(app)
+    (out / "record.json").write_text(json.dumps(client.get("/record").json()) + "\n")
+    env["GARGOYLE_MCP_RECORD_PATH"] = str(out / "record.json")
+    monkeypatch.setattr(os, "environ", dict(os.environ, **env))
+    from gargoyle.mcp_server import config_from_env
+    config = config_from_env(); assert config is not None
+    class Shim:
+        def post(self, url, json=None, headers=None, timeout=None): return client.post(url.replace("https://gargoyle.lan", ""), json=json, headers=headers)
+        def get(self, url, headers=None, timeout=None): return client.get(url.replace("https://gargoyle.lan", ""), headers=headers)
+    log = tmp_path / "audit.jsonl"
+    state = ServerState(config, issuer_client=IssuerClient("https://gargoyle.lan", env["GARGOYLE_MCP_CLIENT_TOKEN"], http=Shim()),
+                        audit_log=str(log))
+    for i in range(3):
+        gate = _gate(state, {"name": "list_directory", "arguments": {"path": "C:\\\\x%d" % i}})
+        assert gate["executed"]
+        _audit_meta(state, gate, {"ok": i})
+    assert len(log.read_text().splitlines()) == 3
+    assert main(["audit", "--log", str(log), "--out", str(out)]) == 0
+    out_text = capsys.readouterr().out
+    assert "3 entries, 0 failed" in out_text and out_text.count(" ok ") == 3
+    # A tampered entry is caught.
+    lines = log.read_text().splitlines(); e = json.loads(lines[1]); e["execution"]["outputs_sha256"] = "0" * 64
+    lines[1] = json.dumps(e); log.write_text("\n".join(lines) + "\n")
+    assert main(["audit", "--log", str(log), "--out", str(out)]) == 1
+    assert "1 failed" in capsys.readouterr().out

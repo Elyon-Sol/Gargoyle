@@ -140,6 +140,23 @@ def test_flagged_call_times_out_without_a_grant():
     assert len(client.get("/pending", headers={"Authorization": "Bearer " + token()}).json()["pending"]) == 1
 
 
+def test_declined_hold_stops_the_wait_at_once():
+    from gargoyle.mcp_server import REF_TARGET_APPROVAL_DECLINED
+    client = TestClient(issuer_app())
+    polls = {"n": 0}
+
+    def human_declines_on_first_poll(seconds):
+        polls["n"] += 1
+        pending = client.get("/pending", headers={"Authorization": "Bearer " + token()}).json()["pending"]
+        for h in pending:
+            client.post("/decline", json={"approval_request_id": h["envelope"]["approval_request_id"]},
+                        headers={"Authorization": "Bearer " + token("approver-human")})
+
+    state = middleware(client, sleep=human_declines_on_first_poll, approval_timeout=60)
+    assert gate_tool_call(state, call("write_file", {"path": "a.txt", "content": "x"})) == (False, REF_TARGET_APPROVAL_DECLINED)
+    assert polls["n"] == 1 and state.executed == []
+
+
 def test_a_receipt_the_client_brings_is_not_reissued():
     """Self-issue only fills a gap: a call that carries its own receipt is
     checked as such, and a flagged one still needs the grant in _meta."""

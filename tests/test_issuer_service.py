@@ -93,7 +93,7 @@ def test_flagged_call_is_held_until_a_valid_grant_is_posted(client):
     listed = client.get("/pending", headers=auth()).json()["pending"]
     assert [h["envelope"]["approval_request_id"] for h in listed] == [arid]
     assert listed[0]["args"] == {"path": "a.txt", "content": "x"}      # the reviewer sees the arguments
-    assert client.get("/grants/" + arid, headers=auth()).json() == {"pending": True, "grant": None}
+    assert client.get("/grants/" + arid, headers=auth()).json() == {"pending": True, "grant": None, "declined": False}
 
     def grant_by(key, kid, **over):
         g = build_grant(decision_sha256=over.get("decision_sha256", env["decision_sha256"]),
@@ -132,6 +132,32 @@ def test_expired_holds_are_dropped_and_no_approver_trust_refuses():
     assert len(c2.get("/pending", headers=auth(token())).json()["pending"]) == 1
     clock["now"] = NOW + timedelta(seconds=61)
     assert c2.get("/pending", headers=auth(token(exp=NOW + timedelta(hours=1)))).json()["pending"] == []
+
+
+def test_decline_drops_the_hold_and_is_reported(client):
+    from gargoyle.issuer_service import REF_ISSUER_UNKNOWN_HOLD
+    env = client.post("/issue", json={"target_url": TARGET, "tool": "write_file", "args": {"path": "a.txt"}},
+                      headers=auth()).json()["envelope"]
+    arid = env["approval_request_id"]
+    assert client.post("/decline", json={"approval_request_id": "nope"}, headers=auth()).json()["reason"] == REF_ISSUER_UNKNOWN_HOLD
+    assert client.post("/decline", json={"approval_request_id": arid}, headers=auth()).json() == {"declined": True, "reason": None}
+    assert client.get("/grants/" + arid, headers=auth()).json() == {"pending": False, "grant": None, "declined": True}
+    assert client.get("/pending", headers=auth()).json()["pending"] == []
+    # A grant for a declined hold is refused: the hold is gone.
+    g = sign_grant(build_grant(decision_sha256=env["decision_sha256"], approval_request_id=arid, grant_id="g",
+                               not_after=NOW + timedelta(minutes=1)), approver, "approver-alice")
+    assert client.post("/grants", json=g, headers=auth()).json()["reason"] == REF_ISSUER_UNKNOWN_HOLD
+    assert client.post("/decline", json="junk", headers=auth()).json()["declined"] is False
+
+
+def test_the_approval_console_is_served(client):
+    page = client.get("/approve")
+    assert page.status_code == 200 and page.headers["content-type"].startswith("text/html")
+    assert "Gargoyle approvals" in page.text and 'src' not in page.text.split("<script")[0]
+    js = client.get("/approve.js")
+    assert js.status_code == 200 and "export async function signGrant" in js.text
+    # The console needs no token to load; every data call it makes does.
+    assert client.get("/pending").status_code == 401
 
 
 def test_record_and_keys_are_public(client):

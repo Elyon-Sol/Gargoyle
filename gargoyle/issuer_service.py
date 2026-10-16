@@ -10,8 +10,13 @@ exchange for flagged calls.
                             they are releasing (the receipt's args_sha256 binds them)
     POST /grants            Bearer; body = a signed grant for one of them
                             -> {"accepted": true|false, "reason": ...}
+    POST /decline           Bearer; body {approval_request_id}: drop the hold, so the
+                            middleware waiting on it stops at once instead of timing out
     GET  /grants/{approval_request_id}
-                            Bearer; -> {"pending": bool, "grant": <grant>|null}
+                            Bearer; -> {"pending": bool, "grant": <grant>|null, "declined": bool}
+    GET  /approve, /approve.js
+                            the approval console: a page that lists the holds and
+                            signs grants in the browser with the approver's key
     GET  /record            the published record {policy_id, policy_sha256}
     GET  /keys              {issuer_key_id: public key hex}
 
@@ -30,9 +35,13 @@ it again when the call runs. The pending set is in memory: one instance.
 
 import os
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
 from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi.responses import Response
+
+STATIC = Path(__file__).resolve().parent / "static"
 
 from gargoyle.approval import verify_grant
 from gargoyle.identity import entra_keys, principal_from_token
@@ -73,6 +82,7 @@ def build_issuer_app(
     app.state.pending: Dict[str, Dict[str, Any]] = {}     # approval_request_id -> envelope
     app.state.pending_args: Dict[str, Any] = {}           # approval_request_id -> the call's arguments
     app.state.grants: Dict[str, Dict[str, Any]] = {}      # approval_request_id -> grant
+    app.state.declined: set = set()                       # approval_request_ids a human refused
 
     def _refuse(status: int, reason: str) -> HTTPException:
         return HTTPException(status_code=status, detail={"reason": reason})
@@ -148,11 +158,38 @@ def build_issuer_app(
         app.state.grants[arid] = grant
         return {"accepted": True, "reason": g["reason"]}
 
+    @app.post("/decline")
+    async def decline(request: Request, authorization: Optional[str] = Header(default=None)):
+        """A human's refusal: the hold is dropped, a waiting middleware learns
+        at once. No signature is needed to say no; nothing can run on it."""
+        authenticate(authorization)
+        try:
+            body = await request.json()
+        except Exception:
+            raise _refuse(400, REF_ISSUER_BAD_REQUEST)
+        arid = body.get("approval_request_id") if isinstance(body, dict) else None
+        if not isinstance(arid, str) or arid not in app.state.pending:
+            return {"declined": False, "reason": REF_ISSUER_UNKNOWN_HOLD}
+        del app.state.pending[arid]
+        app.state.pending_args.pop(arid, None)
+        app.state.grants.pop(arid, None)
+        app.state.declined.add(arid)
+        return {"declined": True, "reason": None}
+
     @app.get("/grants/{approval_request_id}")
     async def get_grant(approval_request_id: str, authorization: Optional[str] = Header(default=None)):
         authenticate(authorization)
         return {"pending": approval_request_id in app.state.pending,
-                "grant": app.state.grants.get(approval_request_id)}
+                "grant": app.state.grants.get(approval_request_id),
+                "declined": approval_request_id in app.state.declined}
+
+    @app.get("/approve")
+    async def approve_page():
+        return Response((STATIC / "approve.html").read_bytes(), media_type="text/html; charset=utf-8")
+
+    @app.get("/approve.js")
+    async def approve_script():
+        return Response((STATIC / "approve.js").read_bytes(), media_type="text/javascript; charset=utf-8")
 
     @app.get("/record")
     async def record():

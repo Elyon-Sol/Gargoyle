@@ -45,5 +45,8 @@ gargoyle-approver = "gargoyle.approver_cli:main"
 [tool.setuptools]
 packages = ["gargoyle"]
 
+[tool.setuptools.package-data]
+gargoyle = ["static/*"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
