@@ -132,8 +132,8 @@ def cmd_issuer(args) -> int:
     out = Path(args.out).resolve()
     os.environ.update(_read_env(out / "issuer.env"))
     app = app_from_env()
-    # The middleware anchors on the published record's bytes; write it next to
-    # the config so the client-side entry finds it at the configured path.
+    # The middleware reads the policy pin from a file; write it next to the
+    # config so the client-side entry finds it at the configured path.
     from gargoyle.rules import RulesPolicy
     policy = RulesPolicy(os.environ["GARGOYLE_RULES_PATH"])
     (out / "record.json").write_text(json.dumps(policy.pin(), indent=2) + "\n")

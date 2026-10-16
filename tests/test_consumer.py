@@ -9,19 +9,17 @@ import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from gargoyle.consumer import (
-    REF_TARGET_ANCHOR_MISMATCH, REF_TARGET_NO_DECISION_ID, Consumer, HighWater, Verdict,
+    REF_TARGET_NO_DECISION_ID, Consumer, HighWater, Verdict,
 )
 from gargoyle.envelope import build_envelope, sign_envelope
 from gargoyle.issuer import issue
 from gargoyle.policy import ELIGIBLE, Decision
-from gargoyle.published_source import anchor_sha256
 from gargoyle.verifier import (
     ACCEPT_REASSERTED_AND_BOUND, REF_VERIFY_BINDING_MISMATCH, REF_VERIFY_KEY_RECORD_INVALID,
     REF_VERIFY_KEY_RECORD_STALE, REF_VERIFY_PUBLISHED_RECORD_INVALID,
     REF_VERIFY_PUBLISHED_RECORD_STALE, REF_VERIFY_REPLAY, REF_VERIFY_SIGNATURE_INVALID,
     REF_VERIFY_SIGNATURE_UNKNOWN_KEY,
 )
-from reference import reference_pin, reference_record_bytes
 
 TARGET = "https://target.example/act"
 KID = "issuer-1"
@@ -61,8 +59,9 @@ def test_requires_exactly_one_pin_source():
     with pytest.raises(ValueError):
         Consumer(target_id=TARGET, pinned_public_keys={KID: pub})
     with pytest.raises(ValueError):
-        Consumer(target_id=TARGET, pinned_public_keys={KID: pub}, record=PIN,
-                 record_bytes=reference_record_bytes())
+        Consumer(target_id=TARGET, pinned_public_keys={KID: pub}, record=PIN, record_source=lambda s: {})
+    with pytest.raises(ValueError):
+        Consumer(target_id=TARGET, pinned_public_keys={KID: pub}, record={"policy_id": "x"})   # not a pin
 
 
 def test_requires_issuer_key_trust():
@@ -108,18 +107,6 @@ def test_replay_claim_outlives_not_after_by_the_skew():
     assert c.check(env, call(), now=inside_skew) == (False, REF_VERIFY_REPLAY)
 
 
-# ---- anchored bytes ----
-
-def test_record_bytes_are_anchored():
-    raw = reference_record_bytes()
-    ok = Consumer(target_id=TARGET, pinned_public_keys={KID: pub}, record_bytes=raw)
-    assert ok._pinned_root == anchor_sha256(raw)
-    bad = Consumer(target_id=TARGET, pinned_public_keys={KID: pub}, record_bytes=raw,
-                   pinned_root="0" * 64)
-    assert bad.check(receipt(), call(), now=NOW) == (False, REF_TARGET_ANCHOR_MISMATCH)
-    # A receipt under another pin than the anchored record's is not current.
-    assert ok.check(receipt(), call(), now=NOW).honored is False
-    assert reference_pin() != PIN
 
 
 # ---- a record source: consulted every check, serial threaded, fail closed ----
@@ -146,9 +133,9 @@ def test_record_source_threads_the_high_water_mark_and_refuses_rollback():
 
 
 @pytest.mark.parametrize("result,reason", [
-    ({"record": None, "reason": None}, REF_TARGET_ANCHOR_MISMATCH),
+    ({"record": None, "reason": None}, REF_VERIFY_PUBLISHED_RECORD_INVALID),
     ({"record": None, "reason": "REF_VERIFY_PUBLISHED_RECORD_INVALID"}, REF_VERIFY_PUBLISHED_RECORD_INVALID),
-    ("garbage", REF_TARGET_ANCHOR_MISMATCH),
+    ("garbage", REF_VERIFY_PUBLISHED_RECORD_INVALID),
     (RuntimeError("publisher down"), REF_VERIFY_PUBLISHED_RECORD_INVALID),
 ])
 def test_record_source_failure_refuses(result, reason):

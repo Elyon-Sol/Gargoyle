@@ -48,7 +48,7 @@ from typing import Any, Dict, List, Optional
 
 from gargoyle.consumer import REF_TARGET_NOT_CONFIGURED, Consumer
 from gargoyle.envelope import valid_principal
-from gargoyle.published_source import anchor_sha256
+from gargoyle.policy import valid_pin
 from gargoyle.replay_cache import InMemoryReplayCache
 
 # MCP protocol version this server speaks (a real MCP revision string).
@@ -56,7 +56,7 @@ PROTOCOL_VERSION = "2025-06-18"
 SERVER_INFO = {"name": "gargoyle", "version": "0.1.0"}
 
 # The _meta key the receipt rides under in tools/call params (the MCP
-# counterpart of the HTTP X-Gargoyle-Envelope header).
+# counterpart of the X-Gargoyle-Envelope header an issuer hands out over HTTP).
 ENVELOPE_META_KEY = "gargoyle/envelope"
 GRANT_META_KEY = "gargoyle/grant"
 EXECUTED_META_KEY = "gargoyle/executed"
@@ -227,7 +227,7 @@ def call_for(tool: str, args: Any, principal: str) -> Dict[str, Any]:
 
 
 class ServerState:
-    """The executor's out-of-band trust material (issuer keys, record anchor,
+    """The executor's out-of-band trust material (issuer keys, the policy record,
     target id, the principal it serves) as a Consumer, and the list of tool
     calls actually executed. `config` None, or a config without a usable
     principal, means unconfigured: every tools/call is refused with
@@ -248,8 +248,7 @@ class ServerState:
             self.consumer = Consumer(
                 target_id=config["target_id"],
                 pinned_public_keys=config["pinned_public_keys"],
-                record_bytes=config["record_bytes"],
-                pinned_root=config["pinned_root"],
+                record=config["record"],
                 replay_cache=replay_cache,
                 approver_public_keys=config.get("approver_public_keys"),
                 executor_signing_key=config.get("executor_signing_key"),
@@ -440,8 +439,8 @@ def config_from_env() -> Optional[Dict[str, Any]]:
     GARGOYLE_MCP_GATE_PUBLIC_KEY_HEX pin the issuer's public key;
     GARGOYLE_MCP_TARGET_ID is the identity receipts bind to;
     GARGOYLE_MCP_PRINCIPAL is the client this server serves (see the module
-    docstring); the published record (the live policy pin) is read from
-    GARGOYLE_MCP_RECORD_PATH and anchored on its own bytes. All five are
+    docstring); the published record (the live policy pin, {policy_id,
+    policy_sha256}) is read from GARGOYLE_MCP_RECORD_PATH. All five are
     required; there is no default record. GARGOYLE_MCP_APPROVER_KEY_ID and
     GARGOYLE_MCP_APPROVER_PUBLIC_KEY_HEX, both or neither, pin the approver
     key whose grants release flagged receipts."""
@@ -472,13 +471,14 @@ def config_from_env() -> Optional[Dict[str, Any]]:
             if ap_key_id else None
         )
         with open(record_path, "rb") as f:
-            record_bytes = f.read()
+            record = json.loads(f.read().decode("utf-8"))
+        if not valid_pin(record):
+            return None
     except Exception:
         return None
     return {
         "pinned_public_keys": {key_id: public_key},
-        "record_bytes": record_bytes,
-        "pinned_root": anchor_sha256(record_bytes),
+        "record": record,
         "target_id": target_id,
         "principal": principal,
         "approver_public_keys": approver_keys,

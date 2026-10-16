@@ -16,7 +16,6 @@ The keypair is generated per test and never written to disk.
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from reference import reference_policy
-from gargoyle.policy import ManifestPolicy
 from gargoyle.envelope import (
     REASSERTED,
     args_sha256,

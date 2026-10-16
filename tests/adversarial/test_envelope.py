@@ -18,7 +18,6 @@ from gargoyle.envelope import (
     reassert,
     sign_envelope,
 )
-from gargoyle.policy import ManifestPolicy
 
 TARGET = "http://127.0.0.1:9000/target"
 

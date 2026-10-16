@@ -18,10 +18,8 @@ from gargoyle.mcp_server import (
     ENVELOPE_META_KEY, EXECUTED_META_KEY, REASON_META_KEY, ServerState, StdioUpstream,
     call_for, handle_message, upstream_from_argv,
 )
-from gargoyle.policy import manifest_sha256
-from gargoyle.published_source import anchor_sha256
 from gargoyle.verifier import REF_VERIFY_ENVELOPE_ABSENT, REF_VERIFY_REPLAY
-from reference import MANIFEST_PATH, reference_policy, reference_record_bytes
+from reference import reference_pin, reference_policy, reference_record_bytes
 
 FIXTURE = str(Path(__file__).parent / "fixtures" / "echo_mcp_server.py")
 UPSTREAM_CMD = [sys.executable, "-I", FIXTURE]
@@ -39,15 +37,12 @@ def upstream():
 
 
 def _config(key):
-    record_bytes = reference_record_bytes()
-    return {"pinned_public_keys": {"k1": key.public_key()}, "record_bytes": record_bytes,
-            "pinned_root": anchor_sha256(record_bytes), "target_id": TARGET_ID, "principal": PRINCIPAL}
+    return {"pinned_public_keys": {"k1": key.public_key()}, "record": reference_pin(),
+            "target_id": TARGET_ID, "principal": PRINCIPAL}
 
 
 def _receipt(key, args):
-    interaction = {**call_for("echo", args, PRINCIPAL), "AP": ["identity", "role"], "OP": ["session", "request"],
-                   "expected_manifest_version": "1.0", "expected_manifest_sha256": manifest_sha256(MANIFEST_PATH)}
-    return issue(reference_policy(), TARGET_ID, interaction, signing_key=key, key_id="k1").envelope
+    return issue(reference_policy(), TARGET_ID, call_for("echo", args, PRINCIPAL), signing_key=key, key_id="k1").envelope
 
 
 def _calls(upstream):

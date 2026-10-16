@@ -20,7 +20,6 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
 from reference import reference_policy
-from gargoyle.policy import ManifestPolicy
 from gargoyle.envelope import build_envelope, sign_envelope, canonical_json
 from gargoyle.key_record_source import load_key_record_from_bytes
 from gargoyle.verifier import (

@@ -116,7 +116,7 @@ decision := {"allow": true, "requires_approval": input.tool == "transfer_funds"}
 
 OPA unreachable, an undefined document, or a result in no recognized shape
 is a refusal, never an issuance. Any other engine goes behind the same
-two-method interface. `gargoyle.policy.ManifestPolicy` is a test fixture.
+two-method interface.
 
 **No engine.** `gargoyle.rules.RulesPolicy` decides from a JSON file:
 first matching rule wins, globs on tool name, principal, delegation,
@@ -158,9 +158,9 @@ never honored. For a flagged receipt, pass the human's grant as
 hold, claims it once, and only then claims the receipt.
 
 For a live pin that can be reissued, give the consumer a record source
-(a publisher-signed record with a serial and an expiry) instead of
-anchored bytes; for issuer keys that can be rotated and revoked, a key
-record source. Both are consulted on every check and fail closed.
+(a publisher-signed record with a serial and an expiry) instead of a
+static pin; for issuer keys that can be rotated and revoked, a key record
+source. Both are consulted on every check and fail closed.
 
 ## Proof that it ran
 
@@ -200,7 +200,7 @@ honored call comes back with receipt, grant and execution receipt, and
 and through the alternative with OPA in Docker for sites that run a policy
 engine.
 
-## Two shipped consumers
+## The shipped consumer
 
 **MCP middleware** (`python -m gargoyle.mcp_server -- <upstream command>`):
 a stdio MCP server you put in front of any other stdio MCP server. The
@@ -231,16 +231,6 @@ exchange for flagged calls (`/issue`, `/pending`, `/grants`, `/record`,
 `/keys`). Policy from a rules file or OPA; identity from a pinned key or,
 with `GARGOYLE_ENTRA_TENANT`, the tenant's signing keys.
 
-**Reference HTTP target** (`uvicorn gargoyle.consumer:app`): a FastAPI
-service that authenticates the caller by transport, reads `{"tool", "args"}`
-from the body, the receipt from `X-Gargoyle-Envelope` and a grant from
-`X-Gargoyle-Grant`, and acts only on a verdict. The default principal source
-is the client certificate the TLS-terminating proxy verified, read from
-Envoy's `X-Forwarded-Client-Cert` (URI SAN, else Subject); set
-`GARGOYLE_PRINCIPAL_SOURCE=header` and `GARGOYLE_PRINCIPAL_HEADER` for a
-proxy-set identity header instead, or inject a resolver. In every mode the
-proxy must strip any client-supplied copy of the header. Its environment
-variables are listed at the top of `gargoyle/consumer.py`.
 
 ## Approval holds
 
@@ -278,7 +268,7 @@ on it.
 | `issuer_service` | the HTTP issuing service: identity in, receipts out, holds and grants |
 | `replay_cache`, `pending_store` | single use for receipts and holds; in-memory or Redis |
 | `approval`, `approver_cli`, `approver_trust` | grants, the human's tool, approver key trust |
-| `published_source`, `published_record_source` | the live policy pin, anchored or signed |
+| `published_record_source` | the live policy pin as a publisher-signed record with serial and expiry |
 | `key_record_source` | root-signed issuer and approver keys with windows and revocation |
 | `transport` | HTTPS with CA bundle, client certificates, no redirects, DNS pinning |
 
@@ -291,8 +281,8 @@ on it.
   client certificate its proxy verified); Gargoyle compares the two results.
 - It cannot stop a caller that never asks for a receipt. Only a target that
   refuses unattested calls can.
-- It does not distribute trust material. Issuer keys, record anchors, root
-  keys and the proxy's identity header are the deployer's to protect.
+- It does not distribute trust material. Issuer keys, record files, root
+  keys and the client token are the deployer's to protect.
 - The approval flow separates duties only if the approver's private key is
   out of the issuing service's reach. That is a deployment property.
 

@@ -1,12 +1,11 @@
-"""Signed published-record reader: a record that can be reissued and goes stale.
+"""Signed published-record reader: the live policy pin, fetched from a
+publisher and trusted by its signature.
 
-published_source pins the SHA-256 of a record's bytes. That pin has no time
-dimension: an old record that still matches the anchor is honored forever,
-and every reissue needs a new anchor on every target. This reader pins a
-publisher public key instead and verifies a publisher signature over a
-record carrying a serial and a not_after, so the publisher can reissue under
-a stable pin and a stale or rolled-back record is refused
-(REF_VERIFY_PUBLISHED_RECORD_STALE).
+A consumer on the issuer's own host can read the pin from a file. One on
+another host fetches it; this reader pins a publisher public key and
+verifies a publisher signature over a record carrying a serial and a
+not_after, so the publisher can reissue under a stable pin and a stale or
+rolled-back record is refused (REF_VERIFY_PUBLISHED_RECORD_STALE).
 
 The pinned publisher key is held out-of-band and is never fetched alongside
 the record, which would be circular. canonical_json is shared with the
@@ -25,7 +24,11 @@ from typing import Any, Dict, Optional
 
 from cryptography.exceptions import InvalidSignature
 
-from gargoyle.transport import get_published
+import os
+
+import requests
+
+ENV_CA_BUNDLE = "GARGOYLE_TLS_CA_BUNDLE"   # a CA bundle for the publisher's TLS, else the system default
 
 from gargoyle.verifier import (
     REF_VERIFY_PUBLISHED_RECORD_INVALID,
@@ -170,8 +173,7 @@ def fetch_signed_record(
     PUBLISHED_RECORD_INVALID: the target refuses rather than proceeding
     without a validated record."""
     try:
-        # TLS settings come from gargoyle.transport (GARGOYLE_TLS_CA_BUNDLE).
-        response = get_published(publisher_url, timeout=timeout)
+        response = requests.get(publisher_url, timeout=timeout, verify=os.environ.get(ENV_CA_BUNDLE) or True)
     except Exception:
         return _reject(REF_VERIFY_PUBLISHED_RECORD_INVALID)
     if response.status_code != 200:

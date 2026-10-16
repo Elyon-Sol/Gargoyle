@@ -20,7 +20,6 @@ from gargoyle.mcp_server import (
     IssuerClient, ServerState, StdioUpstream, handle_message, gate_tool_call,
 )
 from gargoyle.policy import ELIGIBLE, Decision, refuse
-from gargoyle.published_source import anchor_sha256
 from gargoyle.verifier import REF_VERIFY_PRINCIPAL_MISMATCH
 from cryptography.hazmat.primitives.serialization import Encoding, NoEncryption, PrivateFormat
 
@@ -61,9 +60,8 @@ def issuer_app():
 
 
 def middleware(client, token_sub=PRINCIPAL, sleep=None, approval_timeout=5.0, attest=False):
-    record_bytes = (json.dumps(PIN) + "\n").encode()
-    config = {"pinned_public_keys": {"issuer-1": issuer.public_key()}, "record_bytes": record_bytes,
-              "pinned_root": anchor_sha256(record_bytes), "target_id": TARGET, "principal": PRINCIPAL,
+    config = {"pinned_public_keys": {"issuer-1": issuer.public_key()}, "record": PIN,
+              "target_id": TARGET, "principal": PRINCIPAL,
               "approver_public_keys": {"approver-alice": approver.public_key()}}
     if attest:
         config.update(executor_signing_key=executor, executor_key_id="executor-1")

@@ -315,17 +315,13 @@ an issuer-controlled key published under another id.
 
 ## 9. The published policy record
 
-A target on another host learns the live policy pin from a published
-record, never from its own disk.
+A consumer learns the live policy pin either from a record file it was
+given out of band (the JSON object `{policy_id, policy_sha256}`, read at
+startup; the MCP middleware's `GARGOYLE_MCP_RECORD_PATH`) or, on another
+host, from a published record it fetches and verifies against a pinned
+publisher public key:
 
-**Anchored form.** The record is the JSON object `{policy_id, policy_sha256}`
-(any whitespace). The target pins `sha256(record_bytes)` out of band and
-refuses bytes that do not hash to it (`REF_TARGET_ANCHOR_MISMATCH`). This
-form has no time dimension: every reissue needs a new anchor on every
-target.
-
-**Signed form** (`gargoyle-published-record`), verified against a pinned
-publisher public key instead of an anchor:
+**Signed form** (`gargoyle-published-record`):
 
 | Field | Type | Meaning |
 |---|---|---|
@@ -453,20 +449,11 @@ The complete objects are in `tests/fixtures/wire_vectors.json`.
 
 ## 12. Transport and versioning
 
-- HTTP: the receipt travels as JSON in the `X-Gargoyle-Envelope` request
-  header and a grant, when one is needed, in `X-Gargoyle-Grant`. Two copies
-  of either header are ambiguous and count as absent.
-  The reference target's body is exactly `{"tool", "args"}`; the principal
-  comes from the target's own authentication: by default the client
-  certificate the TLS-terminating proxy verified, read from the last element
-  of `X-Forwarded-Client-Cert` (its `URI` SAN, else its `Subject`), or a
-  proxy-set identity header, or an injected resolver. In every mode the
-  proxy must strip any client-supplied copy of the header. The
-  target refuses every call while its out-of-band configuration is missing
-  (`REF_TARGET_NOT_CONFIGURED`) and any call for which it authenticated
-  nobody (`REF_TARGET_NO_PRINCIPAL`), both before the receipt is read.
-  Refusals are HTTP 403 with body `{"detail": {"honored": false, "reason": <code>}}`;
-  an honored call answers 200 with `{"honored": true, "reason": "REASSERTED_AND_BOUND"}`.
+- HTTP: an issuer hands a receipt to a caller as JSON, conventionally in
+  the `X-Gargoyle-Envelope` header, or as the JWS of section 14. An HTTP
+  consumer is not specified; the MCP middleware is the shipped consumer. A
+  consumer with no configuration refuses every call
+  (`REF_TARGET_NOT_CONFIGURED`).
 - MCP: the receipt rides in `tools/call` `params._meta["gargoyle/envelope"]`
   and a grant in `params._meta["gargoyle/grant"]`; the response `_meta`
   carries `gargoyle/executed` (boolean) and `gargoyle/reason`. A stdio

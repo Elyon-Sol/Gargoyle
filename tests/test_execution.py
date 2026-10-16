@@ -6,10 +6,9 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-from fastapi.testclient import TestClient
 
 from gargoyle.approval import build_grant, sign_grant, REF_APPROVAL_KEY_UNKNOWN
-from gargoyle.consumer import Consumer, build_reference_target_app
+from gargoyle.consumer import Consumer
 from gargoyle.envelope import canonical_json, sign_envelope
 from gargoyle.execution import (
     ACCEPT_CHAIN_VERIFIED, ACCEPT_EXECUTION_BOUND, EXECUTION_VERSION, REF_EXEC_BINDING_MISMATCH,
@@ -20,7 +19,6 @@ from gargoyle.execution import (
 from gargoyle.issuer import issue
 from gargoyle.policy import ELIGIBLE, Decision
 from gargoyle.verifier import REF_VERIFY_SIGNATURE_EXPIRED
-from reference import reference_pin, reference_policy
 
 TARGET = "https://target.example/act"
 PIN = {"policy_id": "engine/1", "policy_sha256": "a" * 64}
@@ -163,30 +161,3 @@ def test_consumer_attests_only_with_an_executor_key():
     ex = c.attest(env, OUTPUTS, executed_at=RAN)
     assert verify_chain(env, ex, issuer_public_keys=ISSUER_KEYS, executor_public_keys=EXEC_KEYS)["accepted"] is True
 
-
-def test_reference_target_returns_an_execution_receipt_when_configured(gate_signing):
-    config = {"target_url": TARGET, "publisher_url": "http://pub", "pinned_root_sha256": "x",
-              "pinned_public_keys": {gate_signing["key_id"]: gate_signing["public_key"]},
-              "principal_header": "X-Peer",
-              "executor_signing_key": executor, "executor_key_id": "executor-1"}
-    app = build_reference_target_app(config_provider=lambda: config, fetch=lambda url, anchor: reference_pin())
-    client = TestClient(app)
-    env = issue(reference_policy(), TARGET, {**CALL, "AP": ["identity", "role"], "OP": ["session", "request"],
-                                             "expected_manifest_version": "1.0",
-                                             "expected_manifest_sha256": reference_pin()["policy_sha256"]},
-                signing_key=gate_signing["private_key"], key_id=gate_signing["key_id"]).envelope
-    r = client.post("/target", json={"tool": "transfer", "args": {"amount": 5}},
-                    headers={"X-Gargoyle-Envelope": canonical_json(env), "X-Peer": "agent-7"})
-    assert r.status_code == 200, r.text
-    body = r.json()
-    chain = verify_chain(env, body["execution"], issuer_public_keys={gate_signing["key_id"]: gate_signing["public_key"]},
-                         executor_public_keys=EXEC_KEYS, outputs=body["outputs"], check_outputs=True)
-    assert chain["accepted"] is True
-    del config["executor_signing_key"]; del config["executor_key_id"]
-    env2 = issue(reference_policy(), TARGET, {**CALL, "AP": ["identity", "role"], "OP": ["session", "request"],
-                                              "expected_manifest_version": "1.0",
-                                              "expected_manifest_sha256": reference_pin()["policy_sha256"]},
-                 signing_key=gate_signing["private_key"], key_id=gate_signing["key_id"]).envelope
-    r = client.post("/target", json={"tool": "transfer", "args": {"amount": 5}},
-                    headers={"X-Gargoyle-Envelope": canonical_json(env2), "X-Peer": "agent-7"})
-    assert r.status_code == 200 and "execution" not in r.json()

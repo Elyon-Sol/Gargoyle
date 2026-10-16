@@ -11,7 +11,7 @@ from reference import reference_policy
 from gargoyle.envelope import build_envelope, sign_envelope
 from gargoyle.consumer import Consumer
 from gargoyle.issuer import ISSUE_UNBINDABLE_CALL, issue
-from gargoyle.policy import ELIGIBLE, Decision, ManifestPolicy
+from gargoyle.policy import ELIGIBLE, Decision
 from gargoyle.verifier import (
     ACCEPT_REASSERTED_AND_BOUND,
     REF_VERIFY_PRINCIPAL_MISMATCH,

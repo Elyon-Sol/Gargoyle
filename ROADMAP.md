@@ -106,6 +106,13 @@ outside.
   when they hash to the receipt. Verified end to end against the real filesystem
   MCP server with no OPA and no containers. This is the shape a small IT practice
   can run for a client: one rules file, one issuer process, one approver terminal.
+- Pruning pass (2026-10-16), before anyone outside reads the repo: the manifest
+  policy and impact module (a test fixture by then) removed in favour of the rules
+  file; the byte-anchored record mode and the transport module removed, leaving
+  the file pin and the signed record; the HTTP reference target and its
+  principal resolvers removed, leaving the MCP middleware as the one shipped
+  consumer. 23 modules / 5,250 lines became 20 / 4,300; 50 environment variables became 33; six configuration
+  choices became three. Nothing the spec guarantees changed.
 - Enterprise identity (2026-10-16): identity tokens may be RS256 or ES256 from a
   provider's JWKS (keys_from_jwks, entra_keys; GARGOYLE_ENTRA_TENANT on the issuer);
   Entra's preferred_username/upn is the principal; groups and app roles are policy

@@ -21,7 +21,6 @@ import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from reference import reference_policy
-from gargoyle.policy import ManifestPolicy
 from gargoyle.envelope import (
     build_envelope,
     canonical_json,
