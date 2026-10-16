@@ -106,3 +106,10 @@ outside.
   when they hash to the receipt. Verified end to end against the real filesystem
   MCP server with no OPA and no containers. This is the shape a small IT practice
   can run for a client: one rules file, one issuer process, one approver terminal.
+- Enterprise identity (2026-10-16): identity tokens may be RS256 or ES256 from a
+  provider's JWKS (keys_from_jwks, entra_keys; GARGOYLE_ENTRA_TENANT on the issuer);
+  Entra's preferred_username/upn is the principal; groups and app roles are policy
+  inputs and rules match them (`groups`, `roles`). Still to build for an Entra
+  rollout: a `gargoyle login` that acquires the middleware's token from Entra by
+  device-code flow (MSAL) instead of the init-minted token, and approver roles in
+  the receipt (step 4) so a finance hold needs a finance approver.

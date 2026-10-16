@@ -34,7 +34,10 @@ still change before the first release; it is specified in [SPEC.md](SPEC.md).
 - **Standard encodings.** A receipt can travel as a JWS (EdDSA) that any
   JWT library verifies, and the issuer can take the caller's identity from
   an OAuth bearer token, an RFC 8693 delegation token or a Transaction
-  Token.
+  Token, signed EdDSA, RS256 or ES256 by keys from the provider's JWKS.
+  With Entra ID the principal is the user's UPN and the token's groups and
+  app roles become policy inputs, so a rules file can say "finance may hold
+  invoice updates; shipping may not" without naming people.
 - **Single use.** Every receipt carries a signed `decision_id`; an executor
   claims it exactly once. A replayed receipt is refused.
 - **Expiry.** Every receipt carries a signed `not_after` (default 300 s). A
@@ -73,6 +76,7 @@ the policy pin.
 from gargoyle.issuer import ENVELOPE_HEADER, issue
 
 who = principal_from_token(bearer_or_transaction_token, IDP_KEYS, audience="issuer")  # gargoyle.identity
+# IDP_KEYS: pinned, or entra_keys("<tenant>") / keys_from_jwks(<provider JWKS>)
 interaction = {
     "tool": "transfer_funds",
     "args": {"amount": 250, "to": "acct-9"},
@@ -115,8 +119,9 @@ is a refusal, never an issuance. Any other engine goes behind the same
 two-method interface. `gargoyle.policy.ManifestPolicy` is a test fixture.
 
 **No engine.** `gargoyle.rules.RulesPolicy` decides from a JSON file:
-first matching rule wins, globs on tool name, principal, delegation and
-string arguments, actions allow, hold or deny. The pin is the file's hash,
+first matching rule wins, globs on tool name, principal, delegation,
+the caller's groups and roles, and string arguments, actions allow, hold
+or deny. The pin is the file's hash,
 so an edit invalidates outstanding receipts exactly as an engine change
 does. This is what `gargoyle init` sets up.
 
@@ -223,7 +228,8 @@ cannot attach receipts work unchanged. Configuration is by environment:
 **Issuing service** (`gargoyle.issuer_service`, run with uvicorn from
 `app_from_env()`): identity token in, receipt out, with the hold and grant
 exchange for flagged calls (`/issue`, `/pending`, `/grants`, `/record`,
-`/keys`). Backed by `OpaPolicy`.
+`/keys`). Policy from a rules file or OPA; identity from a pinned key or,
+with `GARGOYLE_ENTRA_TENANT`, the tenant's signing keys.
 
 **Reference HTTP target** (`uvicorn gargoyle.consumer:app`): a FastAPI
 service that authenticates the caller by transport, reads `{"tool", "args"}`

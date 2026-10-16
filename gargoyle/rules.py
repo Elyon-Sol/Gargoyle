@@ -17,8 +17,10 @@ not run a policy engine. First matching rule wins; no match is the default.
 
 A rule matches when the call's tool matches one of its `tools` globs, and,
 when given, its principal matches one of `principals`, its on_behalf_of one
-of `on_behalf_of`, and every key in `args` is present in the call's
-arguments with a string value matching the glob. Actions: "allow" (free),
+of `on_behalf_of`, any of the caller's `groups` or `roles` (from the
+identity token: Entra group ids or app roles) matches one of the rule's,
+and every key in `args` is present in the call's arguments with a string
+value matching the glob. Actions: "allow" (free),
 "hold" (allowed, needs a human's grant), "deny" (refused; `reason` names
 why, default RULE_DENIED). `default` is "deny" unless the file says
 "allow" or "hold".
@@ -68,7 +70,7 @@ def validate_rules(doc: Any) -> Optional[str]:
             return "rule %d: tools must be a non-empty list of globs" % i
         if rule.get("action") not in _ACTIONS:
             return "rule %d: action must be allow, hold or deny" % i
-        for key in ("principals", "on_behalf_of"):
+        for key in ("principals", "on_behalf_of", "groups", "roles"):
             if key in rule and _globs(rule[key]) is None:
                 return "rule %d: %s must be a list of globs" % (i, key)
         if "args" in rule and (not isinstance(rule["args"], dict)
@@ -83,6 +85,12 @@ def _any_match(value: Any, globs: Optional[list]) -> bool:
     if globs is None:
         return True
     return isinstance(value, str) and any(fnmatch.fnmatchcase(value, g) for g in globs)
+
+
+def _any_of_list(values: Any, globs: list) -> bool:
+    if not isinstance(values, list):
+        return False
+    return any(_any_match(v, globs) for v in values)
 
 
 def _args_match(args: Any, pattern: Dict[str, str]) -> bool:
@@ -104,6 +112,10 @@ def decide_rules(doc: Dict[str, Any], interaction: Mapping[str, Any]) -> Decisio
         if "principals" in rule and not _any_match(interaction.get("principal"), rule["principals"]):
             continue
         if "on_behalf_of" in rule and not _any_match(interaction.get("on_behalf_of"), rule["on_behalf_of"]):
+            continue
+        if "groups" in rule and not _any_of_list(interaction.get("groups"), rule["groups"]):
+            continue
+        if "roles" in rule and not _any_of_list(interaction.get("roles"), rule["roles"]):
             continue
         if "args" in rule and not _args_match(interaction.get("args"), rule["args"]):
             continue

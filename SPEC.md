@@ -482,9 +482,13 @@ The complete objects are in `tests/fixtures/wire_vectors.json`.
   an RFC 8693 delegation token) maps it to the two receipt fields with
   `gargoyle.identity`: `act.sub` is the principal and `sub` the party acted
   for; else `agentic_ctx.actor` / `agentic_ctx.principal` (Transaction
-  Tokens for Agents); else `sub` alone. The token must be EdDSA-signed by a
-  key the service trusts, unexpired, and for the service's audience when one
-  is configured.
+  Tokens for Agents); else `preferred_username` or `upn` (OIDC providers
+  such as Entra ID, whose `sub` is opaque); else `sub`. `groups` and
+  `roles` claims are passed to the policy as inputs and never enter the
+  receipt. The token must be signed EdDSA, RS256 or ES256 by a key the
+  service trusts, with the algorithm fixed by the key's type (a header
+  cannot choose), unexpired, and for the service's audience when one is
+  configured.
 - `envelope_version` names this format. Any change to a field set, a hash
   or signature region, or the verification order is a new version;
   verifiers do not accept a version they do not implement
@@ -581,6 +585,8 @@ then hands the inner receipt to the ordinary procedure of section 6. The
 inner canonical signature is what binds the decision; the outer one exists
 for the libraries that cannot compute canonical JSON.
 
-The same encoding, read with the same rules, is accepted as the issuer's
-identity input (section 12); a token with no usable subject is
-`REF_IDENTITY_NO_SUBJECT`.
+The same encoding is accepted as the issuer's identity input (section
+12), there also under RS256 (RSASSA-PKCS1-v1_5 with SHA-256) and ES256
+(ECDSA P-256, signature as r||s), with the keys loaded from a JWKS
+document (RSA, EC P-256 and OKP Ed25519 entries by `kid`); a token with no
+usable subject is `REF_IDENTITY_NO_SUBJECT`. Receipts stay EdDSA only.

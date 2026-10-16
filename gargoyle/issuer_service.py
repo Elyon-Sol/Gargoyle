@@ -35,7 +35,7 @@ from typing import Any, Callable, Dict, Optional
 from fastapi import FastAPI, Header, HTTPException, Request
 
 from gargoyle.approval import verify_grant
-from gargoyle.identity import principal_from_token
+from gargoyle.identity import entra_keys, principal_from_token
 from gargoyle.issuer import DEFAULT_TTL_SECONDS, issue
 from gargoyle.policy import Policy
 
@@ -46,6 +46,7 @@ ENV_OPA_URL = "GARGOYLE_OPA_URL"
 ENV_OPA_DECISION_PATH = "GARGOYLE_OPA_DECISION_PATH"
 ENV_IDP_KEY_ID = "GARGOYLE_IDP_KEY_ID"
 ENV_IDP_PUBLIC_KEY_HEX = "GARGOYLE_IDP_PUBLIC_KEY_HEX"
+ENV_ENTRA_TENANT = "GARGOYLE_ENTRA_TENANT"        # trust the tenant's JWKS instead of a pinned IdP key
 ENV_AUDIENCE = "GARGOYLE_ISSUER_AUDIENCE"
 ENV_APPROVER_KEY_ID = "GARGOYLE_APPROVER_KEY_ID"
 ENV_APPROVER_PUBLIC_KEY_HEX = "GARGOYLE_APPROVER_PUBLIC_KEY_HEX"
@@ -95,8 +96,11 @@ def build_issuer_app(
                 or not isinstance(body.get("tool"), str) or "args" not in body
                 or not isinstance(body.get("claims", {}), dict)):
             raise _refuse(400, REF_ISSUER_BAD_REQUEST)
+        # The policy sees the identity provider's groups and roles as claims;
+        # the receipt binds only the call and the principal.
         interaction = {**body.get("claims", {}), "tool": body["tool"], "args": body["args"],
-                       "principal": who["principal"]}
+                       "principal": who["principal"], "groups": who.get("groups", []),
+                       "roles": who.get("roles", [])}
         if who["on_behalf_of"]:
             interaction["on_behalf_of"] = who["on_behalf_of"]
         result = issue(policy, body["target_url"], interaction, signing_key=signing_key, key_id=key_id,
@@ -168,8 +172,10 @@ def app_from_env() -> FastAPI:
     settings raise at startup; this service has nothing to do without them."""
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 
-    required = {k: os.environ.get(k) for k in (ENV_ISSUER_KEY_ID, ENV_ISSUER_KEY_HEX,
-                                                ENV_IDP_KEY_ID, ENV_IDP_PUBLIC_KEY_HEX)}
+    required = {k: os.environ.get(k) for k in (ENV_ISSUER_KEY_ID, ENV_ISSUER_KEY_HEX)}
+    tenant = os.environ.get(ENV_ENTRA_TENANT)
+    if not tenant:
+        required.update({k: os.environ.get(k) for k in (ENV_IDP_KEY_ID, ENV_IDP_PUBLIC_KEY_HEX)})
     missing = [k for k, v in required.items() if not v]
     if missing:
         raise RuntimeError("issuer service needs " + ", ".join(missing))
@@ -193,8 +199,9 @@ def app_from_env() -> FastAPI:
         policy=policy,
         signing_key=Ed25519PrivateKey.from_private_bytes(bytes.fromhex(required[ENV_ISSUER_KEY_HEX])),
         key_id=required[ENV_ISSUER_KEY_ID],
-        idp_public_keys={required[ENV_IDP_KEY_ID]:
-                         Ed25519PublicKey.from_public_bytes(bytes.fromhex(required[ENV_IDP_PUBLIC_KEY_HEX]))},
+        idp_public_keys=(entra_keys(tenant) if tenant else
+                         {required[ENV_IDP_KEY_ID]:
+                          Ed25519PublicKey.from_public_bytes(bytes.fromhex(required[ENV_IDP_PUBLIC_KEY_HEX]))}),
         approver_public_keys=approver,
         audience=os.environ.get(ENV_AUDIENCE) or None,
         ttl_seconds=int(os.environ.get(ENV_RECEIPT_TTL, DEFAULT_TTL_SECONDS)),
