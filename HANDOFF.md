@@ -163,8 +163,10 @@ replay, issuance_log, envelope_inspector, governance_wiring, request_validator.
    gives (binding, principal, single use, expiry, currency, holds), install, issuing,
    checking with Consumer, the two shipped consumers and their env, approval holds,
    the module table, what Gargoyle does not do, license. The MCP server stays the
-   primary integration surface. Visibility: NOT changed here; the repo is still
-   PRIVATE and flipping it is the owner's call (gh repo edit --visibility public).
+   primary integration surface. Visibility: PUBLIC since 2026-10-16, after a scan of
+   every blob in every ref (221 blobs, 10 commits) found no private keys, tokens,
+   credentials or sensitive files; the only long hex literals are the spec's public
+   test-vector values and SHA-256 file hashes in historical evidence blobs.
    Suite: 316 pass.
 8. Re-run the suite after each step; the suite at the last DONE step is the
    regression floor (316 at step 7). All eight steps are done;
