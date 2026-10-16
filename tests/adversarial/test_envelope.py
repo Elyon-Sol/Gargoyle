@@ -4,6 +4,7 @@ import json
 
 import pytest
 
+from reference import reference_policy
 from gargoyle.envelope import (
     ENVELOPE_VERSION,
     INVALIDATED,
@@ -31,7 +32,7 @@ def _env(timestamp_utc=None, pin=None, call=None):
         decision="ELIGIBLE",
         target_url=TARGET,
         call=call or _call(),
-        policy_pin=pin or ManifestPolicy().pin(),
+        policy_pin=pin or reference_policy().pin(),
         timestamp_utc=timestamp_utc,
     )
 
@@ -48,7 +49,7 @@ def test_receipt_top_level_and_request_context_keys():
     assert set(env) == {"envelope_version", "decision", "target_url", "policy",
                         "request_context", "timestamp_utc", "decision_sha256"}
     assert env["envelope_version"] == ENVELOPE_VERSION
-    assert env["policy"] == ManifestPolicy().pin()
+    assert env["policy"] == reference_policy().pin()
     assert set(env["request_context"]) == {"tool", "args_sha256", "principal"}
 
 
@@ -122,20 +123,20 @@ def test_decision_sha256_covers_tool_args_and_principal():
 # --- reassert ---------------------------------------------------------------
 
 def test_reassert_current_receipt():
-    assert reassert(_env()) == {"outcome": REASSERTED}
+    assert reassert(_env(), policy=reference_policy()) == {"outcome": REASSERTED}
 
 
 def test_reassert_tampered_receipt_is_invalidated():
     env = _env()
     env["request_context"]["tool"] = "delete_database"
-    assert reassert(env)["outcome"] == INVALIDATED
+    assert reassert(env, policy=reference_policy())["outcome"] == INVALIDATED
 
 
 @pytest.mark.parametrize("value", [None, 42, "0" * 64])
 def test_reassert_missing_or_wrong_hash_is_invalidated(value):
     env = _env()
     env["decision_sha256"] = value
-    assert reassert(env)["outcome"] == INVALIDATED
+    assert reassert(env, policy=reference_policy())["outcome"] == INVALIDATED
 
 
 @pytest.mark.parametrize("field,value", [("policy_id", "other/2"), ("policy_sha256", "0" * 64)])
@@ -143,30 +144,30 @@ def test_reassert_policy_change_requires_re_evaluation(field, value):
     env = _env()
     env["policy"][field] = value
     _rehash(env)
-    assert reassert(env)["outcome"] == RE_EVALUATE_REQUIRED
+    assert reassert(env, policy=reference_policy())["outcome"] == RE_EVALUATE_REQUIRED
 
 
 def test_reassert_checks_integrity_before_the_pin():
     env = _env()
     env["policy"]["policy_sha256"] = "0" * 64      # policy changed AND not re-hashed
-    assert reassert(env)["outcome"] == INVALIDATED
+    assert reassert(env, policy=reference_policy())["outcome"] == INVALIDATED
 
 
 def test_reassert_against_a_record_ignores_the_local_policy():
     env = _env(pin={"policy_id": "engine/1", "policy_sha256": "a" * 64})
     record = {"policy_id": "engine/1", "policy_sha256": "a" * 64}
-    assert reassert(env)["outcome"] == RE_EVALUATE_REQUIRED          # local manifest differs
+    assert reassert(env, policy=reference_policy())["outcome"] == RE_EVALUATE_REQUIRED          # local manifest differs
     assert reassert(env, record_source=record)["outcome"] == REASSERTED
 
 
 def test_reassert_does_not_mutate_its_input():
     env = _env()
     before = canonical_json(env)
-    reassert(env)
+    reassert(env, policy=reference_policy())
     assert canonical_json(env) == before
 
 
-def test_live_pin_prefers_record_then_policy_then_default():
+def test_live_pin_prefers_record_then_policy():
     rec = {"policy_id": "r/1", "policy_sha256": "c" * 64, "extra": 1}
 
     class P:
@@ -175,7 +176,15 @@ def test_live_pin_prefers_record_then_policy_then_default():
 
     assert live_pin(rec, P()) == {"policy_id": "r/1", "policy_sha256": "c" * 64}
     assert live_pin(None, P()) == {"policy_id": "p/1", "policy_sha256": "d" * 64}
-    assert live_pin() == ManifestPolicy().pin()
+
+
+def test_no_live_pin_is_a_configuration_error_not_a_verdict():
+    """Neither a record nor a policy: there is nothing to check currency
+    against, and that raises instead of refusing or honoring."""
+    with pytest.raises(ValueError):
+        live_pin()
+    with pytest.raises(ValueError):
+        reassert(_env())
 
 
 # --- canonical JSON ---------------------------------------------------------

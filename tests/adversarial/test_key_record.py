@@ -8,8 +8,8 @@ receipt whose signing key is unknown, revoked, outside its window, or not an
 issuer key, and refuses records that are badly signed, stale or rolled back.
 
 Records are built inline with the same signed region the generator uses
-(canonical_json of the record minus publisher_signature). Run from the repo
-root: ManifestPolicy().pin() reads MANIFEST/manifest.json for the reference pin.
+(canonical_json of the record minus publisher_signature). The reference
+policy (tests/reference.py) supplies the pin.
 """
 
 import base64
@@ -19,6 +19,7 @@ from datetime import datetime, timedelta, timezone
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
+from reference import reference_policy
 from gargoyle.policy import ManifestPolicy
 from gargoyle.envelope import build_envelope, sign_envelope, canonical_json
 from gargoyle.key_record_source import load_key_record_from_bytes
@@ -53,7 +54,7 @@ def _interaction():
 def _signed_envelope(issuer_private, key_id, not_after=None):
     interaction = _interaction()
     env = build_envelope(
-        policy_pin=ManifestPolicy().pin(),
+        policy_pin=reference_policy().pin(),
         decision="ELIGIBLE",
         target_url=TARGET_URL,
         call=interaction,
@@ -118,7 +119,7 @@ def test_valid_current_key_accepted():
     assert loaded["reason"] is None
     signed, interaction = _signed_envelope(issuer, "issuer-1")
     result = verify_envelope(signed, interaction, TARGET_URL,
-                            key_record_view=loaded["trust_view"], now=NOW)
+                            key_record_view=loaded["trust_view"], now=NOW, policy=reference_policy())
     assert result["accepted"] is True
     assert result["reason"] == ACCEPT_REASSERTED_AND_BOUND
 
@@ -204,7 +205,7 @@ def test_revoked_key_refused():
     assert loaded["reason"] is None  # record itself is valid and fresh
     signed, interaction = _signed_envelope(issuer, "issuer-1")
     result = verify_envelope(signed, interaction, TARGET_URL,
-                            key_record_view=loaded["trust_view"], now=NOW)
+                            key_record_view=loaded["trust_view"], now=NOW, policy=reference_policy())
     assert result["accepted"] is False
     assert result["reason"] == REF_VERIFY_KEY_REVOKED
 
@@ -218,7 +219,7 @@ def test_unknown_key_refused():
     loaded = _trust_view(root, [_key_entry("issuer-1", issuer_in.public_key(), nb, na)])
     signed, interaction = _signed_envelope(issuer_out, "issuer-2")
     result = verify_envelope(signed, interaction, TARGET_URL,
-                            key_record_view=loaded["trust_view"], now=NOW)
+                            key_record_view=loaded["trust_view"], now=NOW, policy=reference_policy())
     assert result["accepted"] is False
     assert result["reason"] == REF_VERIFY_KEY_UNKNOWN
 
@@ -232,7 +233,7 @@ def test_out_of_window_key_refused():
     loaded = _trust_view(root, [_key_entry("issuer-1", issuer.public_key(), nb, na)])
     signed, interaction = _signed_envelope(issuer, "issuer-1")
     result = verify_envelope(signed, interaction, TARGET_URL,
-                            key_record_view=loaded["trust_view"], now=NOW)
+                            key_record_view=loaded["trust_view"], now=NOW, policy=reference_policy())
     assert result["accepted"] is False
     assert result["reason"] == REF_VERIFY_KEY_OUT_OF_WINDOW
 
@@ -246,7 +247,7 @@ def test_window_boundary_now_equals_not_after_refused():
     loaded = _trust_view(root, [_key_entry("issuer-1", issuer.public_key(), nb, na)])
     signed, interaction = _signed_envelope(issuer, "issuer-1")
     result = verify_envelope(signed, interaction, TARGET_URL,
-                            key_record_view=loaded["trust_view"], now=NOW)
+                            key_record_view=loaded["trust_view"], now=NOW, policy=reference_policy())
     assert result["accepted"] is False
     assert result["reason"] == REF_VERIFY_KEY_OUT_OF_WINDOW
 
@@ -262,7 +263,7 @@ def test_tampered_signature_with_valid_record_refused():
     sig = signed["issuer_signature"]
     signed["issuer_signature"] = sig[:-1] + ("0" if sig[-1] != "0" else "1")
     result = verify_envelope(signed, interaction, TARGET_URL,
-                            key_record_view=loaded["trust_view"], now=NOW)
+                            key_record_view=loaded["trust_view"], now=NOW, policy=reference_policy())
     assert result["accepted"] is False
     assert result["reason"] == REF_VERIFY_SIGNATURE_INVALID
 
@@ -283,8 +284,7 @@ def test_record_exclusive_precedence_revocation_wins():
     result = verify_envelope(
         signed, interaction, TARGET_URL,
         pinned_public_keys={"issuer-1": issuer.public_key()},
-        key_record_view=loaded["trust_view"], now=NOW,
-    )
+        key_record_view=loaded["trust_view"], now=NOW, policy=reference_policy())
     assert result["accepted"] is False
     assert result["reason"] == REF_VERIFY_KEY_REVOKED
 
@@ -294,7 +294,7 @@ def test_static_map_path_unchanged():
     issuer = Ed25519PrivateKey.generate()
     signed, interaction = _signed_envelope(issuer, "issuer-1")
     result = verify_envelope(signed, interaction, TARGET_URL,
-                            pinned_public_keys={"issuer-1": issuer.public_key()})
+                            pinned_public_keys={"issuer-1": issuer.public_key()}, policy=reference_policy())
     assert result["accepted"] is True
     assert result["reason"] == ACCEPT_REASSERTED_AND_BOUND
 
@@ -304,12 +304,12 @@ def test_unsigned_path_unchanged():
     # reassert + binding pass on a freshly built envelope -> accepts.
     interaction = _interaction()
     env = build_envelope(
-        policy_pin=ManifestPolicy().pin(),
+        policy_pin=reference_policy().pin(),
         decision="ELIGIBLE",
         target_url=TARGET_URL,
         call=interaction,
     )
-    result = verify_envelope(env, interaction, TARGET_URL)
+    result = verify_envelope(env, interaction, TARGET_URL, policy=reference_policy())
     assert result["accepted"] is True
     assert result["reason"] == ACCEPT_REASSERTED_AND_BOUND
 
@@ -335,7 +335,7 @@ def test_approver_role_key_cannot_sign_envelopes():
     assert loaded["reason"] is None
     signed, interaction = _signed_envelope(approver, "ap")
     result = verify_envelope(signed, interaction, TARGET_URL,
-                            key_record_view=loaded["trust_view"], now=NOW)
+                            key_record_view=loaded["trust_view"], now=NOW, policy=reference_policy())
     assert result["accepted"] is False
     assert result["reason"] == REF_VERIFY_KEY_ROLE_NOT_ISSUER
 
@@ -350,5 +350,5 @@ def test_issuer_role_key_accepted():
     loaded = _trust_view(root, [entry])
     signed, interaction = _signed_envelope(issuer, "issuer-1")
     result = verify_envelope(signed, interaction, TARGET_URL,
-                            key_record_view=loaded["trust_view"], now=NOW)
+                            key_record_view=loaded["trust_view"], now=NOW, policy=reference_policy())
     assert result["accepted"] is True

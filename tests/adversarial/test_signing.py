@@ -16,6 +16,7 @@ The keypair is generated per test and never written to disk.
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
+from reference import reference_policy
 from gargoyle.policy import ManifestPolicy
 from gargoyle.envelope import (
     REASSERTED,
@@ -59,7 +60,7 @@ def _build_unsigned_envelope(interaction=None,
     if interaction is None:
         interaction = _normalized_interaction()
     return build_envelope(
-        policy_pin=ManifestPolicy().pin(),
+        policy_pin=reference_policy().pin(),
         decision="ELIGIBLE",
         target_url=TARGET_URL,
         call=interaction,
@@ -83,7 +84,7 @@ def _construct_forge(interaction):
         "envelope_version": ENVELOPE_VERSION,
         "decision": "ELIGIBLE",
         "target_url": TARGET_URL,
-        "policy": ManifestPolicy().pin(),
+        "policy": reference_policy().pin(),
         "request_context": {
             "tool": interaction["tool"],
             "args_sha256": args_sha256(interaction["args"]),
@@ -136,7 +137,7 @@ def test_signed_envelope_reasserts_unchanged():
     """
     priv, _ = _gate_keypair()
     signed = sign_envelope(_build_unsigned_envelope(), priv, GATE_KEY_ID)
-    assert reassert(signed)["outcome"] == REASSERTED
+    assert reassert(signed, policy=reference_policy())["outcome"] == REASSERTED
 
 
 # ---------------------------------------------------------------------------
@@ -154,7 +155,7 @@ def test_signed_envelope_honored_on_signed_path():
     signed = sign_envelope(_build_unsigned_envelope(interaction=interaction),
                            priv, GATE_KEY_ID)
     result = verify_envelope(signed, interaction, TARGET_URL,
-                             pinned_public_keys={GATE_KEY_ID: pub})
+                             pinned_public_keys={GATE_KEY_ID: pub}, policy=reference_policy())
     assert result["accepted"] is True
     assert result["reason"] == ACCEPT_REASSERTED_AND_BOUND
 
@@ -170,7 +171,7 @@ def test_three_model_forge_refused_on_signed_path():
     forge = _construct_forge(interaction)
     assert "issuer_signature" not in forge  # the adversary holds no key
     result = verify_envelope(forge, interaction, TARGET_URL,
-                             pinned_public_keys={GATE_KEY_ID: pub})
+                             pinned_public_keys={GATE_KEY_ID: pub}, policy=reference_policy())
     assert result["accepted"] is False
     assert result["reason"] == REF_VERIFY_SIGNATURE_INVALID
 
@@ -186,7 +187,7 @@ def test_forge_with_unknown_key_id_refused():
     forge["issuer_key_id"] = "attacker-key-999"
     forge["issuer_signature"] = "00" * 64
     result = verify_envelope(forge, interaction, TARGET_URL,
-                             pinned_public_keys={GATE_KEY_ID: pub})
+                             pinned_public_keys={GATE_KEY_ID: pub}, policy=reference_policy())
     assert result["accepted"] is False
     assert result["reason"] == REF_VERIFY_SIGNATURE_UNKNOWN_KEY
 
@@ -207,7 +208,7 @@ def test_forge_signed_with_wrong_key_refused():
         canonical_json(region).encode("utf-8")
     ).hex()
     result = verify_envelope(forge, interaction, TARGET_URL,
-                             pinned_public_keys={GATE_KEY_ID: gate_pub})
+                             pinned_public_keys={GATE_KEY_ID: gate_pub}, policy=reference_policy())
     assert result["accepted"] is False
     assert result["reason"] == REF_VERIFY_SIGNATURE_INVALID
 
@@ -225,7 +226,7 @@ def test_tampered_signed_envelope_refused_on_signature():
                            priv, GATE_KEY_ID)
     signed["request_context"]["tool"] = "delete_database"  # tamper
     result = verify_envelope(signed, interaction, TARGET_URL,
-                             pinned_public_keys={GATE_KEY_ID: pub})
+                             pinned_public_keys={GATE_KEY_ID: pub}, policy=reference_policy())
     assert result["accepted"] is False
     assert result["reason"] == REF_VERIFY_SIGNATURE_INVALID
 
@@ -245,7 +246,7 @@ def test_verifier_unsigned_mode_accepts_forge_non_default():
     """
     interaction = _normalized_interaction()
     forge = _construct_forge(interaction)
-    result = verify_envelope(forge, interaction, TARGET_URL)  # no pinned keys
+    result = verify_envelope(forge, interaction, TARGET_URL, policy=reference_policy())  # no pinned keys
     assert result["accepted"] is True
     assert result["reason"] == ACCEPT_REASSERTED_AND_BOUND
 
@@ -259,6 +260,6 @@ def test_genuine_signed_envelope_unsigned_path_still_honored():
     interaction = _normalized_interaction()
     signed = sign_envelope(_build_unsigned_envelope(interaction=interaction),
                            priv, GATE_KEY_ID)
-    result = verify_envelope(signed, interaction, TARGET_URL)
+    result = verify_envelope(signed, interaction, TARGET_URL, policy=reference_policy())
     assert result["accepted"] is True
     assert result["reason"] == ACCEPT_REASSERTED_AND_BOUND

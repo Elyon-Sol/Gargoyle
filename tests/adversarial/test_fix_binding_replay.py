@@ -11,6 +11,7 @@ import pytest
 from fastapi.testclient import TestClient
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
+from reference import reference_policy
 from gargoyle.policy import ManifestPolicy
 from gargoyle.envelope import build_envelope, sign_envelope
 from gargoyle.verifier import verify_envelope, REF_VERIFY_BINDING_MISMATCH, REF_VERIFY_REPLAY
@@ -28,7 +29,7 @@ def inter():
 
 def signed(decision_id="d1", not_after=None):
     e = build_envelope(
-        policy_pin=ManifestPolicy().pin(),decision="ELIGIBLE", target_url=TARGET, call=inter(),
+        policy_pin=reference_policy().pin(),decision="ELIGIBLE", target_url=TARGET, call=inter(),
                        timestamp_utc="2026-07-09T00:00:00+00:00")
     return sign_envelope(e, priv, KID, not_after=not_after, decision_id=decision_id)
 
@@ -52,12 +53,12 @@ def post(client, env, call):
 def test_f1_extra_body_fields_rejected():
     env = signed()
     r = verify_envelope(env, {**inter(), "evil_cmd": "rm -rf /"}, TARGET,
-                        pinned_public_keys={KID: priv.public_key()})
+                        pinned_public_keys={KID: priv.public_key()}, policy=reference_policy())
     assert r["accepted"] is False and r["reason"] == REF_VERIFY_BINDING_MISMATCH
 
 def test_f1_exact_body_still_accepted():
     env = signed()
-    r = verify_envelope(env, inter(), TARGET, pinned_public_keys={KID: priv.public_key()})
+    r = verify_envelope(env, inter(), TARGET, pinned_public_keys={KID: priv.public_key()}, policy=reference_policy())
     assert r["accepted"] is True
 
 # ---- decision_id required ----

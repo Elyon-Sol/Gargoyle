@@ -5,10 +5,11 @@ decision_id to be single-used on."""
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
+from reference import MANIFEST_PATH, reference_policy, reference_record_bytes
 from gargoyle.envelope import build_envelope, sign_envelope
 from gargoyle.issuer import issue
 from gargoyle.mcp_server import (
-    ENV_GATE_KEY_ID, ENV_GATE_PUBLIC_KEY_HEX, ENV_PRINCIPAL, ENV_TARGET_ID,
+    ENV_GATE_KEY_ID, ENV_GATE_PUBLIC_KEY_HEX, ENV_PRINCIPAL, ENV_RECORD_PATH, ENV_TARGET_ID,
     ENVELOPE_META_KEY, ServerState, call_for, config_from_env, gate_tool_call,
 )
 from gargoyle.policy import ManifestPolicy, manifest_sha256
@@ -21,7 +22,7 @@ PRINCIPAL = "agent-7"
 
 
 def _state(key, principal=PRINCIPAL):
-    record_bytes = open("EVIDENCE/published_hashes.json", "rb").read()
+    record_bytes = reference_record_bytes()
     config = {
         "pinned_public_keys": {"k1": key.public_key()},
         "record_bytes": record_bytes,
@@ -36,12 +37,12 @@ def _state(key, principal=PRINCIPAL):
 def _claims():
     """What ManifestPolicy reads; none of it is bound into the receipt."""
     return {"AP": ["identity", "role"], "OP": ["session", "request"],
-            "expected_manifest_version": "1.0", "expected_manifest_sha256": manifest_sha256()}
+            "expected_manifest_version": "1.0", "expected_manifest_sha256": manifest_sha256(MANIFEST_PATH)}
 
 
 def _issue(key, tool="transfer", args=None, principal=PRINCIPAL):
     interaction = {**call_for(tool, {"amount": 5} if args is None else args, principal), **_claims()}
-    return issue(ManifestPolicy(), TARGET_ID, interaction, signing_key=key, key_id="k1").envelope
+    return issue(reference_policy(), TARGET_ID, interaction, signing_key=key, key_id="k1").envelope
 
 
 def _params(envelope, name="transfer", args=None):
@@ -84,16 +85,25 @@ def test_server_without_a_principal_is_unconfigured():
         assert state.executed == []
 
 
-def test_config_from_env_requires_a_principal(monkeypatch):
+def test_config_from_env_requires_principal_and_record_path(monkeypatch, tmp_path):
     key = Ed25519PrivateKey.generate()
+    record = tmp_path / "record.json"
+    record.write_bytes(reference_record_bytes())
     monkeypatch.setenv(ENV_GATE_KEY_ID, "k1")
     monkeypatch.setenv(ENV_GATE_PUBLIC_KEY_HEX,
                        key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw).hex())
     monkeypatch.setenv(ENV_TARGET_ID, TARGET_ID)
     monkeypatch.delenv(ENV_PRINCIPAL, raising=False)
-    assert config_from_env() is None
+    monkeypatch.delenv(ENV_RECORD_PATH, raising=False)
+    assert config_from_env() is None                       # no principal, no record
     monkeypatch.setenv(ENV_PRINCIPAL, PRINCIPAL)
-    assert config_from_env()["principal"] == PRINCIPAL
+    assert config_from_env() is None                       # no record path: no default
+    monkeypatch.setenv(ENV_RECORD_PATH, str(record))
+    config = config_from_env()
+    assert config["principal"] == PRINCIPAL
+    assert config["record_bytes"] == reference_record_bytes()
+    monkeypatch.setenv(ENV_RECORD_PATH, str(tmp_path / "missing.json"))
+    assert config_from_env() is None                       # unreadable record
 
 
 def test_signed_receipt_without_decision_id_is_refused():
@@ -105,7 +115,7 @@ def test_signed_receipt_without_decision_id_is_refused():
     env = sign_envelope(
         build_envelope(decision="ELIGIBLE", target_url=TARGET_ID,
                        call=call_for("transfer", {"amount": 5}, PRINCIPAL),
-                       policy_pin=ManifestPolicy().pin()),
+                       policy_pin=reference_policy().pin()),
         key, "k1",
     )
     for _ in range(2):

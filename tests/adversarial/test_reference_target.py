@@ -8,7 +8,7 @@ a publisher TestClient), so the suite needs no network.
 The issuer keypair comes from the `gate_signing` conftest fixture. Receipts
 are signed with it because the reference target pins the issuer key, which
 makes verify_envelope require a signature. The anchor is computed from the
-committed published_hashes.json bytes, and receipts use a fixed timestamp_utc.
+reference record bytes (tests/reference.py); receipts use a fixed timestamp_utc.
 """
 
 import json
@@ -17,6 +17,7 @@ import uuid
 from fastapi import FastAPI, Response
 from fastapi.testclient import TestClient
 
+from reference import reference_policy, reference_record_bytes
 from gargoyle.policy import ManifestPolicy
 from gargoyle.envelope import build_envelope, canonical_json, sign_envelope
 from gargoyle.published_source import anchor_sha256, load_record_from_bytes
@@ -38,7 +39,6 @@ from gargoyle.verifier import (
 
 TARGET_URL = "http://127.0.0.1:9000/target"
 OTHER_URL = "http://127.0.0.1:9000/other"
-PUBLISHED_HASHES_PATH = "EVIDENCE/published_hashes.json"
 
 
 # ---------------------------------------------------------------------------
@@ -47,8 +47,7 @@ PUBLISHED_HASHES_PATH = "EVIDENCE/published_hashes.json"
 
 
 def _published_bytes():
-    with open(PUBLISHED_HASHES_PATH, "rb") as f:
-        return f.read()
+    return reference_record_bytes()
 
 
 def _pinned_root():
@@ -74,7 +73,7 @@ def _signed_envelope(gate_signing, interaction=None, target_url=TARGET_URL,
     if interaction is None:
         interaction = _normalized_interaction()
     env = build_envelope(
-        policy_pin=ManifestPolicy().pin(),
+        policy_pin=reference_policy().pin(),
         decision="ELIGIBLE",
         target_url=target_url,
         call=interaction,

@@ -20,7 +20,8 @@ gargoyle/ (was IMPLEMENTATION/): envelope, verifier, replay_cache, approval, app
 tests/ (was TESTS/): 23 files (~5.2k lines); tests/conftest.py is REWRITTEN here without the
   gate module (pep.py) - the original autouse fixture monkeypatched pep.
 CANON/canon.lock, EVIDENCE/published_hashes.json, MANIFEST/manifest.json: kept
-  only because envelope.reassert() and mcp_server read them by hard-coded path.
+  only because envelope.reassert() and mcp_server read them by hard-coded path
+  (all three gone by step 4).
 Run: pip install -e ".[dev]" && python -m pytest
 
 ## Left behind (deliberately)
@@ -100,9 +101,21 @@ replay, issuance_log, envelope_inspector, governance_wiring, request_validator.
    target's own authentication; Gargoyle compares, it does not authenticate. A
    deployment where the principal header is reachable by the client has no
    principal binding at all.
-4. Remove the remaining hard-coded paths: the default MANIFEST/manifest.json behind
-   ManifestPolicy() and envelope.live_pin(), and EVIDENCE/published_hashes.json in
-   mcp_server. Then delete EVIDENCE/ (CANON/ is already gone).
+4. DONE (2026-10-16). No path is read that a deployer did not name. ManifestPolicy(path),
+   load_manifest(path) and manifest_sha256(path) require the path (an empty one is a
+   ValueError); policy.evaluate() requires a policy. envelope.live_pin() and reassert()
+   take a record_source or a policy and raise ValueError with neither; verify_envelope()
+   gained a `policy=` keyword for a target that holds the policy in-process and raises
+   ValueError when given neither that nor a record_source (a verifier with no live pin
+   is misconfigured, and that must not look like a verdict either way). mcp_server:
+   GARGOYLE_MCP_RECORD_PATH is required, no default record file. reference_target: in
+   signed-record mode GARGOYLE_SIGNED_RECORD_URL is required instead of being guessed
+   from the publisher URL. MANIFEST/manifest.json moved to tests/fixtures/manifest.json;
+   EVIDENCE/ deleted; the repo root now holds only gargoyle/, tests/, pyproject.toml,
+   README.md, LICENSE, HANDOFF.md. tests/reference.py supplies the tests' reference
+   policy (reference_policy(), reference_pin()) and the record bytes a publisher would
+   serve for it (reference_record_bytes()), so no published record is committed.
+   Suite: 293 pass.
 5. Write the wire spec as a standalone document (envelope fields, canonical JSON
    rules, signature coverage, replay semantics, grant format) so the format is not
    defined by one Python file.
@@ -110,7 +123,7 @@ replay, issuance_log, envelope_inspector, governance_wiring, request_validator.
    mcp_server as the primary integration surface.
 7. Choose the license (permissive recommended for adoption), add README, pyproject.
 8. Re-run the suite after each step; the suite at the last DONE step is the
-   regression floor (288 at step 3).
+   regression floor (293 at step 4).
 
 ## Known weaknesses carried over (fix or document)
 - requires_approval is not in the signed receipt, so a target cannot tell a held

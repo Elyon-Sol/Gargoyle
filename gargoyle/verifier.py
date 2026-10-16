@@ -35,7 +35,7 @@ strings; args are compared by args_sha256 over canonical_json, so key order
 never matters.
 """
 
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 from datetime import datetime, timedelta, timezone
 
 from gargoyle.envelope import (
@@ -47,6 +47,7 @@ from gargoyle.envelope import (
     reassert,
     valid_principal,
 )
+from gargoyle.policy import Policy
 
 
 # ---------------------------------------------------------------------------
@@ -162,6 +163,7 @@ def verify_envelope(
     now: datetime = None,
     key_record_view: Dict[str, Any] = None,
     clock_skew: timedelta = timedelta(0),
+    policy: Optional[Policy] = None,
 ) -> Dict[str, Any]:
     """Decide whether to act on `call` at `target_url` given `envelope`.
 
@@ -173,8 +175,13 @@ def verify_envelope(
             authenticated for the presenting party (see the module
             docstring); the other two are what the target is about to run.
         target_url: The target the call is addressed to.
-        record_source: A fetched published record whose policy pin replaces
-            the local one in reassert(). None uses the local policy.
+        record_source: A fetched published record whose policy pin the
+            receipt is checked against (a remote target). Takes precedence
+            over `policy`.
+        policy: The live Policy object, for a target that holds the policy
+            itself (same process as the issuer). One of record_source /
+            policy is required; neither is a ValueError, since a verifier
+            with no live pin cannot check currency and must not pretend to.
         pinned_public_keys: {key_id: public_key}. When given, a valid issuer
             signature from one of these keys is required.
         key_record_view: A validated key-record view from
@@ -198,10 +205,13 @@ def verify_envelope(
     anyone can compute. Only use that path when transport alone
     authenticates the issuer.
     """
-    # A negative skew would narrow the honored window: a configuration error,
-    # so fail loudly instead of refusing every call.
+    # A negative skew would narrow the honored window, and no live pin would
+    # leave currency unchecked: configuration errors, so fail loudly instead
+    # of refusing (or honoring) every call.
     if clock_skew < timedelta(0):
         raise ValueError("clock_skew must be non-negative")
+    if record_source is None and policy is None:
+        raise ValueError("verify_envelope needs a record_source or a policy")
 
     # ----- Structure -----
     if not isinstance(envelope, dict):
@@ -272,7 +282,7 @@ def verify_envelope(
     # Any structural surprise reassert() trips over (e.g. a policy block that
     # is not a dict) fails closed.
     try:
-        outcome = reassert(envelope, record_source=record_source)["outcome"]
+        outcome = reassert(envelope, record_source=record_source, policy=policy)["outcome"]
     except Exception:
         return _reject(REF_VERIFY_ENVELOPE_ABSENT)
 

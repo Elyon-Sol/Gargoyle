@@ -214,16 +214,17 @@ def config_from_env() -> Optional[Dict[str, Any]]:
     GARGOYLE_MCP_GATE_PUBLIC_KEY_HEX pin the issuer's public key;
     GARGOYLE_MCP_TARGET_ID is the identity receipts bind to;
     GARGOYLE_MCP_PRINCIPAL is the client this server serves (see the module
-    docstring); the published record is read from GARGOYLE_MCP_RECORD_PATH
-    and anchored on its own bytes."""
+    docstring); the published record (the live policy pin) is read from
+    GARGOYLE_MCP_RECORD_PATH and anchored on its own bytes. All five are
+    required; there is no default record."""
     import os
 
     key_id = os.environ.get(ENV_GATE_KEY_ID)
     key_hex = os.environ.get(ENV_GATE_PUBLIC_KEY_HEX)
     target_id = os.environ.get(ENV_TARGET_ID)
     principal = os.environ.get(ENV_PRINCIPAL)
-    record_path = os.environ.get(ENV_RECORD_PATH, "EVIDENCE/published_hashes.json")
-    if not (key_id and key_hex and target_id and principal):
+    record_path = os.environ.get(ENV_RECORD_PATH)
+    if not (key_id and key_hex and target_id and principal and record_path):
         return None
     try:
         from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey

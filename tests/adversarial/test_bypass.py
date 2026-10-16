@@ -13,6 +13,7 @@ unattested calls, but it cannot force callers or targets to use it.
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
+from reference import reference_policy
 from gargoyle.verifier import (
     REF_VERIFY_ENVELOPE_ABSENT,
     verify_envelope,
@@ -57,6 +58,6 @@ def test_a1_target_side_verifier_would_reject_unattested_call():
     REF_VERIFY_ENVELOPE_ABSENT. The defense works only if the target runs it.
     """
     interaction = {"tool": "transfer", "args": {"amount": 5}, "principal": "agent-7"}
-    result = verify_envelope(None, interaction, "http://127.0.0.1:9000/target")
+    result = verify_envelope(None, interaction, "http://127.0.0.1:9000/target", policy=reference_policy())
     assert result["accepted"] is False
     assert result["reason"] == REF_VERIFY_ENVELOPE_ABSENT

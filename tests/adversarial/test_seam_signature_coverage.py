@@ -11,6 +11,7 @@ from datetime import datetime, timedelta, timezone
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
+from reference import reference_policy
 from gargoyle.policy import ManifestPolicy
 from gargoyle.envelope import build_envelope, sign_envelope
 from gargoyle.verifier import verify_envelope
@@ -25,7 +26,7 @@ def _interaction():
 
 def _signed(priv, not_after=None, decision_id=None):
     env = build_envelope(
-        policy_pin=ManifestPolicy().pin(),
+        policy_pin=reference_policy().pin(),
         decision="ELIGIBLE",
         target_url=TARGET_URL,
         call=_interaction(),
@@ -73,8 +74,7 @@ def test_every_signed_field_is_covered():
     # Sanity: the unmutated signed envelope verifies.
     ok = verify_envelope(
         copy.deepcopy(base), _interaction(), TARGET_URL,
-        pinned_public_keys={KEY_ID: pub},
-    )
+        pinned_public_keys={KEY_ID: pub}, policy=reference_policy())
     assert ok["accepted"] is True
 
     # timestamp_utc is excluded from the signed region BY DESIGN (carries no
@@ -89,8 +89,7 @@ def test_every_signed_field_is_covered():
         _mutate(env, path)
         r = verify_envelope(
             env, _interaction(), TARGET_URL,
-            pinned_public_keys={KEY_ID: pub},
-        )
+            pinned_public_keys={KEY_ID: pub}, policy=reference_policy())
         if path in EXCLUDED:
             if r["accepted"] is not True:
                 failures.append((path, "expected ACCEPT (excluded field)", r))
@@ -108,8 +107,7 @@ def test_mutating_signature_bytes_rejects():
     base["issuer_signature"] = sig.hex()
     r = verify_envelope(
         base, _interaction(), TARGET_URL,
-        pinned_public_keys={KEY_ID: priv.public_key()},
-    )
+        pinned_public_keys={KEY_ID: priv.public_key()}, policy=reference_policy())
     assert r["accepted"] is False
 
 
@@ -122,6 +120,5 @@ def test_timestamp_utc_is_the_only_mutable_signed_field():
     base["timestamp_utc"] = "1999-01-01T00:00:00+00:00"
     r = verify_envelope(
         base, _interaction(), TARGET_URL,
-        pinned_public_keys={KEY_ID: priv.public_key()},
-    )
+        pinned_public_keys={KEY_ID: priv.public_key()}, policy=reference_policy())
     assert r["accepted"] is True

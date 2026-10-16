@@ -7,6 +7,7 @@ are not in the receipt; the policy pin stands for them.
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 import pytest
 
+from reference import reference_policy
 from gargoyle.envelope import build_envelope, sign_envelope
 from gargoyle.executor_sdk import ExecutorGate
 from gargoyle.issuer import ISSUE_UNBINDABLE_CALL, issue
@@ -39,7 +40,7 @@ def call(principal="agent-7", **over):
 
 def env_for(principal="agent-7"):
     return build_envelope(
-        policy_pin=ManifestPolicy().pin(), decision="ELIGIBLE", target_url=TARGET,
+        policy_pin=reference_policy().pin(), decision="ELIGIBLE", target_url=TARGET,
         call=call(principal), timestamp_utc="2026-07-11T00:00:00+00:00")
 
 
@@ -60,11 +61,11 @@ def test_receipt_binds_exactly_tool_args_principal():
 @pytest.mark.parametrize("bad", [None, "", 7, ["agent-7"], {"id": "agent-7"}])
 def test_build_refuses_a_call_without_a_principal(bad):
     with pytest.raises((ValueError, TypeError)):
-        build_envelope(policy_pin=ManifestPolicy().pin(), decision="ELIGIBLE",
+        build_envelope(policy_pin=reference_policy().pin(), decision="ELIGIBLE",
                        target_url=TARGET, call=call(bad))
     with pytest.raises((KeyError, ValueError, TypeError)):
         c = call(); del c["principal"]
-        build_envelope(policy_pin=ManifestPolicy().pin(), decision="ELIGIBLE",
+        build_envelope(policy_pin=reference_policy().pin(), decision="ELIGIBLE",
                        target_url=TARGET, call=c)
 
 
@@ -86,20 +87,20 @@ def test_issue_keeps_policy_claims_out_of_the_receipt():
 # ---- the verifier binds it ----
 def test_verifier_accepts_matching_principal():
     r = verify_envelope(sign_envelope(env_for("agent-7"), priv, KID), call("agent-7"),
-                        TARGET, pinned_public_keys={KID: pub})
+                        TARGET, pinned_public_keys={KID: pub}, policy=reference_policy())
     assert r["accepted"] is True and r["reason"] == ACCEPT_REASSERTED_AND_BOUND
 
 
 def test_verifier_rejects_another_principal():
     r = verify_envelope(sign_envelope(env_for("agent-7"), priv, KID), call("agent-8"),
-                        TARGET, pinned_public_keys={KID: pub})
+                        TARGET, pinned_public_keys={KID: pub}, policy=reference_policy())
     assert r["accepted"] is False and r["reason"] == REF_VERIFY_PRINCIPAL_MISMATCH
 
 
 @pytest.mark.parametrize("nobody", [None, "", 7])
 def test_verifier_rejects_an_unauthenticated_caller(nobody):
     r = verify_envelope(sign_envelope(env_for("agent-7"), priv, KID), call(nobody),
-                        TARGET, pinned_public_keys={KID: pub})
+                        TARGET, pinned_public_keys={KID: pub}, policy=reference_policy())
     assert r["accepted"] is False and r["reason"] == REF_VERIFY_PRINCIPAL_MISMATCH
 
 
@@ -108,7 +109,7 @@ def test_principal_rewritten_after_signing_breaks_the_signature():
     the signed region, so the edit fails on provenance before binding."""
     e = sign_envelope(env_for("agent-7"), priv, KID)
     e["request_context"]["principal"] = "agent-8"
-    r = verify_envelope(e, call("agent-8"), TARGET, pinned_public_keys={KID: pub})
+    r = verify_envelope(e, call("agent-8"), TARGET, pinned_public_keys={KID: pub}, policy=reference_policy())
     assert r["accepted"] is False and r["reason"] == REF_VERIFY_SIGNATURE_INVALID
 
 

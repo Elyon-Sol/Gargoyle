@@ -43,7 +43,6 @@ from typing import Any, Dict, Mapping, Optional, Protocol, runtime_checkable
 ELIGIBLE = "ELIGIBLE"
 REFUSE = "REFUSE"
 
-DEFAULT_MANIFEST_PATH = "MANIFEST/manifest.json"
 MANIFEST_POLICY_ID = "gargoyle.manifest-subset/1"
 
 # ManifestPolicy refusal reasons: a closed set naming the FIRST failing check.
@@ -99,12 +98,12 @@ def valid_pin(pin: Any) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def load_manifest(path: str = DEFAULT_MANIFEST_PATH):
+def load_manifest(path: str):
     with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
 
 
-def manifest_sha256(path: str = DEFAULT_MANIFEST_PATH) -> str:
+def manifest_sha256(path: str) -> str:
     with open(path, "rb") as f:
         return hashlib.sha256(f.read()).hexdigest()
 
@@ -227,13 +226,17 @@ def manifest_pin_matches(interaction, manifest, live_sha256) -> bool:
 class ManifestPolicy:
     """The reference policy: token-subset checks against a JSON manifest.
 
-    The manifest is read from `path` on every call, so editing the file
+    `path` is the manifest the deployer chose; there is no default, so no
+    policy is ever evaluated against a file nobody named. The manifest is
+    read from `path` on every call, so editing the file
     changes the pin immediately and invalidates receipts issued under the old
     bytes. The checks run in a fixed order and the first failure is the
     refusal reason: manifest well-formed, required sets resolvable, authority
     covered, operations covered, caller's manifest pin matches."""
 
-    def __init__(self, path: str = DEFAULT_MANIFEST_PATH) -> None:
+    def __init__(self, path: str) -> None:
+        if not isinstance(path, str) or not path:
+            raise ValueError("ManifestPolicy needs the path of its manifest")
         self.path = path
 
     def pin(self) -> Dict[str, str]:
@@ -268,7 +271,6 @@ class ManifestPolicy:
             return refuse(POLICY_INTERNAL)
 
 
-def evaluate(interaction, policy: Optional[Policy] = None, target_url: str = "") -> str:
-    """The bare outcome string for `interaction` under `policy`
-    (ManifestPolicy at the default path when omitted)."""
-    return (policy or ManifestPolicy()).decide(target_url, interaction).outcome
+def evaluate(interaction, policy: Policy, target_url: str = "") -> str:
+    """The bare outcome string for `interaction` under `policy`."""
+    return policy.decide(target_url, interaction).outcome

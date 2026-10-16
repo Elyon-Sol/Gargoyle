@@ -37,7 +37,8 @@ Configuration (environment, never the repository):
 
   GARGOYLE_TARGET_URL          the URL this target serves; a receipt's
                                target_url must equal it.
-  GARGOYLE_PUBLISHER_URL       where the published record is fetched.
+  GARGOYLE_PUBLISHER_URL       where the published record (the live policy
+                               pin, {policy_id, policy_sha256}) is fetched.
   GARGOYLE_PINNED_ROOT_SHA256  sha256 of the authentic published-record
                                bytes, distributed out of band and never
                                fetched with the record (that would be
@@ -157,9 +158,11 @@ def config_from_env() -> Optional[Dict[str, Any]]:
             publisher_key = Ed25519PublicKey.from_public_bytes(bytes.fromhex(pub_key_hex))
         except Exception:
             return None
+        signed_record_url = os.environ.get(ENV_SIGNED_RECORD_URL)
+        if not signed_record_url:
+            return None  # signed mode names its record URL; nothing is guessed
         config["pinned_publisher_keys"] = {pub_key_id: publisher_key}
-        config["signed_record_url"] = os.environ.get(ENV_SIGNED_RECORD_URL) or \
-            publisher_url.replace("published_hashes.json", "published_hashes_signed.json")
+        config["signed_record_url"] = signed_record_url
     # Optional signed key-record mode: all three settings or none. A partial
     # set or a malformed root key refuses; it never silently falls back to the
     # static pin.

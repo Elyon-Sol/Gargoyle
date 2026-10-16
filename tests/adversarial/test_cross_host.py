@@ -8,8 +8,8 @@ The key property is that the policy-pin check uses the fetched record. The
 tests show it by making the target's local policy pin diverge and checking
 that a record_source overrides it.
 
-The anchor is computed from the committed EVIDENCE/published_hashes.json
-bytes, and receipts use a fixed timestamp_utc.
+The anchor is computed from the reference record bytes (tests/reference.py),
+and receipts use a fixed timestamp_utc.
 """
 
 import json
@@ -17,6 +17,7 @@ import json
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.testclient import TestClient
 
+from reference import reference_policy, reference_record_bytes
 from gargoyle.policy import ManifestPolicy
 from gargoyle.envelope import (
     REASSERTED,
@@ -40,7 +41,6 @@ from gargoyle.verifier import (
 
 
 TARGET_URL = "http://127.0.0.1:9000/target"
-PUBLISHED_HASHES_PATH = "EVIDENCE/published_hashes.json"
 
 # A fetched record that fails the pinned anchor never becomes a trusted
 # record_source; the target refuses with this reason.
@@ -53,9 +53,8 @@ REF_TARGET_ANCHOR_MISMATCH = "REF_TARGET_ANCHOR_MISMATCH"
 
 
 def _published_bytes():
-    """The authentic published record bytes, as committed on disk."""
-    with open(PUBLISHED_HASHES_PATH, "rb") as f:
-        return f.read()
+    """The authentic published record bytes, as the publisher would serve them."""
+    return reference_record_bytes()
 
 
 def _published_record():
@@ -83,7 +82,7 @@ def _build_valid_envelope(interaction=None, target_url=TARGET_URL,
     if interaction is None:
         interaction = _normalized_interaction()
     return build_envelope(
-        policy_pin=ManifestPolicy().pin(),
+        policy_pin=reference_policy().pin(),
         decision="ELIGIBLE",
         target_url=target_url,
         call=interaction,
@@ -171,7 +170,7 @@ def _build_cross_host_target_app(publisher_base, pinned_root, fetch=fetch_publis
 
 def test_reassert_currency_comes_from_record_not_local_disk(monkeypatch):
     """
-    With the target's local policy pin made to diverge, reassert() with the
+    With the target's local policy pin made to diverge, reassert(, policy=reference_policy()) with the
     authentic record as record_source still returns REASSERTED, while the same
     receipt with no record_source returns RE-EVALUATE-REQUIRED. The contrast
     shows the fetched record, not local state, decides currency.
@@ -189,7 +188,7 @@ def test_reassert_currency_comes_from_record_not_local_disk(monkeypatch):
     assert reassert(env, record_source=record)["outcome"] == REASSERTED
 
     # Local-state path with the same divergence -> not honored.
-    assert reassert(env)["outcome"] == RE_EVALUATE_REQUIRED
+    assert reassert(env, policy=reference_policy())["outcome"] == RE_EVALUATE_REQUIRED
 
 
 def test_verify_envelope_honors_valid_despite_divergent_local_disk(monkeypatch):
@@ -211,7 +210,7 @@ def test_verify_envelope_honors_valid_despite_divergent_local_disk(monkeypatch):
     assert bound["accepted"] is True
     assert bound["reason"] == ACCEPT_REASSERTED_AND_BOUND
 
-    local = verify_envelope(env, interaction, TARGET_URL)
+    local = verify_envelope(env, interaction, TARGET_URL, policy=reference_policy())
     assert local["accepted"] is False
     assert local["reason"] == REF_VERIFY_REASSERT_RE_EVALUATE_REQUIRED
 

@@ -7,6 +7,7 @@ import json
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from fastapi.testclient import TestClient
 
+from reference import reference_policy
 from gargoyle.policy import ManifestPolicy
 from gargoyle.envelope import build_envelope, sign_envelope
 from gargoyle.reference_target import build_reference_target_app
@@ -22,7 +23,7 @@ def inter():
 
 def signed_env(did):
     e = build_envelope(
-        policy_pin=ManifestPolicy().pin(),decision="ELIGIBLE", target_url=TARGET, call=inter(),
+        policy_pin=reference_policy().pin(),decision="ELIGIBLE", target_url=TARGET, call=inter(),
                        timestamp_utc="2026-07-11T00:00:00+00:00")
     return sign_envelope(e, priv, KID, decision_id=did)
 

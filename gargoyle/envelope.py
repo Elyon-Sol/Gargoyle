@@ -36,7 +36,7 @@ import json
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
-from gargoyle.policy import ManifestPolicy, Policy, valid_pin
+from gargoyle.policy import Policy, valid_pin
 
 REASSERTED = "REASSERTED"
 INVALIDATED = "INVALIDATED"
@@ -93,14 +93,17 @@ def live_pin(
     policy: Optional[Policy] = None,
 ) -> Dict[str, str]:
     """The pin receipts are checked against: a fetched record's policy_id /
-    policy_sha256 when given, else `policy.pin()`, else the default
-    ManifestPolicy's pin."""
+    policy_sha256 when given, else `policy.pin()`. One of the two is
+    required; a checker with no live pin is misconfigured, not permissive,
+    and that is a ValueError rather than a refusal."""
     if record_source is not None:
         return {
             "policy_id": record_source["policy_id"],
             "policy_sha256": record_source["policy_sha256"],
         }
-    return (policy or ManifestPolicy()).pin()
+    if policy is None:
+        raise ValueError("live_pin needs a record_source or a policy")
+    return policy.pin()
 
 
 def build_envelope(
@@ -158,7 +161,8 @@ def reassert(
     record_source: Optional[Dict[str, Any]] = None,
     policy: Optional[Policy] = None,
 ) -> Dict[str, str]:
-    """Check a receipt against the live policy pin (see live_pin).
+    """Check a receipt against the live policy pin (see live_pin; one of
+    `record_source` / `policy` is required).
 
     Returns {"outcome": REASSERTED | INVALIDATED | RE_EVALUATE_REQUIRED}. The
     integrity check runs first, so a tampered receipt is INVALIDATED even if

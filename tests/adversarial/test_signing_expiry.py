@@ -5,7 +5,7 @@ not_after is inside the signed region, so it cannot be extended, and outside
 decision_sha256, so it does not change the decision hash. Expiry bounds how
 long a captured or leaked receipt is useful without anyone having to detect
 the leak. It is only enforced when the signature is verified; an unsigned
-not_after is forgeable. `now` is injected and reassert() uses record_source,
+not_after is forgeable. `now` is injected and reassert(, policy=reference_policy()) uses record_source,
 so the tests are deterministic.
 """
 from datetime import datetime, timedelta, timezone
@@ -13,6 +13,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
+from reference import reference_policy
 from gargoyle.envelope import (
     args_sha256, canonical_json, _sha256_text, _HASH_EXCLUDED_KEYS, _SIGNATURE_EXCLUDED_KEYS,
     sign_envelope,

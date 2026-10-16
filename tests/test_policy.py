@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
+from reference import MANIFEST_PATH, reference_policy
 from gargoyle.envelope import RE_EVALUATE_REQUIRED, REASSERTED, reassert
 from gargoyle.issuer import (
     DEFAULT_TTL_SECONDS,
@@ -29,13 +30,14 @@ from gargoyle.policy import (
     Policy,
     authority_covered,
     coverage_covered,
+    evaluate,
     load_manifest,
     manifest_pin_matches,
     manifest_sha256,
 )
 from gargoyle.verifier import ACCEPT_REASSERTED_AND_BOUND, verify_envelope
 
-SHA = manifest_sha256()
+SHA = manifest_sha256(MANIFEST_PATH)
 TARGET = "https://target.example.com/act"
 
 
@@ -80,7 +82,7 @@ def test_subset_checks(fn, key, required):
 
 
 def test_manifest_pin_match_and_mismatch():
-    m = load_manifest()
+    m = load_manifest(MANIFEST_PATH)
     assert manifest_pin_matches(call(), m, SHA) is True
     assert manifest_pin_matches(call(expected_manifest_version="2.0"), m, SHA) is False
     assert manifest_pin_matches(call(expected_manifest_sha256="0" * 64), m, SHA) is False
@@ -119,7 +121,7 @@ CASES = [
 
 @pytest.mark.parametrize("name,interaction,outcome,reason", CASES, ids=[c[0] for c in CASES])
 def test_manifest_policy_cases(name, interaction, outcome, reason):
-    d = ManifestPolicy().decide(TARGET, interaction)
+    d = reference_policy().decide(TARGET, interaction)
     assert (d.outcome, d.reason) == (outcome, reason)
 
 
@@ -135,18 +137,18 @@ def test_manifest_policy_refuses_malformed_or_missing_file(tmp_path):
 
 
 def test_manifest_policy_unknown_interaction_type(tmp_path):
-    m = dict(load_manifest(), interaction_types={"read": {"AR": ["identity"], "R": ["session"], "high_impact": False}})
+    m = dict(load_manifest(MANIFEST_PATH), interaction_types={"read": {"AR": ["identity"], "R": ["session"], "high_impact": False}})
     d = _policy_at(tmp_path, m).decide(TARGET, call(interaction_type="nope"))
     assert d.reason == REQUIRED_SETS_UNRESOLVED
 
 
 def test_manifest_policy_pin_follows_the_file(tmp_path):
     p = tmp_path / "manifest.json"
-    shutil.copy("MANIFEST/manifest.json", p)
+    shutil.copy(MANIFEST_PATH, p)
     policy = ManifestPolicy(str(p))
     before = policy.pin()
     assert before == {"policy_id": MANIFEST_POLICY_ID, "policy_sha256": SHA}
-    m = load_manifest(); m["AR"] = m["AR"] + ["admin"]
+    m = load_manifest(MANIFEST_PATH); m["AR"] = m["AR"] + ["admin"]
     p.write_text(json.dumps(m))
     assert policy.pin()["policy_sha256"] != before["policy_sha256"]
     # The caller's old pin no longer matches, and the new required token is enforced.
@@ -154,14 +156,34 @@ def test_manifest_policy_pin_follows_the_file(tmp_path):
 
 
 def test_manifest_policy_flags_high_impact(tmp_path):
-    m = dict(load_manifest(), HIGH_IMPACT=["role"])
+    m = dict(load_manifest(MANIFEST_PATH), HIGH_IMPACT=["role"])
     policy = _policy_at(tmp_path, m)
     d = policy.decide(TARGET, call(expected_manifest_sha256=policy.pin()["policy_sha256"]))
     assert d.eligible and d.requires_approval is True
 
 
 def test_manifest_policy_satisfies_the_protocol():
-    assert isinstance(ManifestPolicy(), Policy)
+    assert isinstance(reference_policy(), Policy)
+
+
+@pytest.mark.parametrize("path", [None, ""])
+def test_manifest_policy_has_no_default_manifest(path):
+    """A policy is evaluated only against a file the deployer named."""
+    with pytest.raises((TypeError, ValueError)):
+        ManifestPolicy(path)
+    with pytest.raises(TypeError):
+        ManifestPolicy()
+    with pytest.raises(TypeError):
+        load_manifest()
+    with pytest.raises(TypeError):
+        manifest_sha256()
+
+
+def test_evaluate_needs_a_policy():
+    assert evaluate(call(), reference_policy()) == ELIGIBLE
+    assert evaluate(call(AP=["role"]), reference_policy()) == REFUSE
+    with pytest.raises(TypeError):
+        evaluate(call())
 
 
 # ---------------------------------------------------------------------------
@@ -191,25 +213,26 @@ def key():
 
 def test_issue_eligible_receipt_verifies_end_to_end(key):
     now = datetime.now(timezone.utc)
-    r = issue(ManifestPolicy(), TARGET, call(), signing_key=key, key_id="k1", now=now)
+    r = issue(reference_policy(), TARGET, call(), signing_key=key, key_id="k1", now=now)
     assert r.decision.eligible and r.envelope is not None
     env = r.envelope
-    assert env["policy"] == ManifestPolicy().pin()
+    assert env["policy"] == reference_policy().pin()
     assert env["decision_id"]
     assert datetime.fromisoformat(env["not_after"]) == now + timedelta(seconds=DEFAULT_TTL_SECONDS)
-    v = verify_envelope(env, bound(call()), TARGET, pinned_public_keys={"k1": key.public_key()})
+    v = verify_envelope(env, bound(call()), TARGET, pinned_public_keys={"k1": key.public_key()},
+                        policy=reference_policy())
     assert (v["accepted"], v["reason"]) == (True, ACCEPT_REASSERTED_AND_BOUND)
     assert set(env["request_context"]) == {"tool", "args_sha256", "principal"}
 
 
 def test_issue_gives_each_receipt_its_own_decision_id(key):
-    ids = {issue(ManifestPolicy(), TARGET, call(), signing_key=key, key_id="k1").envelope["decision_id"]
+    ids = {issue(reference_policy(), TARGET, call(), signing_key=key, key_id="k1").envelope["decision_id"]
            for _ in range(5)}
     assert len(ids) == 5
 
 
 def test_issue_refusal_carries_no_receipt(key):
-    r = issue(ManifestPolicy(), TARGET, call(AP=["role"]), signing_key=key, key_id="k1")
+    r = issue(reference_policy(), TARGET, call(AP=["role"]), signing_key=key, key_id="k1")
     assert r.envelope is None and r.decision.reason == AUTHORITY_MISSING
 
 
@@ -252,9 +275,9 @@ def test_issue_surfaces_requires_approval(key):
 @pytest.mark.parametrize("ttl", [0, -1, 1.5, True, None])
 def test_issue_rejects_unbounded_or_bad_ttl(key, ttl):
     with pytest.raises(ValueError):
-        issue(ManifestPolicy(), TARGET, call(), signing_key=key, key_id="k1", ttl_seconds=ttl)
+        issue(reference_policy(), TARGET, call(), signing_key=key, key_id="k1", ttl_seconds=ttl)
 
 
 def test_issue_requires_a_key():
     with pytest.raises(ValueError):
-        issue(ManifestPolicy(), TARGET, call(), signing_key=None, key_id="k1")
+        issue(reference_policy(), TARGET, call(), signing_key=None, key_id="k1")
