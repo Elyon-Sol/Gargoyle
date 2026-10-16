@@ -1,0 +1,19 @@
+{
+  "name": "gargoyle-receipts",
+  "version": "0.1.0-dev.0",
+  "description": "Verifier and consumer for Gargoyle receipts: signed, single-use, argument-bound authorization receipts for agent tool calls.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "dist/src/index.js",
+  "types": "dist/src/index.d.ts",
+  "files": ["dist/src", "README.md"],
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "tsc -p tsconfig.json && node --test \"dist/test/**/*.test.js\""
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.6.0"
+  }
+}

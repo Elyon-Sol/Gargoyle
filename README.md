@@ -51,7 +51,10 @@ still change before the first release; it is specified in [SPEC.md](SPEC.md).
     pip install -e ".[dev]"
     python -m pytest
 
-Python 3.14 or later. Redis is optional (`.[redis]`) and only needed to
+Python 3.14 or later. A TypeScript verifier and consumer for Node 20+
+lives in [ts/](ts/) (`cd ts && npm install && npm test`); its suite
+recomputes the same conformance vectors byte for byte, so the two
+implementations cannot drift apart silently. Redis is optional (`.[redis]`) and only needed to
 share the replay cache and pending-approval set across executor replicas.
 
 ## Issuing a receipt
@@ -159,7 +162,7 @@ chain["accepted"], chain["steps"]   # True, [("authorization", ...), ("approval"
 That is the sentence Gargoyle can say that nobody else can: a specific
 policy version authorized a specific call for a specific principal, a
 human's key released it, and exactly that call ran once, verifiable offline
-by anyone.
+by anyone, in Python or TypeScript.
 
 ## Two shipped consumers
 

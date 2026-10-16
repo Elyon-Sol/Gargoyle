@@ -64,4 +64,14 @@ verifying itself for no external user; that is the failure mode to avoid.
   MCP `_meta["gargoyle/execution"]`, SPEC.md section 13, executor vector in
   tests/fixtures/wire_vectors.json, verifier.verify_provenance factored out
   for offline use.
-- Step 2: next.
+- Step 2: DONE (2026-10-16). ts/: canonical JSON (byte-compatible with the
+  reference serializer, including ensure_ascii escaping), Ed25519 over Node's
+  crypto, receipt build/sign, verifyProvenance, verifyEnvelope, grants,
+  execution receipts, verifyChain, Consumer with single-use claims and attest.
+  ts/test recomputes every conformance vector from the seed labels and
+  compares byte for byte; tests/test_typescript_conformance.py runs that suite
+  from pytest when Node is present; .github/workflows/ci.yml runs both suites.
+  Not ported yet: the published-record and key-record readers (SPEC.md 9-10).
+  The spec proved complete enough to implement from, with one addition worth
+  making at step 3: a note on float formatting differences between producers.
+- Step 3: next.
