@@ -130,6 +130,48 @@ client (Desktop: quit from the tray and reopen).
 3. On the client, `python -m gargoyle.cli audit --log C:\gargoyle\audit.jsonl --out C:\gargoyle`
    shows the UPN in the principal column for new rows.
 
+## 7. Approvers sign in with Entra too
+
+With this, the console needs no `approver-web.json`. An approver signs in
+with Microsoft, the browser creates a non-exportable signing key, and the
+public half is enrolled under their UPN. Grants then read "released by
+dana@yourclient.com", threshold rules can name UPNs, and removing the
+role in Entra ends the ability to approve.
+
+In Entra admin center:
+
+1. **App registrations**, open **Gargoyle-Issuer-API**, **App roles**,
+   **Create app role**: display name `Approver`, allowed member types
+   **Users/Groups**, value `Approver`, description `May release held
+   Gargoyle calls`, enabled. **Apply**.
+2. **Enterprise applications**, open **Gargoyle-Issuer-API**, **Users and
+   groups**, **Add user/group**: pick the approvers (or an approvers
+   group), role **Approver**, **Assign**. The role lands in their access
+   token's `roles` claim.
+3. **App registrations**, open **User-Client-Flow**, **Authentication**,
+   **Add a platform**, **Single-page application**, redirect URI
+   `https://<issuer host>/approve` (the PoC: `https://192.168.56.101:8443/approve`).
+   **Configure**. Add one entry per hostname the console is opened at.
+
+On the VM, add to `issuer.env` and restart the issuer:
+
+```
+GARGOYLE_ENTRA_CLIENT_ID=CLIENT_APP_ID
+```
+
+(`GARGOYLE_ENTRA_SCOPE` defaults to `api://<last audience>/access`;
+`GARGOYLE_APPROVERS_PATH` defaults to `approvers.json` beside the keys;
+`GARGOYLE_APPROVER_ROLE` defaults to `Approver`, or set
+`GARGOYLE_APPROVER_GROUPS` to comma-separated group ids instead.)
+
+Then open `https://<issuer host>/approve`: a **Sign in with Microsoft**
+button appears above the file loader. Sign in, and the page reports
+"this browser's key enrolled" and "approving as <upn>". A new browser or
+device enrolls a new key, replacing the old one for that UPN. The
+enrolled public keys are published at `/approvers` for the middleware and
+are read from `approvers.json` by `gargoyle audit`. The file loader stays
+for sites that prefer key files.
+
 ## Troubleshooting
 
 | Symptom | Cause | Fix |
@@ -140,4 +182,6 @@ client (Desktop: quit from the tray and reopen).
 | issuer answers 401 `REF_JWS_KEY_UNKNOWN` | issuer started before the tenant was set, or tenant id wrong | check `GARGOYLE_ENTRA_TENANT`, restart |
 | middleware refuses `REF_TARGET_LOGIN_REQUIRED` | no cached account, or refresh rejected by tenant policy | run `gargoyle login` again |
 | middleware fails at start with `CERTIFICATE_VERIFY_FAILED` for `login.microsoftonline.com` (0.5.0 only) | `REQUESTS_CA_BUNDLE` pinned the private CA for MSAL too | upgrade to 0.5.2 or later: MSAL trusts the public roots on its own |
+| console shows "signed in but has no Approver role" | step 7.2 assignment missing, or the token predates it | assign the role, sign out of the console tab (close it) and sign in again |
+| console sign-in returns `AADSTS9002326` or a redirect URI error | step 7.3: the redirect URI is not registered as a Single-page application | add it under the SPA platform, exact scheme, host, port and path |
 | login succeeds but the console still says the old principal | client not restarted, or the pasted MCP entry is stale | re-paste from `mcp-config.json`, restart |

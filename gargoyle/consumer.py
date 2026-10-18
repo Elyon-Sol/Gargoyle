@@ -152,6 +152,7 @@ class Consumer:
         clock_skew: timedelta = timedelta(0),
         high_water: Optional[HighWater] = None,
         approver_public_keys: Optional[Dict[str, Any]] = None,
+        approver_key_source: Optional[Callable[[], Dict[str, Any]]] = None,
         executor_signing_key: Any = None,
         executor_key_id: Optional[str] = None,
     ) -> None:
@@ -195,6 +196,9 @@ class Consumer:
         self.clock_skew = clock_skew
         self.high_water = high_water if high_water is not None else HighWater()
         self.approver_public_keys = approver_public_keys
+        # Enrolled approvers (gargoyle.approvers), fetched live by the caller's
+        # function and merged over the static map at each flagged check.
+        self.approver_key_source = approver_key_source
 
     # ----- the live policy pin -----
 
@@ -253,7 +257,13 @@ class Consumer:
         if key_record_view is not None:
             return resolve_approver_keys(key_record_view, gate_key_id=gate_key_id,
                                          now=now, clock_skew=self.clock_skew)
-        return dict(self.approver_public_keys or {})
+        keys = dict(self.approver_public_keys or {})
+        if self.approver_key_source is not None:
+            try:
+                keys.update({k: v for k, v in (self.approver_key_source() or {}).items() if k != gate_key_id})
+            except Exception:
+                pass          # an unreachable source adds nothing; the static map stands
+        return keys
 
     def check(
         self,

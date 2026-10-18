@@ -340,6 +340,22 @@ The approver map should come from a signed key record (section 10) where
 the key's role is exactly `approver`; a key-id comparison alone cannot stop
 an issuer-controlled key published under another id.
 
+### 8.3 Enrolled approvers (reference issuing service)
+
+The reference issuing service also lets an approver enroll a key under an
+identity-provider identity: an authenticated token whose `roles` (or
+`groups`) claim marks the holder as an approver may bind its own subject
+(the UPN) to a public key (`POST /approvers/enroll`); the UPN is then the
+approver key id, the service publishes the map (`GET /approvers`), the
+reference middleware merges it over its static approver keys when it
+checks a grant, and a threshold's `approval.approvers` may name UPNs. The
+service's operator is thereby the authority for who may approve, which is
+weaker than a root-signed key record and appropriate where one
+administrator runs both the service and the tenant. Separation of duties
+is unchanged: an enrolled key is never the issuer's key, and the private
+half is generated and held in the approver's browser. An enrollment
+without the role is `REF_ISSUER_NOT_AN_APPROVER`.
+
 ## 9. The published policy record
 
 A consumer learns the live policy pin either from a record file it was

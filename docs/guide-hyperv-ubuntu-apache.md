@@ -407,6 +407,13 @@ The message cannot approve anything; the approver still opens the console
 and signs with their key. Teams and most alerting products accept the same
 `{"text": ...}` body.
 
+**5.3 Approvers as themselves.** With Entra configured
+(docs/entra-setup.md, section 7), the console offers "Sign in with
+Microsoft". The approver's key is created in their browser, cannot be
+exported, and is enrolled under their account; the card they approve is
+released by their UPN, which is what the audit then shows. Threshold rules
+can name those UPNs. No approver file changes hands.
+
 ## Part 6: the audit trail
 
 Every decision appended one line to `C:\gargoyle\audit.jsonl`, honored or

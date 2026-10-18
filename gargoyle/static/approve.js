@@ -57,3 +57,65 @@ export function newGrantId() {
   const b = new Uint8Array(16); globalThis.crypto.getRandomValues(b);
   return hex(b.buffer);
 }
+
+// ---- Entra ID sign-in (OAuth 2.0 authorization code with PKCE, RFC 7636), no library ----
+
+const b64url = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+
+export function randomVerifier() {
+  const bytes = new Uint8Array(32); globalThis.crypto.getRandomValues(bytes);
+  return b64url(bytes);                                   // 43 chars of the unreserved set
+}
+
+export async function pkceChallenge(verifier) {
+  return b64url(await subtle().digest("SHA-256", new TextEncoder().encode(verifier)));
+}
+
+export function authorizeUrl({ tenant, clientId, scope, redirectUri, challenge, state }) {
+  const q = new URLSearchParams({ client_id: clientId, response_type: "code", redirect_uri: redirectUri, response_mode: "query",
+                                  scope: scope + " openid profile", code_challenge: challenge, code_challenge_method: "S256", state });
+  return `https://login.microsoftonline.com/${tenant}/oauth2/v2.0/authorize?${q}`;
+}
+
+export async function exchangeCode({ tenant, clientId, scope, redirectUri, code, verifier }, fetchImpl = globalThis.fetch) {
+  const body = new URLSearchParams({ client_id: clientId, grant_type: "authorization_code", code, redirect_uri: redirectUri,
+                                     code_verifier: verifier, scope: scope + " openid profile" });
+  const r = await fetchImpl(`https://login.microsoftonline.com/${tenant}/oauth2/v2.0/token`,
+                            { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body });
+  const tok = await r.json();
+  if (!r.ok || !tok.access_token) throw new Error(tok.error_description || tok.error || ("token endpoint " + r.status));
+  return tok;                                             // { access_token, expires_in, id_token, ... }
+}
+
+// ---- The approver's own key: generated here, non-extractable, kept in IndexedDB ----
+
+export async function generateApproverKey() {
+  return subtle().generateKey({ name: "Ed25519" }, false, ["sign", "verify"]);   // private half can never be exported
+}
+
+export async function publicKeyHex(keyPair) {
+  return hex(await subtle().exportKey("raw", keyPair.publicKey));
+}
+
+const DB = "gargoyle-approver", STORE = "keys";
+function openDb() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(DB, 1);
+    req.onupgradeneeded = () => req.result.createObjectStore(STORE);
+    req.onsuccess = () => resolve(req.result); req.onerror = () => reject(req.error);
+  });
+}
+export async function loadStoredKey(name) {
+  const db = await openDb();
+  return new Promise((resolve, reject) => {
+    const req = db.transaction(STORE).objectStore(STORE).get(name);
+    req.onsuccess = () => resolve(req.result || null); req.onerror = () => reject(req.error);
+  });
+}
+export async function storeKey(name, keyPair) {
+  const db = await openDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE, "readwrite"); tx.objectStore(STORE).put(keyPair, name);
+    tx.oncomplete = () => resolve(); tx.onerror = () => reject(tx.error);
+  });
+}

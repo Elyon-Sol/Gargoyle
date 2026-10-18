@@ -37,3 +37,23 @@ def test_console_signing_matches_the_reference_vectors(tmp_path):
     assert out["args_sha256"] == vectors["args_sha256"]
     assert out["hash_region"] == vectors["hash_region"]
     assert out["grant"] == vectors["grant"]            # byte-equal signature from the browser-side code
+
+
+PKCE_SCRIPT = r'''
+import { pkceChallenge, authorizeUrl } from "%s";
+const challenge = await pkceChallenge("dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk");
+const url = authorizeUrl({ tenant: "t", clientId: "c", scope: "api://a/access", redirectUri: "https://g/approve", challenge, state: "s1" });
+console.log(JSON.stringify({ challenge, url }));
+'''
+
+
+def test_console_pkce_matches_rfc_7636(tmp_path):
+    """Appendix B of RFC 7636: the S256 challenge for the given verifier."""
+    if shutil.which("node") is None:
+        pytest.skip("node not installed")
+    script = tmp_path / "pkce.mjs"
+    script.write_text(PKCE_SCRIPT % (ROOT / "gargoyle" / "static" / "approve.js").as_uri())
+    out = json.loads(subprocess.run(["node", str(script)], capture_output=True, text=True, check=True).stdout)
+    assert out["challenge"] == "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"
+    assert out["url"].startswith("https://login.microsoftonline.com/t/oauth2/v2.0/authorize?")
+    assert "code_challenge_method=S256" in out["url"] and "client_id=c" in out["url"] and "scope=api%3A%2F%2Fa%2Faccess+openid+profile" in out["url"]

@@ -21,7 +21,7 @@ your MCP server and lets through only what both agreed to.
 
 [![PyPI](https://img.shields.io/pypi/v/gargoyle-receipts)](https://pypi.org/project/gargoyle-receipts/)
 
-Status: pre-release (`0.5.3.dev0`, on PyPI as `gargoyle-receipts`). The wire format is `gargoyle/3` and may
+Status: pre-release (`0.6.0.dev0`, on PyPI as `gargoyle-receipts`). The wire format is `gargoyle/3` and may
 still change before the first release; it is specified in [SPEC.md](SPEC.md).
 
 ## What a receipt gives you
@@ -217,9 +217,12 @@ Three commands, no policy engine, no containers, no client changes:
     gargoyle approve --watch 2                  # where the approver sits (terminal)
 
 or approve in a browser: open the issuer's `/approve` page and load
-`approver-web.json`; the page shows each held call with its full arguments,
-checked against the receipt, and signs the grant locally with WebCrypto.
-The key never leaves the browser. Then paste the server entry from
+`approver-web.json`, or, with Entra configured, sign in with Microsoft;
+the page shows each held call with its full arguments, checked against
+the receipt, and signs the grant locally with WebCrypto. The key never
+leaves the browser, and with Entra it is generated there, non-exportable,
+and enrolled under the approver's UPN, so grants and audits name the
+person. Then paste the server entry from
 `gargoyle-deploy/mcp-config.json` into your MCP client.
 [docs/guide-hyperv-ubuntu-apache.md](docs/guide-hyperv-ubuntu-apache.md)
 is the full single-instance build: Ubuntu VM on Hyper-V, Apache with TLS,
@@ -260,6 +263,8 @@ cannot attach receipts work unchanged. Configuration is by environment:
 | `GARGOYLE_MCP_ISSUER_URL`, `GARGOYLE_MCP_CLIENT_TOKEN` | self-issue mode: the issuing service and the identity token (whose subject is this server's principal) to obtain receipts with; `GARGOYLE_MCP_APPROVAL_TIMEOUT_SECONDS` and `GARGOYLE_MCP_POLL_SECONDS` tune the wait for a grant |
 | issuer `GARGOYLE_ISSUER_AUDIENCE` | the `aud` an identity token must carry; a comma-separated list accepts several, so init-minted tokens (`gargoyle-issuer`) and a tenant's tokens (the issuer app's client id) work side by side |
 | `GARGOYLE_MCP_ENTRA_TENANT`, `_CLIENT_ID`, `_SCOPE`, `_TOKEN_CACHE` | instead of a fixed client token: the user's own Entra ID token, written by `gargoyle login` (device code, MSAL cache, silent refresh); the principal is their UPN. No usable token refuses `REF_TARGET_LOGIN_REQUIRED` |
+| issuer `GARGOYLE_ENTRA_CLIENT_ID`, `GARGOYLE_ENTRA_SCOPE` | lets the console sign approvers in with Entra (code flow with PKCE, no library); the browser generates a non-exportable key and enrolls it under the UPN |
+| issuer `GARGOYLE_APPROVERS_PATH`, `GARGOYLE_APPROVER_ROLE`, `GARGOYLE_APPROVER_GROUPS` | where enrolled approvers persist (default `approvers.json` beside the keys) and which Entra app role (default `Approver`) or groups may enroll |
 | `GARGOYLE_HOLD_WEBHOOK_URL`, `GARGOYLE_APPROVE_URL` | issuer: POST a notice of every new hold (Slack incoming-webhook shape, `text` plus the hold) with a link to the console; notice only, the grant still needs the approver's key |
 | `GARGOYLE_MCP_AUDIT_LOG` | the evidence log: every decision, honored or refused, as one hash-chained JSON line with its receipt, grant and execution receipt; `gargoyle audit --log` verifies the file |
 

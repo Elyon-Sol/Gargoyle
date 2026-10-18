@@ -160,6 +160,16 @@ class IssuerClient:
             return {"envelope": None, "reason": body.get("reason") or REF_TARGET_ISSUER_UNAVAILABLE}
         return {"envelope": body.get("envelope"), "reason": None}
 
+    def approver_keys(self) -> Dict[str, Any]:
+        """The issuer's enrolled approvers as {upn: public key}; {} when the
+        issuer cannot be reached (the static map then stands alone)."""
+        from gargoyle.approvers import keys_from_hex
+        try:
+            r = self._get("/approvers")
+            return keys_from_hex(r.json().get("approvers", {})) if r.status_code == 200 else {}
+        except Exception:
+            return {}
+
     def wait_for_grant(self, approval_request_id: str) -> Dict[str, Any]:
         """Poll until the hold has its grant (or, for a receipt that needs
         several approvers, the whole set), a human declined it, the hold
@@ -284,6 +294,7 @@ class ServerState:
                 record=config["record"],
                 replay_cache=replay_cache,
                 approver_public_keys=config.get("approver_public_keys"),
+                approver_key_source=(issuer_client.approver_keys if issuer_client is not None else None),
                 executor_signing_key=config.get("executor_signing_key"),
                 executor_key_id=config.get("executor_key_id"),
             )

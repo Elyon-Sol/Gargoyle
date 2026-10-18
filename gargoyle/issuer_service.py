@@ -53,6 +53,8 @@ from gargoyle.approval import (REF_APPROVAL_APPROVER_NOT_ELIGIBLE, REF_APPROVAL_
                                verify_grant)
 from gargoyle.envelope import approval_terms
 from gargoyle.notify import notifier_from_env
+from gargoyle.approvers import (DEFAULT_APPROVER_ROLE, ENV_APPROVER_GROUPS, ENV_APPROVER_ROLE, ENV_APPROVERS_PATH,
+                                ApproverRegistry, may_enroll, valid_public_key_hex)
 from gargoyle.identity import entra_keys, principal_from_token
 from gargoyle.issuer import DEFAULT_TTL_SECONDS, issue
 from gargoyle.policy import Policy
@@ -69,12 +71,15 @@ ENV_AUDIENCE = "GARGOYLE_ISSUER_AUDIENCE"
 ENV_APPROVER_KEY_ID = "GARGOYLE_APPROVER_KEY_ID"
 ENV_APPROVER_PUBLIC_KEY_HEX = "GARGOYLE_APPROVER_PUBLIC_KEY_HEX"
 ENV_RECEIPT_TTL = "GARGOYLE_RECEIPT_TTL_SECONDS"
+ENV_CONSOLE_CLIENT_ID = "GARGOYLE_ENTRA_CLIENT_ID"   # the public client app the console signs in with (User-Client-Flow)
+ENV_CONSOLE_SCOPE = "GARGOYLE_ENTRA_SCOPE"           # default api://<last audience>/access
 
 REF_ISSUER_UNAUTHENTICATED = "REF_ISSUER_UNAUTHENTICATED"
 REF_ISSUER_BAD_REQUEST = "REF_ISSUER_BAD_REQUEST"
 REF_ISSUER_ARGS_NOT_TEXT = "REF_ISSUER_ARGS_NOT_TEXT"   # arguments carry characters no UTF-8 text has
 REF_ISSUER_UNKNOWN_HOLD = "REF_ISSUER_UNKNOWN_HOLD"
 REF_ISSUER_NO_APPROVER_TRUST = "REF_ISSUER_NO_APPROVER_TRUST"
+REF_ISSUER_NOT_AN_APPROVER = "REF_ISSUER_NOT_AN_APPROVER"   # enrollment without the approver role or group
 
 
 def build_issuer_app(
@@ -88,6 +93,10 @@ def build_issuer_app(
     ttl_seconds: int = DEFAULT_TTL_SECONDS,
     now: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
     on_hold: Optional[Callable[[Dict[str, Any], Any], None]] = None,
+    approver_registry: Optional[ApproverRegistry] = None,
+    approver_role: str = DEFAULT_APPROVER_ROLE,
+    approver_groups: Optional[list] = None,
+    console_entra: Optional[Dict[str, str]] = None,
 ) -> FastAPI:
     """`on_hold(envelope, args)` is called once for every new hold (gargoyle.notify
     posts it to a webhook); it is notice, not admission, and its failure
@@ -97,6 +106,12 @@ def build_issuer_app(
     app.state.pending_args: Dict[str, Any] = {}           # approval_request_id -> the call's arguments
     app.state.grants: Dict[str, Dict[str, Any]] = {}      # approval_request_id -> grant
     app.state.declined: set = set()                       # approval_request_ids a human refused
+    registry = approver_registry if approver_registry is not None else ApproverRegistry(None)
+    static_approvers = dict(approver_public_keys or {})
+
+    def approver_keys() -> Dict[str, Any]:
+        """Static keys from configuration plus every enrolled approver, by UPN."""
+        return {**static_approvers, **registry.keys()}
 
     def _refuse(status: int, reason: str) -> HTTPException:
         return HTTPException(status_code=status, detail={"reason": reason})
@@ -182,10 +197,11 @@ def build_issuer_app(
         env = app.state.pending.get(arid) if isinstance(arid, str) else None
         if env is None:
             return {"accepted": False, "reason": REF_ISSUER_UNKNOWN_HOLD}
-        if not approver_public_keys:
+        trusted = approver_keys()
+        if not trusted:
             return {"accepted": False, "reason": REF_ISSUER_NO_APPROVER_TRUST}
         g = verify_grant(grant, expected_decision_sha256=env["decision_sha256"],
-                         expected_approval_request_id=arid, approver_public_keys=approver_public_keys,
+                         expected_approval_request_id=arid, approver_public_keys=trusted,
                          gate_key_id=key_id, now=now())
         if not g["accepted"]:
             return {"accepted": False, "reason": g["reason"]}
@@ -229,6 +245,46 @@ def build_issuer_app(
                 "grants": list(have) if complete else [],
                 "collected": len(have), "required": approval_terms(env)["required"] if env else None,
                 "declined": approval_request_id in app.state.declined}
+
+    @app.get("/approvers")
+    async def approvers():
+        """Public, like /record: the enrolled approvers' public keys by UPN,
+        for the middleware and for audits. Static configured keys are not
+        listed; they travel in config."""
+        return {"approvers": registry.public_hex()}
+
+    @app.post("/approvers/enroll")
+    async def enroll(request: Request, authorization: Optional[str] = Header(default=None)):
+        """Bind the caller's UPN to the public key their browser generated.
+        Only a token carrying the approver role (or a configured group) may;
+        the UPN comes from the token, never from the body."""
+        who = authenticate(authorization)
+        if not may_enroll(who, role=approver_role, groups=approver_groups):
+            raise _refuse(403, REF_ISSUER_NOT_AN_APPROVER)
+        try:
+            body = await request.json()
+        except Exception:
+            raise _refuse(400, REF_ISSUER_BAD_REQUEST)
+        if not isinstance(body, dict) or not valid_public_key_hex(body.get("public_key_hex")):
+            raise _refuse(400, REF_ISSUER_BAD_REQUEST)
+        result = registry.enroll(who["principal"], body["public_key_hex"], now=now())
+        return {"enrolled": True, "key_id": who["principal"], "replaced": result["replaced"]}
+
+    @app.get("/me")
+    async def me(authorization: Optional[str] = Header(default=None)):
+        """Who the console is signed in as, whether they may approve, and
+        the public key enrolled for them (so the browser can tell whether
+        its own key is the one on record)."""
+        who = authenticate(authorization)
+        upn = who["principal"]
+        return {"principal": upn, "may_approve": may_enroll(who, role=approver_role, groups=approver_groups) or upn in static_approvers,
+                "enrolled_public_key_hex": registry.public_hex().get(upn)}
+
+    @app.get("/approve-config")
+    async def approve_config():
+        """Public: how the console signs in. `entra` is null when the site
+        uses approver files instead."""
+        return {"entra": console_entra}
 
     @app.get("/approve")
     async def approve_page():
@@ -298,4 +354,10 @@ def app_from_env() -> FastAPI:
         audience=os.environ.get(ENV_AUDIENCE) or None,
         ttl_seconds=int(os.environ.get(ENV_RECEIPT_TTL, DEFAULT_TTL_SECONDS)),
         on_hold=notifier_from_env(os.environ),
+        approver_registry=ApproverRegistry(os.environ.get(ENV_APPROVERS_PATH)),
+        approver_role=os.environ.get(ENV_APPROVER_ROLE, DEFAULT_APPROVER_ROLE),
+        approver_groups=[g.strip() for g in os.environ.get(ENV_APPROVER_GROUPS, "").split(",") if g.strip()] or None,
+        console_entra=({"tenant": tenant, "client_id": os.environ[ENV_CONSOLE_CLIENT_ID],
+                        "scope": os.environ.get(ENV_CONSOLE_SCOPE) or "api://%s/access" % (os.environ.get(ENV_AUDIENCE) or "").split(",")[-1].strip()}
+                       if tenant and os.environ.get(ENV_CONSOLE_CLIENT_ID) else None),
     )

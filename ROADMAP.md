@@ -92,6 +92,17 @@ verifying itself for no external user; that is the failure mode to avoid.
   hold and the receipt, with a link to /approve from GARGOYLE_APPROVE_URL); posted in
   a thread, failures logged and ignored, the grant still only from the approver's
   key. 80 lines. All six roadmap steps are done.
+- Entra approver login (2026-10-18, night): gargoyle/approvers.py (ApproverRegistry,
+  approvers.json), issuer endpoints /approvers (public map), /approvers/enroll (token with
+  the Approver app role or a configured group; UPN from the token), /me, /approve-config.
+  The console signs in by OAuth code flow with PKCE written in ~40 lines (RFC 7636 vector
+  tested under Node), generates a non-extractable Ed25519 key in the browser, keeps it in
+  IndexedDB, enrolls it once; grants carry the UPN as key id. Consumer.approver_key_source
+  lets the middleware learn enrolled keys from the issuer; `gargoyle audit` merges
+  approvers.json; threshold rules name UPNs. SPEC 8.3 states the trust trade-off (issuer
+  operator as approver authority) against a root-signed key record. docs/entra-setup.md
+  section 7. Not yet run live: needs the Approver app role and the SPA redirect URI in the
+  tenant. Version 0.6.0.dev0.
 - Entra client login live (2026-10-18, later): Claude Desktop on Windows through
   `gargoyle login` against the real tenant (two app registrations, docs/entra-setup.md).
   The hold on the issuer, the receipt and the audit rows all name

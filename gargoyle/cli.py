@@ -194,6 +194,7 @@ def cmd_issuer(args) -> int:
 
     out = Path(args.out).resolve()
     os.environ.update(_read_env(out / "issuer.env"))
+    os.environ.setdefault("GARGOYLE_APPROVERS_PATH", str(out / "approvers.json"))   # enrolled approvers live beside the keys
     app = app_from_env()
     # The middleware reads the policy pin from a file; write it next to the
     # config so the client-side entry finds it at the configured path.
@@ -229,8 +230,12 @@ def cmd_audit(args) -> int:
 
     keys = json.loads((Path(args.out).resolve() / "public-keys.json").read_text())
     load = lambda m: {k: Ed25519PublicKey.from_public_bytes(bytes.fromhex(v)) for k, v in m.items()}
+    approvers = dict(keys["approver"])
+    enrolled = Path(args.out).resolve() / "approvers.json"          # approvers who enrolled through Entra, by UPN
+    if enrolled.exists():
+        approvers.update({u: e["public_key_hex"] for u, e in json.loads(enrolled.read_text()).get("approvers", {}).items()})
     trust = dict(issuer_public_keys=load(keys["issuer"]), executor_public_keys=load(keys["executor"]),
-                 approver_public_keys=load(keys["approver"]))
+                 approver_public_keys=load(approvers))
     if args.log:
         # The middleware's evidence log: every decision, honored or refused,
         # hash-chained. Each honored entry is a full receipt chain.
