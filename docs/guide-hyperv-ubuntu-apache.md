@@ -162,14 +162,18 @@ The issuer listens only on loopback. Apache is the only way in.
 A browser signs grants only in a secure context, and the Windows client
 should not trust a plaintext issuer, so Apache terminates TLS with a
 certificate your machines trust. A two-file local CA is enough for one
-site.
+site. The CA needs the `keyUsage` extension: the OpenSSL inside Windows
+Python refuses a CA certificate without it, while browsers accept it.
 
 ```bash
 sudo mkdir -p /etc/ssl/gargoyle && cd /etc/ssl/gargoyle
 sudo openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 3650 \
-    -subj "/CN=Gargoyle local CA" -keyout ca.key -out ca.crt
+    -subj "/CN=Gargoyle local CA" -addext "basicConstraints=critical,CA:TRUE" \
+    -addext "keyUsage=critical,keyCertSign,cRLSign" -keyout ca.key -out ca.crt
 sudo openssl req -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes \
-    -subj "/CN=gargoyle.lan" -addext "subjectAltName=DNS:gargoyle.lan" -keyout server.key -out server.csr
+    -subj "/CN=gargoyle.lan" -addext "subjectAltName=DNS:gargoyle.lan,IP:192.168.60.10" \
+    -addext "keyUsage=critical,digitalSignature" -addext "extendedKeyUsage=serverAuth" \
+    -keyout server.key -out server.csr
 sudo openssl x509 -req -in server.csr -CA ca.crt -CAkey ca.key -CAcreateserial -days 825 \
     -copy_extensions copy -out server.crt
 sudo chmod 600 ca.key server.key
