@@ -23,16 +23,18 @@ classifiers = [
     "Topic :: Security",
     "Topic :: Security :: Cryptography",
 ]
+# Floors, not pins: a library on PyPI must coexist with whatever else the
+# installing environment holds. CI tests the floors and the latest.
 dependencies = [
-    "cryptography==44.0.0",
-    "fastapi==0.141.1",
-    "uvicorn==0.54.0",
-    "requests==2.34.2",
+    "cryptography>=44.0.0",
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
+    "requests>=2.32",
 ]
 
 [project.optional-dependencies]
 redis = ["redis"]
-dev = ["httpx==0.28.1", "pytest==9.1.1", "redis"]
+dev = ["httpx>=0.27", "pytest>=8", "redis"]
 
 [project.urls]
 Homepage = "https://github.com/Elyon-Sol/Gargoyle"
@@ -45,7 +47,7 @@ gargoyle = "gargoyle.cli:main"
 gargoyle-approver = "gargoyle.approver_cli:main"
 
 [tool.setuptools]
-packages = ["gargoyle"]
+packages = ["gargoyle", "gargoyle.static"]
 
 [tool.setuptools.package-data]
 gargoyle = ["static/*"]
