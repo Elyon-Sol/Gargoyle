@@ -21,7 +21,7 @@ your MCP server and lets through only what both agreed to.
 
 [![PyPI](https://img.shields.io/pypi/v/gargoyle-receipts)](https://pypi.org/project/gargoyle-receipts/)
 
-Status: pre-release (`0.4.0.dev0`, on PyPI as `gargoyle-receipts`). The wire format is `gargoyle/3` and may
+Status: pre-release (`0.5.0.dev0`, on PyPI as `gargoyle-receipts`). The wire format is `gargoyle/3` and may
 still change before the first release; it is specified in [SPEC.md](SPEC.md).
 
 ## What a receipt gives you
@@ -258,6 +258,7 @@ cannot attach receipts work unchanged. Configuration is by environment:
 | `GARGOYLE_MCP_APPROVER_KEY_ID`, `GARGOYLE_MCP_APPROVER_PUBLIC_KEY_HEX` | the approver keys whose grants release flagged calls (optional, both or neither; comma-separated lists for several) |
 | `GARGOYLE_MCP_EXECUTOR_KEY_ID`, `GARGOYLE_MCP_EXECUTOR_KEY_HEX` | this server's own signing key, so honored calls carry an execution receipt in `_meta["gargoyle/execution"]` (optional, both or neither) |
 | `GARGOYLE_MCP_ISSUER_URL`, `GARGOYLE_MCP_CLIENT_TOKEN` | self-issue mode: the issuing service and the identity token (whose subject is this server's principal) to obtain receipts with; `GARGOYLE_MCP_APPROVAL_TIMEOUT_SECONDS` and `GARGOYLE_MCP_POLL_SECONDS` tune the wait for a grant |
+| `GARGOYLE_MCP_ENTRA_TENANT`, `_CLIENT_ID`, `_SCOPE`, `_TOKEN_CACHE` | instead of a fixed client token: the user's own Entra ID token, written by `gargoyle login` (device code, MSAL cache, silent refresh); the principal is their UPN. No usable token refuses `REF_TARGET_LOGIN_REQUIRED` |
 | `GARGOYLE_HOLD_WEBHOOK_URL`, `GARGOYLE_APPROVE_URL` | issuer: POST a notice of every new hold (Slack incoming-webhook shape, `text` plus the hold) with a link to the console; notice only, the grant still needs the approver's key |
 | `GARGOYLE_MCP_AUDIT_LOG` | the evidence log: every decision, honored or refused, as one hash-chained JSON line with its receipt, grant and execution receipt; `gargoyle audit --log` verifies the file |
 
@@ -266,7 +267,9 @@ cannot attach receipts work unchanged. Configuration is by environment:
 exchange for flagged calls (`/issue`, `/pending`, `/grants`, `/decline`,
 `/record`, `/keys`) and the browser approval console at `/approve`. Policy
 from a rules file or OPA; identity from a pinned key or, with
-`GARGOYLE_ENTRA_TENANT`, the tenant's signing keys.
+`GARGOYLE_ENTRA_TENANT`, the tenant's signing keys (both at once when a
+pinned key is also set, so init-minted approver tokens keep working while
+users move to `gargoyle login`).
 
 
 ## Approval holds

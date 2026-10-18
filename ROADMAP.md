@@ -92,6 +92,15 @@ verifying itself for no external user; that is the failure mode to avoid.
   hold and the receipt, with a link to /approve from GARGOYLE_APPROVE_URL); posted in
   a thread, failures logged and ignored, the grant still only from the approver's
   key. 80 lines. All six roadmap steps are done.
+- Entra client login (2026-10-18): gargoyle/entra_login.py and `gargoyle login`.
+  Device-code sign-in through MSAL (optional extra `entra`), token cache in a private
+  file, EntraTokenSource refreshing silently before each issuer call; middleware.env and
+  mcp-config.json switch from the init token to the user's token and the principal
+  becomes their UPN. `gargoyle init --entra-tenant/--entra-audience`; the issuer trusts
+  the tenant's keys and the pinned init key together, so approvers keep working. No
+  usable token is REF_TARGET_LOGIN_REQUIRED. Tested with a faked MSAL; a live run needs
+  the tenant's two app registrations (guide 4.6). Next: approver login with Entra and
+  approver key ids as UPNs.
 - Published (2026-10-18): gargoyle-receipts 0.4.0.dev0 on PyPI by trusted publishing
   (.github/workflows/publish.yml, runs on a GitHub release or by hand). Dependencies are
   floors, not pins. A clean venv installs and imports it; `pip install gargoyle-receipts`

@@ -309,6 +309,42 @@ tool: answer always; the browser card is the approval that counts.
 Desktop has no native file tools, but its Filesystem extension and browser
 tools would bypass the gate; turn them off for a supervised user.
 
+**4.6 One identity per user with Entra ID.** Every workstation set up so
+far presents the same client token, so every receipt says the same
+principal. For a team, each user should be themselves. Once per tenant,
+in Entra admin center, App registrations:
+
+1. Register `Gargoyle issuer` (an API). Under Expose an API, set the
+   application ID URI and add a scope named `access`. Note the client id.
+2. Register `Gargoyle client` (public). Under Authentication, enable
+   "Allow public client flows". Under API permissions, add the `access`
+   scope of the issuer app and grant admin consent. Note its client id.
+
+On the VM, add to `issuer.env` (or pass `--entra-tenant` and
+`--entra-audience` to `gargoyle init`), then restart the service:
+
+```
+GARGOYLE_ENTRA_TENANT=<tenant id or yourclient.onmicrosoft.com>
+GARGOYLE_ISSUER_AUDIENCE=<issuer app client id>
+```
+
+On each Windows client:
+
+```powershell
+python -m pip install "gargoyle-receipts[entra]"
+gargoyle login --tenant <tenant> --client-id <client app id> --scope api://<issuer app id>/access --out C:\gargoyle
+```
+
+The user signs in once from a browser with the code shown, under the
+tenant's MFA. `middleware.env` and the MCP entry switch from the shared
+token to that user's cached Entra token, and the principal becomes their
+UPN; restart Claude Desktop or Claude Code. From then on each receipt,
+each card and each audit row names the person, rules can match their
+groups (`"groups": [...]` in rules.json), and disabling the account in
+Entra stops the next call. The pinned init key stays trusted beside the
+tenant's keys, so the approver console keeps working until approvers log
+in with Entra too.
+
 ## Part 5: approving in the browser
 
 Open `https://gargoyle.lan/approve` on any machine in `192.168.60.0/24`

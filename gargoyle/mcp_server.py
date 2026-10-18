@@ -96,7 +96,8 @@ ENV_ISSUER_URL = "GARGOYLE_MCP_ISSUER_URL"
 ENV_CLIENT_TOKEN = "GARGOYLE_MCP_CLIENT_TOKEN"
 ENV_APPROVAL_TIMEOUT = "GARGOYLE_MCP_APPROVAL_TIMEOUT_SECONDS"
 ENV_POLL_SECONDS = "GARGOYLE_MCP_POLL_SECONDS"
-ENV_AUDIT_LOG = "GARGOYLE_MCP_AUDIT_LOG"   # the evidence log: one hash-chained JSON line per decision, honored or refused
+ENV_AUDIT_LOG = "GARGOYLE_MCP_AUDIT_LOG"
+REF_TARGET_LOGIN_REQUIRED = "REF_TARGET_LOGIN_REQUIRED"   # Entra login mode and no usable token: run `gargoyle login`   # the evidence log: one hash-chained JSON line per decision, honored or refused
 
 # Self-issue refusals.
 REF_TARGET_ISSUER_UNAVAILABLE = "REF_TARGET_ISSUER_UNAVAILABLE"
@@ -110,22 +111,28 @@ class IssuerClient:
     passes a TestClient). Every failure is a refusal reason, never an
     exception out of the gate."""
 
-    def __init__(self, url: str, token: str, *, http: Any = None, approval_timeout: float = 300.0,
+    def __init__(self, url: str, token: Any, *, http: Any = None, approval_timeout: float = 300.0,
                  poll_seconds: float = 2.0, request_timeout: float = 10.0, sleep=time.sleep) -> None:
+        """`token` is the bearer token string, or an object with a token()
+        method that returns the current one (gargoyle.entra_login.EntraTokenSource)."""
         import requests
         self.url = url.rstrip("/")
-        self._headers = {"Authorization": "Bearer " + token}
+        self._token = token
         self._http = http if http is not None else requests.Session()
         self.approval_timeout = approval_timeout
         self.poll_seconds = poll_seconds
         self.request_timeout = request_timeout
         self._sleep = sleep
 
+    def _headers(self) -> Dict[str, str]:
+        token = self._token.token() if hasattr(self._token, "token") else self._token
+        return {"Authorization": "Bearer " + token}
+
     def _post(self, path: str, body: Dict[str, Any]) -> Any:
-        return self._http.post(self.url + path, json=body, headers=self._headers, timeout=self.request_timeout)
+        return self._http.post(self.url + path, json=body, headers=self._headers(), timeout=self.request_timeout)
 
     def _get(self, path: str) -> Any:
-        return self._http.get(self.url + path, headers=self._headers, timeout=self.request_timeout)
+        return self._http.get(self.url + path, headers=self._headers(), timeout=self.request_timeout)
 
     def issue(self, target_url: str, tool: str, args: Any) -> Dict[str, Any]:
         """{"envelope": ...} or {"envelope": None, "reason": ...}. The cause of
@@ -134,6 +141,13 @@ class IssuerClient:
         generic."""
         try:
             r = self._post("/issue", {"target_url": target_url, "tool": tool, "args": args})
+        except Exception as exc:
+            if type(exc).__name__ == "LoginRequired":
+                sys.stderr.write("gargoyle: %s\n" % exc)
+                return {"envelope": None, "reason": REF_TARGET_LOGIN_REQUIRED}
+            sys.stderr.write("gargoyle: issuer unreachable at %s: %s: %s\n" % (self.url, type(exc).__name__, str(exc)[:300]))
+            return {"envelope": None, "reason": REF_TARGET_ISSUER_UNAVAILABLE}
+        try:
             if r.status_code != 200:
                 detail = r.json().get("detail", {}) if r.headers.get("content-type", "").startswith("application/json") else {}
                 sys.stderr.write("gargoyle: issuer answered %s: %s\n" % (r.status_code, r.text[:300]))
@@ -573,17 +587,21 @@ def utf8_stdio(stdin=None, stdout=None):
 
 
 def issuer_client_from_env() -> Optional[IssuerClient]:
-    """Self-issue mode when GARGOYLE_MCP_ISSUER_URL and
-    GARGOYLE_MCP_CLIENT_TOKEN are both set; None otherwise. One without the
-    other is a configuration error and raises."""
+    """Self-issue mode when GARGOYLE_MCP_ISSUER_URL is set together with
+    either GARGOYLE_MCP_CLIENT_TOKEN (a fixed token from `gargoyle init`) or
+    the GARGOYLE_MCP_ENTRA_* set written by `gargoyle login` (a per-user
+    token refreshed from MSAL's cache). None when none is set; a URL without
+    a token source, or the reverse, raises."""
     import os
+    from gargoyle.entra_login import token_source_from_env
 
     url, token = os.environ.get(ENV_ISSUER_URL), os.environ.get(ENV_CLIENT_TOKEN)
-    if not url and not token:
+    source = token_source_from_env(os.environ)
+    if not url and not token and source is None:
         return None
-    if not (url and token):
-        raise RuntimeError("%s and %s go together" % (ENV_ISSUER_URL, ENV_CLIENT_TOKEN))
-    return IssuerClient(url, token,
+    if not url or (not token and source is None):
+        raise RuntimeError("%s goes with %s or the GARGOYLE_MCP_ENTRA_* set" % (ENV_ISSUER_URL, ENV_CLIENT_TOKEN))
+    return IssuerClient(url, source if source is not None else token,
                         approval_timeout=float(os.environ.get(ENV_APPROVAL_TIMEOUT, "300")),
                         poll_seconds=float(os.environ.get(ENV_POLL_SECONDS, "2")))
 

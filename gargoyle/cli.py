@@ -9,6 +9,8 @@ policy engine, a container runtime, or any client changes.
     gargoyle issuer ... [--ssl-certfile CRT --ssl-keyfile KEY]   serve TLS directly (no reverse proxy)
     gargoyle issuer [--out DIR] [--port 8080]            run the issuing service
     gargoyle approve [--out DIR] [--watch SECONDS]       sit and approve held calls
+    gargoyle login --tenant T --client-id C --scope S   sign this workstation's user in with
+                                                        Entra ID; the middleware then acts as them
     gargoyle audit <receipt.json> <execution.json> [grant.json]
     gargoyle audit --log audit.jsonl            verify the middleware's evidence log
 
@@ -112,6 +114,8 @@ def cmd_init(args) -> int:
         "GARGOYLE_ISSUER_AUDIENCE": "gargoyle-issuer",
         "GARGOYLE_APPROVER_KEY_ID": approver_ids, "GARGOYLE_APPROVER_PUBLIC_KEY_HEX": approver_pubs,
         "GARGOYLE_RULES_PATH": str(rules), "GARGOYLE_RECEIPT_TTL_SECONDS": "600",
+        **({"GARGOYLE_ENTRA_TENANT": args.entra_tenant} if args.entra_tenant else {}),
+        **({"GARGOYLE_ISSUER_AUDIENCE": args.entra_audience} if args.entra_audience else {}),
     }), private=True)
     middleware_env = {
         "GARGOYLE_MCP_GATE_KEY_ID": "issuer-1", "GARGOYLE_MCP_GATE_PUBLIC_KEY_HEX": issuer_pub,
@@ -151,6 +155,36 @@ def cmd_init(args) -> int:
     print("       paste mcp-config.json's server entry into your MCP client, restart it")
     print("       gargoyle approve --out %s --watch 2  (on the approver's machine)" % out)
     print("       or open %s/approve in a browser and load approver-web.json" % issuer_url)
+    return 0
+
+
+def cmd_login(args) -> int:
+    """Device-code sign-in; then middleware.env (and mcp-config.json when
+    present) switch from the shared init token to this user's Entra token,
+    and the principal becomes their UPN."""
+    from gargoyle.entra_login import (ENV_ENTRA_CLIENT_ID, ENV_ENTRA_SCOPE, ENV_ENTRA_TENANT, ENV_ENTRA_TOKEN_CACHE,
+                                      device_code_login)
+    out = Path(args.out).resolve()
+    client_dir = Path(args.client_config_dir or out)
+    cache = client_dir / "entra-token-cache.json"
+    result = device_code_login(args.tenant, args.client_id, args.scope, str(cache))
+    principal = result["principal"]
+    env_path = out / "middleware.env"
+    env = _read_env(env_path) if env_path.exists() else {}
+    env.pop("GARGOYLE_MCP_CLIENT_TOKEN", None)
+    env.update({ENV_ENTRA_TENANT: args.tenant, ENV_ENTRA_CLIENT_ID: args.client_id, ENV_ENTRA_SCOPE: args.scope,
+                ENV_ENTRA_TOKEN_CACHE: str(cache), "GARGOYLE_MCP_PRINCIPAL": principal})
+    _write(env_path, _env_lines(env), private=True)
+    mcp = out / "mcp-config.json"
+    if mcp.exists():
+        doc = json.loads(mcp.read_text())
+        for server in doc.get("mcpServers", {}).values():
+            if "GARGOYLE_MCP_TARGET_ID" in server.get("env", {}):
+                server["env"].pop("GARGOYLE_MCP_CLIENT_TOKEN", None)
+                server["env"].update({k: env[k] for k in (ENV_ENTRA_TENANT, ENV_ENTRA_CLIENT_ID, ENV_ENTRA_SCOPE,
+                                                            ENV_ENTRA_TOKEN_CACHE, "GARGOYLE_MCP_PRINCIPAL")})
+        _write(mcp, json.dumps(doc, indent=2) + "\n", private=True)
+    print("signed in as %s; the middleware now acts as that user (restart the MCP client)" % principal)
     return 0
 
 
@@ -236,7 +270,16 @@ def main(argv=None) -> int:
                    help="how many approver keys to create (approver-1..N); a rule with \"approvals\": 2 then needs two of them")
     p.add_argument("--upstream", choices=["npx-filesystem", "python-fs"], default="npx-filesystem",
                    help="the filesystem MCP server behind the gate: the official one via npx, or gargoyle.fs_server")
+    p.add_argument("--entra-tenant", help="trust this Entra ID tenant's tokens at the issuer (users then run `gargoyle login`)")
+    p.add_argument("--entra-audience", help="the issuer API app's client id or app id URI, required in Entra tokens")
     p.set_defaults(fn=cmd_init)
+    p = sub.add_parser("login", help="sign this workstation's user in with Entra ID (device code)")
+    p.add_argument("--tenant", required=True, help="tenant id or domain")
+    p.add_argument("--client-id", required=True, help="the public client app registration")
+    p.add_argument("--scope", required=True, help="the issuer API scope, e.g. api://<api-client-id>/access")
+    p.add_argument("--out", default="gargoyle-deploy", help="where middleware.env and mcp-config.json live")
+    p.add_argument("--client-config-dir", help="where the token cache goes (default: --out)")
+    p.set_defaults(fn=cmd_login)
     p = sub.add_parser("issuer", help="run the issuing service on the rules file")
     p.add_argument("--out", default="gargoyle-deploy")
     p.add_argument("--host", default="127.0.0.1"); p.add_argument("--port", type=int, default=8080)

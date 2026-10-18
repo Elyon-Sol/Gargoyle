@@ -258,6 +258,7 @@ def app_from_env() -> FastAPI:
 
     required = {k: os.environ.get(k) for k in (ENV_ISSUER_KEY_ID, ENV_ISSUER_KEY_HEX)}
     tenant = os.environ.get(ENV_ENTRA_TENANT)
+    pinned_idp = os.environ.get(ENV_IDP_KEY_ID) and os.environ.get(ENV_IDP_PUBLIC_KEY_HEX)
     if not tenant:
         required.update({k: os.environ.get(k) for k in (ENV_IDP_KEY_ID, ENV_IDP_PUBLIC_KEY_HEX)})
     missing = [k for k, v in required.items() if not v]
@@ -287,9 +288,12 @@ def app_from_env() -> FastAPI:
         policy=policy,
         signing_key=Ed25519PrivateKey.from_private_bytes(bytes.fromhex(required[ENV_ISSUER_KEY_HEX])),
         key_id=required[ENV_ISSUER_KEY_ID],
-        idp_public_keys=(entra_keys(tenant) if tenant else
-                         {required[ENV_IDP_KEY_ID]:
-                          Ed25519PublicKey.from_public_bytes(bytes.fromhex(required[ENV_IDP_PUBLIC_KEY_HEX]))}),
+        # Both may be trusted at once: the tenant's keys for users who ran
+        # `gargoyle login`, the pinned key for tokens `gargoyle init` minted
+        # (the approver's, until approvers log in with Entra too).
+        idp_public_keys={**(entra_keys(tenant) if tenant else {}),
+                         **({os.environ[ENV_IDP_KEY_ID]: Ed25519PublicKey.from_public_bytes(bytes.fromhex(os.environ[ENV_IDP_PUBLIC_KEY_HEX]))}
+                            if pinned_idp else {})},
         approver_public_keys=approver,
         audience=os.environ.get(ENV_AUDIENCE) or None,
         ttl_seconds=int(os.environ.get(ENV_RECEIPT_TTL, DEFAULT_TTL_SECONDS)),

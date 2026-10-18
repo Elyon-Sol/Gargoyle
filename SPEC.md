@@ -551,6 +551,13 @@ The complete objects are the `threshold` member of
   `gargoyle/1` is honored. The format is pre-release and may still change
   before the first release.
 
+**Identity at the client.** A middleware may present a per-user token
+obtained from an identity provider (the reference `gargoyle login` uses
+Entra ID's device-code flow and refreshes from the provider's cache). The
+issuer treats it as any other identity input of this section; a middleware
+in that mode with no usable token refuses locally with
+`REF_TARGET_LOGIN_REQUIRED` and never falls back to a shared credential.
+
 ## 13. The execution receipt and the offline chain
 
 After the side effect, an executor that holds a signing key issues an
