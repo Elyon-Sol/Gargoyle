@@ -290,6 +290,25 @@ project where the assistant can `echo > file` around the gate.
 the answer comes back at once. The first honored call appears as a line in
 `C:\gargoyle\audit.jsonl`.
 
+**4.5 Claude Desktop instead of Claude Code.** The GUI app speaks MCP the
+same way. `gargoyle init` already writes the entry in Desktop's shape
+(`mcp-config.json`); use the full path to `python.exe` as the command,
+because Desktop does not inherit the user's PATH, and add
+`REQUESTS_CA_BUNDLE` to the env as in 4.2. The file is
+`claude_desktop_config.json`, and its folder depends on the build:
+
+| Build | Folder |
+|---|---|
+| download from claude.ai | `%APPDATA%\Claude\` |
+| Microsoft Store | `%LOCALAPPDATA%\Packages\Claude_<id>\LocalCache\Roaming\Claude\` |
+
+Settings, Developer, Edit Config creates it in the right place for either.
+Quit Desktop from the tray and start it again; the tools icon in the chat
+box then lists the gated tools. Desktop asks "allow once or always" per
+tool: answer always; the browser card is the approval that counts.
+Desktop has no native file tools, but its Filesystem extension and browser
+tools would bypass the gate; turn them off for a supervised user.
+
 ## Part 5: approving in the browser
 
 Open `https://gargoyle.lan/approve` on any machine in `192.168.60.0/24`
