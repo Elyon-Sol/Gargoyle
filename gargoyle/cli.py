@@ -4,12 +4,13 @@ policy engine, a container runtime, or any client changes.
     gargoyle init <dir-the-agent-may-touch> [--out DIR]   keys, config, rules file
         --issuer-url URL        what the client reaches the issuer at (behind TLS: https://host)
         --client-python PATH    the client's python.exe, for the MCP server entry
-        --client-config-dir DIR where middleware.env, record.json and the audit log live on the client
+        --client-config-dir DIR where middleware.env, record.json and the evidence log live on the client
         --upstream npx-filesystem|python-fs   the filesystem MCP server the gate fronts (Node, or this package)
     gargoyle issuer ... [--ssl-certfile CRT --ssl-keyfile KEY]   serve TLS directly (no reverse proxy)
     gargoyle issuer [--out DIR] [--port 8080]            run the issuing service
     gargoyle approve [--out DIR] [--watch SECONDS]       sit and approve held calls
     gargoyle audit <receipt.json> <execution.json> [grant.json]
+    gargoyle audit --log audit.jsonl            verify the middleware's evidence log
 
 `init` writes, into --out (default: ./gargoyle-deploy):
 
@@ -191,19 +192,18 @@ def cmd_audit(args) -> int:
     trust = dict(issuer_public_keys=load(keys["issuer"]), executor_public_keys=load(keys["executor"]),
                  approver_public_keys=load(keys["approver"]))
     if args.log:
-        # Every honored call the middleware logged, one JSON line each.
-        bad = 0
-        for n, line in enumerate(Path(args.log).read_text(encoding="utf-8").splitlines(), 1):
-            if not line.strip():
-                continue
-            e = json.loads(line)
-            r = verify_chain(e["receipt"], e["execution"], grant=e.get("grant"), **trust)
-            rc = e["receipt"]["request_context"]
-            print("%4d %-9s %-24s %-28s %s" % (n, "ok" if r["accepted"] else "FAIL", rc["tool"][:24],
-                                              rc["principal"][:28], r["reason"]))
-            bad += 0 if r["accepted"] else 1
-        print("%d entries, %d failed" % (n, bad))
-        return 1 if bad else 0
+        # The middleware's evidence log: every decision, honored or refused,
+        # hash-chained. Each honored entry is a full receipt chain.
+        from gargoyle.evidence import read_log, verify_log
+        v = verify_log(read_log(args.log), **trust)
+        for r in v["entries"]:
+            print("%4s %-5s %-8s %-24s %-28s %s" % (r["seq"] if r["seq"] is not None else "?",
+                                                    "ok" if r["accepted"] else "FAIL", r["kind"] or "?",
+                                                    (r["tool"] or "?")[:24], (r["principal"] or "?")[:28], r["reason"]))
+        failed = sum(1 for r in v["entries"] if not r["accepted"])
+        print("%d entries (%d honored, %d refused), %d failed; chain %s; tail %s"
+              % (v["count"], v["honored"], v["refused"], failed, v["reason"], v["tail_sha256"][:16]))
+        return 0 if v["accepted"] else 1
     receipt, execution = json.load(open(args.receipt)), json.load(open(args.execution))
     grant = json.load(open(args.grant)) if args.grant else None
     result = verify_chain(receipt, execution, grant=grant, **trust)
@@ -237,7 +237,7 @@ def main(argv=None) -> int:
     p.add_argument("--out", default="gargoyle-deploy")
     p.add_argument("--watch", type=float, metavar="SECONDS"); p.add_argument("--yes", action="store_true")
     p.set_defaults(fn=cmd_approve)
-    p = sub.add_parser("audit", help="verify a receipt chain offline, or every chain in an audit log")
+    p = sub.add_parser("audit", help="verify a receipt chain offline, or a whole evidence log")
     p.add_argument("receipt", nargs="?"); p.add_argument("execution", nargs="?"); p.add_argument("grant", nargs="?")
     p.add_argument("--log", help="the middleware's audit.jsonl: verify every entry")
     p.add_argument("--out", default="gargoyle-deploy")

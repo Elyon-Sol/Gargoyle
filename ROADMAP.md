@@ -87,6 +87,16 @@ verifying itself for no external user; that is the failure mode to avoid.
   TypeScript port recomputes the JWS byte for byte. SPEC.md: sections 1, 2 (float
   note), 3, 6, 11, 12 and new 14.
 
+- Step 5: DONE (2026-10-18). gargoyle/evidence.py: the middleware's audit log
+  became an evidence log, `gargoyle-evidence/1`, one hash-chained entry per decision
+  with kind honored or refused, the verdict, and the receipt, grant and execution
+  receipt where they exist (a declined or lapsed hold keeps its flagged receipt).
+  verify_log checks hashes, links, every honored chain and the refused receipts'
+  provenance offline and reports per entry plus the tail hash; `gargoyle audit
+  --log` prints it. Stated limit: truncation at the tail is caught only by comparing
+  tail hashes between audits. 229 lines; nothing about amending it. Step 4 (m-of-n)
+  and 6 (transport) remain.
+
 **Gate reached.** Steps 1-3 are done. The next work is outreach and measurement,
 not step 4: publish the Python and npm packages, post the spec and vectors where
 the MCP discussion (#3215) and the OAuth agent-token drafts are being read, and

@@ -183,6 +183,12 @@ policy version authorized a specific call for a specific principal, a
 human's key released it, and exactly that call ran once, verifiable offline
 by anyone, in Python or TypeScript.
 
+The MCP middleware also keeps an evidence log: one hash-chained line per
+decision, refusals and declined holds included, so the trail answers "what
+did the agent try" as well as "what did it do". `gargoyle audit --log`
+verifies every entry and the chain, and prints the tail hash to note down
+so a later copy that lost its end is caught (SPEC.md section 15).
+
 ## Deploy it
 
 Three commands, no policy engine, no containers, no client changes:
@@ -230,7 +236,7 @@ cannot attach receipts work unchanged. Configuration is by environment:
 | `GARGOYLE_MCP_APPROVER_KEY_ID`, `GARGOYLE_MCP_APPROVER_PUBLIC_KEY_HEX` | the approver key whose grants release flagged calls (optional, both or neither) |
 | `GARGOYLE_MCP_EXECUTOR_KEY_ID`, `GARGOYLE_MCP_EXECUTOR_KEY_HEX` | this server's own signing key, so honored calls carry an execution receipt in `_meta["gargoyle/execution"]` (optional, both or neither) |
 | `GARGOYLE_MCP_ISSUER_URL`, `GARGOYLE_MCP_CLIENT_TOKEN` | self-issue mode: the issuing service and the identity token (whose subject is this server's principal) to obtain receipts with; `GARGOYLE_MCP_APPROVAL_TIMEOUT_SECONDS` and `GARGOYLE_MCP_POLL_SECONDS` tune the wait for a grant |
-| `GARGOYLE_MCP_AUDIT_LOG` | append every honored call's receipt, grant and execution receipt as one JSON line; `gargoyle audit --log` verifies the file |
+| `GARGOYLE_MCP_AUDIT_LOG` | the evidence log: every decision, honored or refused, as one hash-chained JSON line with its receipt, grant and execution receipt; `gargoyle audit --log` verifies the file |
 
 **Issuing service** (`gargoyle.issuer_service`, run with uvicorn from
 `app_from_env()`): identity token in, receipt out, with the hold and grant
@@ -261,7 +267,7 @@ on it.
 
 | Module | Role |
 |---|---|
-| `policy` | the decision interface and the reference manifest policy |
+| `policy` | the decision interface |
 | `opa` | the Open Policy Agent adapter |
 | `rules` | a policy from a JSON rules file, for sites without an engine |
 | `cli` | the `gargoyle` command: init, issuer, approve, audit |
@@ -272,6 +278,7 @@ on it.
 | `verifier` | the pure target-side check and every refusal code |
 | `consumer` | `Consumer` (pin, keys, verify, claim, attest) and the reference HTTP target |
 | `execution` | execution receipts and the offline chain check |
+| `evidence` | the executor's hash-chained log of every decision, and its offline verifier |
 | `mcp_server` | the stdio MCP middleware (and demo executor), with self-issue mode |
 | `fs_server` | a small Python filesystem MCP server, for clients without Node |
 | `issuer_service` | the HTTP issuing service: identity in, receipts out, holds and grants |
@@ -279,7 +286,6 @@ on it.
 | `approval`, `approver_cli`, `approver_trust` | grants, the human's tool, approver key trust |
 | `published_record_source` | the live policy pin as a publisher-signed record with serial and expiry |
 | `key_record_source` | root-signed issuer and approver keys with windows and revocation |
-| `transport` | HTTPS with CA bundle, client certificates, no redirects, DNS pinning |
 
 ## What Gargoyle does not do
 

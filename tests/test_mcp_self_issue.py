@@ -187,3 +187,43 @@ def test_end_to_end_through_the_echo_upstream():
         assert up.send({"jsonrpc": "2.0", "id": "f", "method": "fixture/calls"})["result"]["calls"] == [call("echo", {"x": 1})]
     finally:
         up.close()
+
+
+def test_every_decision_lands_in_the_evidence_log(tmp_path):
+    """Honored, refused by policy, and declined by the human: three decisions,
+    three chained entries, the declined one still carrying the flagged receipt
+    the human did not release. The whole file verifies offline."""
+    from gargoyle.evidence import ACCEPT_ENTRY_VERIFIED, HONORED, REFUSED, read_log, verify_log
+    from gargoyle.execution import ACCEPT_CHAIN_VERIFIED
+    from gargoyle.mcp_server import EXECUTED_META_KEY, REF_TARGET_APPROVAL_DECLINED
+    client = TestClient(issuer_app())
+
+    def human_declines(seconds):
+        for h in client.get("/pending", headers={"Authorization": "Bearer " + token()}).json()["pending"]:
+            client.post("/decline", json={"approval_request_id": h["envelope"]["approval_request_id"]},
+                        headers={"Authorization": "Bearer " + token("approver-human")})
+
+    state = middleware(client, sleep=human_declines, approval_timeout=60, attest=True)
+    from gargoyle.evidence import EvidenceLog
+    state.evidence = EvidenceLog(str(tmp_path / "e.jsonl"))
+    handle_message(state, {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}})
+    handle_message(state, {"jsonrpc": "2.0", "method": "notifications/initialized"})
+    ok = handle_message(state, {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": call("read_file", {"path": "a"})})
+    no = handle_message(state, {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": call("delete_file", {"path": "a"})})
+    declined = handle_message(state, {"jsonrpc": "2.0", "id": 4, "method": "tools/call",
+                                      "params": call("write_file", {"path": "a", "content": "x"})})
+    assert ok["result"]["_meta"][EXECUTED_META_KEY] is True
+    assert no["result"]["_meta"][REASON_META_KEY] == "TOOL_NOT_ALLOWED"
+    assert declined["result"]["_meta"][REASON_META_KEY] == REF_TARGET_APPROVAL_DECLINED
+
+    entries = read_log(str(tmp_path / "e.jsonl"))
+    assert [e["kind"] for e in entries] == [HONORED, REFUSED, REFUSED]
+    assert [e["seq"] for e in entries] == [1, 2, 3] and entries[2]["prev_sha256"] == entries[1]["entry_sha256"]
+    assert entries[1]["receipt"] is None                               # policy said no: nothing was issued
+    assert entries[2]["receipt"]["requires_approval"] is True          # the human said no: the hold is on record
+    assert entries[2]["grant"] is None and entries[2]["execution"] is None
+    v = verify_log(entries, issuer_public_keys={"issuer-1": issuer.public_key()},
+                   executor_public_keys={"executor-1": executor.public_key()},
+                   approver_public_keys={"approver-alice": approver.public_key()})
+    assert v["accepted"] and (v["honored"], v["refused"]) == (1, 2)
+    assert [r["reason"] for r in v["entries"]] == [ACCEPT_CHAIN_VERIFIED, ACCEPT_ENTRY_VERIFIED, ACCEPT_ENTRY_VERIFIED]

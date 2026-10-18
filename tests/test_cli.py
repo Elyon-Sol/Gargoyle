@@ -51,9 +51,10 @@ def test_init_then_issue_hold_approve_execute_audit(tmp_path, monkeypatch, capsy
     assert gate_tool_call(state, {"name": "list_directory", "arguments": {"path": str(sandbox)}})[0] is True
     assert gate_tool_call(state, {"name": "delete_file", "arguments": {}}) == (False, "DESTRUCTIVE_TOOL")
     from gargoyle.mcp_server import _gate, EXECUTION_META_KEY, RECEIPT_META_KEY, USED_GRANT_META_KEY, _audit_meta
-    gate = _gate(state, {"name": "write_file", "arguments": {"path": str(sandbox / "a.txt"), "content": "x"}})
+    call_args = {"path": str(sandbox / "a.txt"), "content": "x"}
+    gate = _gate(state, {"name": "write_file", "arguments": call_args})
     assert gate["executed"] is True and gate["grant"] is not None
-    meta = _audit_meta(state, gate, {"ok": True})
+    meta = _audit_meta(state, gate, {"ok": True}, {"name": "write_file", "arguments": call_args})
     for name, key in (("receipt", RECEIPT_META_KEY), ("execution", EXECUTION_META_KEY), ("grant", USED_GRANT_META_KEY)):
         (tmp_path / (name + ".json")).write_text(json.dumps(meta[key]))
     assert main(["audit", str(tmp_path / "receipt.json"), str(tmp_path / "execution.json"), str(tmp_path / "grant.json"),
@@ -94,16 +95,26 @@ def test_init_for_a_windows_client_and_audit_log_verification(tmp_path, monkeypa
     log = tmp_path / "audit.jsonl"
     state = ServerState(config, issuer_client=IssuerClient("https://gargoyle.lan", env["GARGOYLE_MCP_CLIENT_TOKEN"], http=Shim()),
                         audit_log=str(log))
+    from gargoyle.mcp_server import _record
+    from gargoyle.evidence import REFUSED
     for i in range(3):
-        gate = _gate(state, {"name": "list_directory", "arguments": {"path": "C:\\\\x%d" % i}})
+        params = {"name": "list_directory", "arguments": {"path": "C:\\\\x%d" % i}}
+        gate = _gate(state, params)
         assert gate["executed"]
-        _audit_meta(state, gate, {"ok": i})
-    assert len(log.read_text().splitlines()) == 3
+        _audit_meta(state, gate, {"ok": i}, params)
+    # A refusal is evidence too: the delete the rules forbid.
+    params = {"name": "delete_file", "arguments": {"path": "C:\\\\x"}}
+    gate = _gate(state, params); assert not gate["executed"]
+    _record(state, REFUSED, gate, params)
+    assert len(log.read_text().splitlines()) == 4
     assert main(["audit", "--log", str(log), "--out", str(out)]) == 0
     out_text = capsys.readouterr().out
-    assert "3 entries, 0 failed" in out_text and out_text.count(" ok ") == 3
-    # A tampered entry is caught.
+    assert "4 entries (3 honored, 1 refused), 0 failed; chain EVIDENCE_VERIFIED" in out_text
+    assert out_text.count(" ok ") == 4 and "refused  delete_file" in out_text
+    # A tampered entry is caught, and the hash-chain names it: editing the
+    # execution receipt inside entry 2 changes its hash.
     lines = log.read_text().splitlines(); e = json.loads(lines[1]); e["execution"]["outputs_sha256"] = "0" * 64
     lines[1] = json.dumps(e); log.write_text("\n".join(lines) + "\n")
     assert main(["audit", "--log", str(log), "--out", str(out)]) == 1
-    assert "1 failed" in capsys.readouterr().out
+    out_text = capsys.readouterr().out
+    assert "1 failed" in out_text and "REF_EVIDENCE_HASH_MISMATCH" in out_text

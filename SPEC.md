@@ -577,3 +577,66 @@ The same encoding is accepted as the issuer's identity input (section
 (ECDSA P-256, signature as r||s), with the keys loaded from a JWKS
 document (RSA, EC P-256 and OKP Ed25519 entries by `kid`); a token with no
 usable subject is `REF_IDENTITY_NO_SUBJECT`. Receipts stay EdDSA only.
+
+## 15. The evidence log
+
+An execution receipt proves one honored call. It cannot show a refusal,
+and a pile of receipts cannot show that none is missing. The evidence log
+is the executor's own record of every decision, in order, each entry
+hashed over the one before:
+
+```
+entry = {
+  "evidence_version": "gargoyle-evidence/1",
+  "seq":          <1, 2, 3 ...; dense>,
+  "prev_sha256":  <entry_sha256 of seq-1; 64 "0" for seq 1>,
+  "at":           <ISO 8601 UTC, when the executor decided>,
+  "kind":         "honored" | "refused",
+  "tool":         <tool name>,
+  "args_sha256":  <section 4 argument hash>,
+  "principal":    <the principal the executor serves>,
+  "reason":       <the verdict code>,
+  "receipt":      <section 3 receipt, or null>,
+  "grant":        <section 8 grant, or null>,
+  "execution":    <section 13 execution receipt, or null>,
+  "entry_sha256": sha256(canonical_json(entry without entry_sha256))
+}
+```
+
+One entry per line, canonical JSON (section 2) for the hash, any JSON for
+the line. A `refused` entry carries no receipt when the policy refused
+(nothing was issued) and carries the flagged receipt when a human declined
+the hold or let it lapse; its `grant` and `execution` are null. An
+`honored` entry carries the receipt, the grant if the receipt was flagged,
+and the execution receipt.
+
+**Verification** (`evidence.verify_log`), offline, with the issuer's,
+approver's and executor's public keys, for each entry in file order:
+
+1. the entry has exactly the fields above with the stated types, else
+   `REF_EVIDENCE_MALFORMED`;
+2. `entry_sha256` recomputes, else `REF_EVIDENCE_HASH_MISMATCH`;
+3. `seq` is the previous entry's plus one and `prev_sha256` is the
+   previous entry's hash (the first entry: 1 and 64 zeros), else
+   `REF_EVIDENCE_CHAIN_BROKEN`;
+4. `honored`: receipt and execution are present, the section 13 chain
+   verifies, and the receipt's `request_context` names the entry's
+   `tool`, `args_sha256` and `principal`, else `REF_EVIDENCE_RECEIPT_MISSING`
+   or the chain's own refusal;
+5. `refused` with a receipt: the receipt has issuer provenance (section 6
+   steps 1 and 2) judged at the entry's `at`, else that refusal;
+   otherwise `ENTRY_VERIFIED`.
+
+Verification continues after a failed entry, taking the file's own `seq`
+and hash as the new expectation, so one bad entry is reported once rather
+than failing every later one. The result names each entry's outcome, the
+count of honored and refused entries, and the last `entry_sha256` (the
+tail). The whole file is `EVIDENCE_VERIFIED` when every entry is.
+
+What the chain proves: no entry was edited, removed or inserted after the
+fact, and each honored one is a verified receipt chain. What it does not
+prove: that the file is complete at its end. Truncation leaves a valid
+shorter chain; an auditor who records the tail hash at each audit detects
+it at the next. There is no mechanism for amending the log, because it is
+not amended. The executor writes it (`GARGOYLE_MCP_AUDIT_LOG`) and
+`gargoyle audit --log` verifies it.

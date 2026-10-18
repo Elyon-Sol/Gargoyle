@@ -345,23 +345,27 @@ is the design working: a receipt under the old policy is not honored.
 
 ## Part 6: the audit trail
 
-Every honored call appended one line to `C:\gargoyle\audit.jsonl`: the
-receipt, the grant (for a held call) and the execution receipt. Verify the
-whole file, offline, with the public keys:
+Every decision appended one line to `C:\gargoyle\audit.jsonl`, honored or
+refused: what was asked, the verdict, and for an honored call the receipt,
+the grant (for a held call) and the execution receipt. Each line is hashed
+over the one before. Verify the whole file, offline, with the public keys:
 
 ```powershell
 gargoyle audit --log C:\gargoyle\audit.jsonl --out C:\gargoyle
 ```
 
 ```
-   1 ok        list_directory           spiffe://gargoyle.local/agents/assistant CHAIN_VERIFIED
-   2 ok        write_file               spiffe://gargoyle.local/agents/assistant CHAIN_VERIFIED
-2 entries, 0 failed
+   1 ok    honored  list_directory           spiffe://gargoyle.local/agents/assistant CHAIN_VERIFIED
+   2 ok    honored  write_file               spiffe://gargoyle.local/agents/assistant CHAIN_VERIFIED
+   3 ok    refused  delete_file              spiffe://gargoyle.local/agents/assistant ENTRY_VERIFIED
+3 entries (2 honored, 1 refused), 0 failed; chain EVIDENCE_VERIFIED; tail 7c1e0a93b2d44f10
 ```
 
-A tampered entry prints `FAIL` with the step that broke. Copy the file off
-the client on whatever schedule your retention needs; nothing in it is
-secret.
+An edited, removed or inserted line prints `FAIL` with the reason at the
+point the chain breaks. Note the tail hash with each audit: a later copy of
+the file that lost its end still verifies on its own, and only the tail
+tells you it is shorter. Copy the file off the client on whatever schedule
+your retention needs; nothing in it is secret.
 
 ## Operations
 

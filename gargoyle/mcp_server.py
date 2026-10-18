@@ -47,6 +47,7 @@ import time
 from typing import Any, Dict, List, Optional
 
 from gargoyle.consumer import REF_TARGET_NOT_CONFIGURED, Consumer
+from gargoyle.evidence import HONORED, REFUSED, EvidenceLog
 from gargoyle.envelope import valid_principal
 from gargoyle.policy import valid_pin
 from gargoyle.replay_cache import InMemoryReplayCache
@@ -95,7 +96,7 @@ ENV_ISSUER_URL = "GARGOYLE_MCP_ISSUER_URL"
 ENV_CLIENT_TOKEN = "GARGOYLE_MCP_CLIENT_TOKEN"
 ENV_APPROVAL_TIMEOUT = "GARGOYLE_MCP_APPROVAL_TIMEOUT_SECONDS"
 ENV_POLL_SECONDS = "GARGOYLE_MCP_POLL_SECONDS"
-ENV_AUDIT_LOG = "GARGOYLE_MCP_AUDIT_LOG"   # append one JSON line per honored call: receipt, grant, execution
+ENV_AUDIT_LOG = "GARGOYLE_MCP_AUDIT_LOG"   # the evidence log: one hash-chained JSON line per decision, honored or refused
 
 # Self-issue refusals.
 REF_TARGET_ISSUER_UNAVAILABLE = "REF_TARGET_ISSUER_UNAVAILABLE"
@@ -254,7 +255,7 @@ class ServerState:
         self.config = config
         self.upstream = upstream
         self.issuer_client = issuer_client
-        self.audit_log = audit_log
+        self.evidence: Optional[EvidenceLog] = EvidenceLog(audit_log) if audit_log else None
         self.consumer: Optional[Consumer] = None
         if config is not None and valid_principal(config.get("principal")):
             self.consumer = Consumer(
@@ -282,7 +283,10 @@ def _gate(state: ServerState, params: Dict[str, Any]) -> Dict[str, Any]:
     """{"executed", "reason", "envelope", "grant", "self_issued"}: the
     receipt and grant that were honored, whether the client brought them or
     this server obtained them."""
-    refused = lambda reason: {"executed": False, "reason": reason, "envelope": None, "grant": None, "self_issued": False}
+    def refused(reason, envelope=None):
+        # A refusal keeps the receipt when there was one (a hold the human
+        # declined or let lapse), so the evidence log can show what was asked.
+        return {"executed": False, "reason": reason, "envelope": envelope, "grant": None, "self_issued": False}
     if state.consumer is None:
         return refused(REF_TARGET_NOT_CONFIGURED)
 
@@ -304,24 +308,24 @@ def _gate(state: ServerState, params: Dict[str, Any]) -> Dict[str, Any]:
         if isinstance(envelope, dict) and envelope.get("requires_approval") is True and grant is None:
             waited = state.issuer_client.wait_for_grant(str(envelope.get("approval_request_id")))
             if waited["grant"] is None:
-                return refused(waited["reason"])
+                return refused(waited["reason"], envelope)
             grant = waited["grant"]
 
     verdict = state.consumer.check(envelope, call_for(name, args, state.config["principal"]),
                                    grant=grant)
     if not verdict.honored:
-        return refused(verdict.reason)
+        return refused(verdict.reason, envelope)
 
     state.executed.append({"tool": name, "args": args})  # THE side effect
     return {"executed": True, "reason": verdict.reason, "envelope": envelope, "grant": grant,
             "self_issued": self_issued}
 
 
-def _audit_meta(state: ServerState, gate: Dict[str, Any], outputs: Any) -> Dict[str, Any]:
+def _audit_meta(state: ServerState, gate: Dict[str, Any], outputs: Any, params: Dict[str, Any]) -> Dict[str, Any]:
     """What an honored result's _meta carries beyond executed/reason: the
     execution receipt when this server attests, and, when the receipt was
     self-issued, the receipt and grant the client never saw. The same chain
-    is appended to the audit log when one is configured, so a client that
+    goes into the evidence log when one is configured, so a client that
     discards _meta still leaves evidence."""
     meta: Dict[str, Any] = {}
     execution = _attest(state, gate["envelope"], outputs)
@@ -331,14 +335,23 @@ def _audit_meta(state: ServerState, gate: Dict[str, Any], outputs: Any) -> Dict[
         meta[RECEIPT_META_KEY] = gate["envelope"]
         if gate["grant"] is not None:
             meta[USED_GRANT_META_KEY] = gate["grant"]
-    if state.audit_log:
-        entry = {"receipt": gate["envelope"], "grant": gate["grant"], "execution": execution}
-        try:
-            with open(state.audit_log, "a", encoding="utf-8") as f:
-                f.write(json.dumps(entry, sort_keys=True) + "\n")
-        except OSError as exc:
-            sys.stderr.write("gargoyle: audit log unwritable: %s\n" % exc)
+    _record(state, HONORED, gate, params, execution)
     return meta
+
+
+def _record(state: ServerState, kind: str, gate: Dict[str, Any], params: Dict[str, Any],
+            execution: Optional[Dict[str, Any]] = None) -> None:
+    """One evidence-log entry for a decision, honored or refused. The log
+    is evidence, not admission: a log that cannot be written is reported on
+    stderr and the call's outcome stands."""
+    if state.evidence is None:
+        return
+    principal = (state.config or {}).get("principal") or ""
+    try:
+        state.evidence.append(kind, str(params.get("name")), params.get("arguments", {}), principal,
+                              gate["reason"], receipt=gate["envelope"], grant=gate["grant"], execution=execution)
+    except (OSError, ValueError) as exc:
+        sys.stderr.write("gargoyle: evidence log unwritable: %s\n" % exc)
 
 
 def _attest(state: ServerState, envelope: Optional[Dict[str, Any]], outputs: Any) -> Optional[Dict[str, Any]]:
@@ -424,9 +437,11 @@ def handle_message(state: ServerState, msg: Dict[str, Any]) -> Optional[Dict[str
                 # The outputs the execution receipt attests to are the
                 # upstream's result minus the metadata we are adding.
                 outputs = {k: v for k, v in reply["result"].items() if k != "_meta"}
-                meta.update(_audit_meta(state, gate, outputs))
+                meta.update(_audit_meta(state, gate, outputs, params))
                 reply["result"]["_meta"] = meta
             return reply
+        if not executed:
+            _record(state, REFUSED, gate, params)
         text = ("executed %s" % params.get("name")) if executed else ("refused: %s" % reason)
         result = {
             "content": [{"type": "text", "text": text}],
@@ -434,7 +449,7 @@ def handle_message(state: ServerState, msg: Dict[str, Any]) -> Optional[Dict[str
             "_meta": {EXECUTED_META_KEY: executed, REASON_META_KEY: reason},
         }
         if executed:
-            result["_meta"].update(_audit_meta(state, gate, {k: v for k, v in result.items() if k != "_meta"}))
+            result["_meta"].update(_audit_meta(state, gate, {k: v for k, v in result.items() if k != "_meta"}, params))
         return _success(msg_id, result)
 
     if state.upstream is not None:
