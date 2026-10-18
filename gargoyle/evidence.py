@@ -154,7 +154,8 @@ def verify_log(
     and describe the call the entry names; a refused entry that carries a
     receipt has it checked for issuer provenance. Returns
     {"accepted", "reason", "tail_sha256", "count", "honored", "refused",
-     "entries": [{"seq", "kind", "tool", "principal", "accepted", "reason"}, ...]}.
+     "entries": [{"seq", "kind", "tool", "principal", "accepted", "reason", "verdict"}, ...]},
+    `reason` the verification outcome and `verdict` what the executor recorded.
     Verification continues past a bad entry so the report names every one."""
     trust = dict(issuer_public_keys=issuer_public_keys, executor_public_keys=executor_public_keys,
                  approver_public_keys=approver_public_keys)
@@ -171,7 +172,8 @@ def verify_log(
             rc = (raw.get("receipt") or {}).get("request_context") if legacy else None
             rc = rc if isinstance(rc, dict) else {}
             report.append({"seq": None, "kind": None, "tool": rc.get("tool"), "principal": rc.get("principal"),
-                           "accepted": False, "reason": REF_EVIDENCE_UNCHAINED if legacy else REF_EVIDENCE_MALFORMED})
+                           "accepted": False, "reason": REF_EVIDENCE_UNCHAINED if legacy else REF_EVIDENCE_MALFORMED,
+                           "verdict": None})
             all_ok = False
             continue
         e = raw
@@ -198,7 +200,7 @@ def verify_log(
                 ok, reason = p["accepted"], (ACCEPT_ENTRY_VERIFIED if p["accepted"] else p["reason"])
         counts[e["kind"]] += 1
         report.append({"seq": e["seq"], "kind": e["kind"], "tool": e["tool"], "principal": e["principal"],
-                       "accepted": ok, "reason": reason})
+                       "accepted": ok, "reason": reason, "verdict": e["reason"]})
         all_ok = all_ok and ok
         # The chain continues from what the file says, so one bad entry is
         # reported once rather than cascading into every later one.

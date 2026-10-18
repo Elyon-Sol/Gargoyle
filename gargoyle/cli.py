@@ -197,9 +197,11 @@ def cmd_audit(args) -> int:
         from gargoyle.evidence import read_log, verify_log
         v = verify_log(read_log(args.log), **trust)
         for r in v["entries"]:
-            print("%4s %-5s %-8s %-24s %-28s %s" % (r["seq"] if r["seq"] is not None else "?",
-                                                    "ok" if r["accepted"] else "FAIL", r["kind"] or "?",
-                                                    (r["tool"] or "?")[:24], (r["principal"] or "?")[:28], r["reason"]))
+            # A refused row shows why the executor refused, beside the check outcome.
+            why = (" (%s)" % r["verdict"]) if r["kind"] == "refused" and r["verdict"] else ""
+            print("%4s %-5s %-8s %-24s %-28s %s%s" % (r["seq"] if r["seq"] is not None else "?",
+                                                      "ok" if r["accepted"] else "FAIL", r["kind"] or "?",
+                                                      (r["tool"] or "?")[:24], (r["principal"] or "?")[:28], r["reason"], why))
         failed = sum(1 for r in v["entries"] if not r["accepted"])
         print("%d entries (%d honored, %d refused), %d failed; chain %s; tail %s"
               % (v["count"], v["honored"], v["refused"], failed, v["reason"], v["tail_sha256"][:16]))

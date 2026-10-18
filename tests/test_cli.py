@@ -111,6 +111,7 @@ def test_init_for_a_windows_client_and_audit_log_verification(tmp_path, monkeypa
     out_text = capsys.readouterr().out
     assert "4 entries (3 honored, 1 refused), 0 failed; chain EVIDENCE_VERIFIED" in out_text
     assert out_text.count(" ok ") == 4 and "refused  delete_file" in out_text
+    assert "ENTRY_VERIFIED (DESTRUCTIVE_TOOL)" in out_text
     # A tampered entry is caught, and the hash-chain names it: editing the
     # execution receipt inside entry 2 changes its hash.
     lines = log.read_text().splitlines(); e = json.loads(lines[1]); e["execution"]["outputs_sha256"] = "0" * 64

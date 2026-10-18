@@ -174,6 +174,12 @@ outside.
   that are not UTF-8 text (REF_ISSUER_ARGS_NOT_TEXT) rather than holding them.
   The assistant itself flagged the mojibake in its reply, which is how it was
   caught.
+- Evidence log live (2026-10-18): after the fix, Claude Desktop on Windows ran
+  listing, reads, a held write approved in the browser and a refused delete;
+  `gargoyle audit --log` on the client: 9 entries (7 honored, 2 refused), 0 failed,
+  chain EVIDENCE_VERIFIED, with the timed-out write from the encoding incident
+  sitting in the chain as a refused entry carrying its flagged receipt. Refused rows
+  now print the executor's reason beside the check outcome.
 - Enterprise identity (2026-10-16): identity tokens may be RS256 or ES256 from a
   provider's JWKS (keys_from_jwks, entra_keys; GARGOYLE_ENTRA_TENANT on the issuer);
   Entra's preferred_username/upn is the principal; groups and app roles are policy
