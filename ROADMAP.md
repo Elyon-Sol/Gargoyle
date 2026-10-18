@@ -92,6 +92,14 @@ verifying itself for no external user; that is the failure mode to avoid.
   hold and the receipt, with a link to /approve from GARGOYLE_APPROVE_URL); posted in
   a thread, failures logged and ignored, the grant still only from the approver's
   key. 80 lines. All six roadmap steps are done.
+- Entra client login live (2026-10-18, later): Claude Desktop on Windows through
+  `gargoyle login` against the real tenant (two app registrations, docs/entra-setup.md).
+  The hold on the issuer, the receipt and the audit rows all name
+  the workstation account (a real tenant user); the approved write chain-verified. Found and fixed on the way:
+  MSAL inherited the REQUESTS_CA_BUNDLE that pins the issuer's private CA (per-request
+  public-roots override, 0.5.2), and a format bump had orphaned the gargoyle/2 audit rows
+  (historical verification, 0.5.3: the same 14-row log went from 8 failed to 0 failed
+  with no rewrite). Open: approver login with Entra.
 - Entra client login (2026-10-18): gargoyle/entra_login.py and `gargoyle login`.
   Device-code sign-in through MSAL (optional extra `entra`), token cache in a private
   file, EntraTokenSource refreshing silently before each issuer call; middleware.env and
