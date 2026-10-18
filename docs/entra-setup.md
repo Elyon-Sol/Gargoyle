@@ -89,12 +89,15 @@ in the guide; `/elyon/gargoyle-poc/deploy/issuer.env` in the PoC):
 
 ```
 GARGOYLE_ENTRA_TENANT=TENANT_ID
-GARGOYLE_ISSUER_AUDIENCE=ISSUER_APP_ID
+GARGOYLE_ISSUER_AUDIENCE=gargoyle-issuer,ISSUER_APP_ID
 ```
 
-Keep the existing `GARGOYLE_IDP_KEY_ID` and `GARGOYLE_IDP_PUBLIC_KEY_HEX`
-lines: the issuer trusts both, so the approver console's init-minted token
-keeps working. Restart the issuer (`sudo systemctl restart gargoyle`, or
+The audience is a list: `gargoyle-issuer` is what the init-minted tokens
+carry, the app id is what Entra tokens carry, and both are accepted while
+users move over. Replace the existing `GARGOYLE_ISSUER_AUDIENCE` line
+rather than adding a second one. Keep the `GARGOYLE_IDP_KEY_ID` and
+`GARGOYLE_IDP_PUBLIC_KEY_HEX` lines: the issuer trusts both key sources, so
+the approver console's init-minted token keeps working. Restart the issuer (`sudo systemctl restart gargoyle`, or
 stop and start the process). The issuer fetches the tenant's signing keys
 from `login.microsoftonline.com` at start, so the VM needs outbound HTTPS.
 

@@ -61,3 +61,9 @@ def test_identity_flows_into_the_receipt():
                                         "on_behalf_of": who["on_behalf_of"]}, signing_key=key, key_id="k1")
     assert r.envelope["request_context"]["principal"] == "agent-7"
     assert r.envelope["request_context"]["on_behalf_of"] == "user-42"
+
+
+def test_several_audiences_are_accepted_as_a_list_or_comma_string():
+    assert principal_from_token(token(sub="agent-7", aud="gargoyle-issuer"), IDP, audience="gargoyle-issuer,88d5", now=NOW)["reason"] is None
+    assert principal_from_token(token(sub="agent-7", aud="88d5"), IDP, audience="gargoyle-issuer, 88d5", now=NOW)["reason"] is None
+    assert principal_from_token(token(sub="agent-7", aud="other"), IDP, audience=["gargoyle-issuer", "88d5"], now=NOW)["reason"] == REF_JWS_AUDIENCE_MISMATCH

@@ -77,7 +77,7 @@ def _innermost_actor(act: Any) -> Optional[str]:
 
 
 def principal_from_token(token: str, public_keys: Dict[str, Any], *,
-                         audience: Optional[str] = None, now: Optional[datetime] = None) -> Dict[str, Any]:
+                         audience: Any = None, now: Optional[datetime] = None) -> Dict[str, Any]:
     """{"principal", "on_behalf_of" (or None), "claims", "reason": None} for
     a trusted identity token, or {"principal": None, "reason": code}."""
     res = decode(token, public_keys, allowed_algs=IDENTITY_ALGS)
@@ -89,9 +89,13 @@ def principal_from_token(token: str, public_keys: Dict[str, Any], *,
     if not isinstance(exp, int) or isinstance(exp, bool) or current.timestamp() >= exp:
         return {"principal": None, "reason": REF_JWS_EXPIRED}
     if audience is not None:
+        # One audience, or several (a list, or a comma-separated string):
+        # the issuer accepts init-minted tokens and a tenant's tokens side
+        # by side while a site moves from one to the other.
         aud = claims.get("aud")
-        allowed = aud if isinstance(aud, list) else [aud]
-        if audience not in allowed:
+        presented = aud if isinstance(aud, list) else [aud]
+        accepted = audience if isinstance(audience, (list, tuple)) else [a.strip() for a in str(audience).split(",")]
+        if not any(a in presented for a in accepted if a):
             return {"principal": None, "reason": REF_JWS_AUDIENCE_MISMATCH}
 
     # OIDC providers' `sub` is opaque; the UPN is the identity people and
