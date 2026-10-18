@@ -59,7 +59,7 @@ still change before the first release; it is specified in [SPEC.md](SPEC.md).
     pip install -e ".[dev]"
     python -m pytest
 
-Python 3.14 or later. A TypeScript verifier and consumer for Node 20+
+Python 3.12 or later. A TypeScript verifier and consumer for Node 20+
 lives in [ts/](ts/) (`cd ts && npm install && npm test`); its suite
 recomputes the same conformance vectors byte for byte, so the two
 implementations cannot drift apart silently. Redis is optional (`.[redis]`) and only needed to

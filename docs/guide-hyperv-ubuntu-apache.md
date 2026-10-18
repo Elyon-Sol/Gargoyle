@@ -79,7 +79,7 @@ ping -c1 archive.ubuntu.com
 
 ```bash
 sudo apt update && sudo apt install -y python3 python3-venv python3-pip apache2 git openssl ufw
-python3 --version          # 3.14.x on Ubuntu 26.04; the package needs 3.14 or later
+python3 --version          # the package needs 3.12 or later
 sudo useradd --system --home /opt/gargoyle --shell /usr/sbin/nologin gargoyle
 sudo mkdir -p /opt/gargoyle && sudo chown gargoyle:gargoyle /opt/gargoyle
 sudo -u gargoyle python3 -m venv /opt/gargoyle/venv
@@ -216,7 +216,7 @@ sudo chown -R "$USER" /opt/gargoyle/handoff && chmod 600 /opt/gargoyle/handoff/*
 
 ## Part 4: the Windows 11 client
 
-**4.1 Install.** Python 3.14 from python.org (tick "Add python.exe to
+**4.1 Install.** Python 3.12 or later from python.org (tick "Add python.exe to
 PATH"), Node.js 22 LTS from nodejs.org (for the filesystem MCP server),
 and Claude Code (`npm install -g @anthropic-ai/claude-code`). Then:
 
