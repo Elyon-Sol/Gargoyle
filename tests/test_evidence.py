@@ -13,7 +13,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from gargoyle.envelope import args_sha256
 from gargoyle.evidence import (ACCEPT_ENTRY_VERIFIED, ACCEPT_EVIDENCE_VERIFIED, GENESIS, HONORED, REFUSED,
                                REF_EVIDENCE_CHAIN_BROKEN, REF_EVIDENCE_HASH_MISMATCH, REF_EVIDENCE_MALFORMED,
-                               REF_EVIDENCE_RECEIPT_MISSING, EvidenceLog, build_entry, entry_sha256, read_log,
+                               REF_EVIDENCE_RECEIPT_MISSING, REF_EVIDENCE_UNCHAINED, EvidenceLog, build_entry, entry_sha256, read_log,
                                verify_log)
 from gargoyle.execution import (ACCEPT_CHAIN_VERIFIED, REF_EXEC_SIGNATURE_INVALID, build_execution_receipt,
                                 sign_execution_receipt)
@@ -108,9 +108,11 @@ def test_edit_removal_insertion_and_garbage_are_each_named(tmp_path):
     v = verify_log(entries[:2] + [forged] + entries[2:], **TRUST)
     assert [r["accepted"] for r in v["entries"]] == [True, True, True, False, True]
 
-    # A line that is not an entry at all.
-    v = verify_log([entries[0], None, {"receipt": {}, "execution": {}}], **TRUST)
-    assert [r["reason"] for r in v["entries"]][1:] == [REF_EVIDENCE_MALFORMED, REF_EVIDENCE_MALFORMED]
+    # A line that is not an entry at all, and a line from before the chain.
+    legacy = {"receipt": entries[0]["receipt"], "grant": None, "execution": entries[0]["execution"]}
+    v = verify_log([entries[0], None, legacy], **TRUST)
+    assert [r["reason"] for r in v["entries"]][1:] == [REF_EVIDENCE_MALFORMED, REF_EVIDENCE_UNCHAINED]
+    assert v["entries"][2]["tool"] == "read_file" and not v["accepted"]
 
     # Truncation is the one thing the chain cannot see; the tail hash is for that.
     v = verify_log(entries[:3], **TRUST)

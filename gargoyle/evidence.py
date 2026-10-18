@@ -60,6 +60,7 @@ REF_EVIDENCE_MALFORMED = "REF_EVIDENCE_MALFORMED"       # not an entry
 REF_EVIDENCE_HASH_MISMATCH = "REF_EVIDENCE_HASH_MISMATCH"  # entry_sha256 does not match the entry
 REF_EVIDENCE_CHAIN_BROKEN = "REF_EVIDENCE_CHAIN_BROKEN"    # seq or prev_sha256 does not follow
 REF_EVIDENCE_RECEIPT_MISSING = "REF_EVIDENCE_RECEIPT_MISSING"  # honored without receipt or execution
+REF_EVIDENCE_UNCHAINED = "REF_EVIDENCE_UNCHAINED"       # a pre-chain {receipt, grant, execution} line
 
 _FIELDS = ("evidence_version", "seq", "prev_sha256", "at", "kind", "tool", "args_sha256",
            "principal", "reason", "receipt", "grant", "execution", "entry_sha256")
@@ -164,8 +165,13 @@ def verify_log(
 
     for raw in entries:
         if not _well_formed(raw):
-            report.append({"seq": None, "kind": None, "tool": None, "principal": None,
-                           "accepted": False, "reason": REF_EVIDENCE_MALFORMED})
+            # A line the middleware wrote before the chain existed is named
+            # as such, so an upgrade is told apart from tampering.
+            legacy = isinstance(raw, dict) and set(raw) == {"receipt", "grant", "execution"}
+            rc = (raw.get("receipt") or {}).get("request_context") if legacy else None
+            rc = rc if isinstance(rc, dict) else {}
+            report.append({"seq": None, "kind": None, "tool": rc.get("tool"), "principal": rc.get("principal"),
+                           "accepted": False, "reason": REF_EVIDENCE_UNCHAINED if legacy else REF_EVIDENCE_MALFORMED})
             all_ok = False
             continue
         e = raw

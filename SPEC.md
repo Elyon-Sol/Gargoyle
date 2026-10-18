@@ -614,7 +614,8 @@ and the execution receipt.
 approver's and executor's public keys, for each entry in file order:
 
 1. the entry has exactly the fields above with the stated types, else
-   `REF_EVIDENCE_MALFORMED`;
+   `REF_EVIDENCE_MALFORMED` (a `{receipt, grant, execution}` line from a
+   writer older than this section is `REF_EVIDENCE_UNCHAINED`);
 2. `entry_sha256` recomputes, else `REF_EVIDENCE_HASH_MISMATCH`;
 3. `seq` is the previous entry's plus one and `prev_sha256` is the
    previous entry's hash (the first entry: 1 and 64 zeros), else
