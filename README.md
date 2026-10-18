@@ -273,6 +273,7 @@ on it.
 | `consumer` | `Consumer` (pin, keys, verify, claim, attest) and the reference HTTP target |
 | `execution` | execution receipts and the offline chain check |
 | `mcp_server` | the stdio MCP middleware (and demo executor), with self-issue mode |
+| `fs_server` | a small Python filesystem MCP server, for clients without Node |
 | `issuer_service` | the HTTP issuing service: identity in, receipts out, holds and grants |
 | `replay_cache`, `pending_store` | single use for receipts and holds; in-memory or Redis |
 | `approval`, `approver_cli`, `approver_trust` | grants, the human's tool, approver key trust |

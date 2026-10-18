@@ -125,6 +125,9 @@ outside.
   write config for a Windows client. tests/test_console_js.py proves the page's
   JavaScript signs byte for byte what the reference signs.
   docs/guide-hyperv-ubuntu-apache.md is the single-instance build guide.
+  Added for the PoC: gargoyle/fs_server.py (a Python filesystem MCP server, so a
+  Windows client needs only Python; `init --upstream python-fs`) and
+  `gargoyle issuer --ssl-certfile/--ssl-keyfile` to serve TLS without a proxy.
 - Enterprise identity (2026-10-16): identity tokens may be RS256 or ES256 from a
   provider's JWKS (keys_from_jwks, entra_keys; GARGOYLE_ENTRA_TENANT on the issuer);
   Entra's preferred_username/upn is the principal; groups and app roles are policy

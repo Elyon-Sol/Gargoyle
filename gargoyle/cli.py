@@ -5,6 +5,8 @@ policy engine, a container runtime, or any client changes.
         --issuer-url URL        what the client reaches the issuer at (behind TLS: https://host)
         --client-python PATH    the client's python.exe, for the MCP server entry
         --client-config-dir DIR where middleware.env, record.json and the audit log live on the client
+        --upstream npx-filesystem|python-fs   the filesystem MCP server the gate fronts (Node, or this package)
+    gargoyle issuer ... [--ssl-certfile CRT --ssl-keyfile KEY]   serve TLS directly (no reverse proxy)
     gargoyle issuer [--out DIR] [--port 8080]            run the issuing service
     gargoyle approve [--out DIR] [--watch SECONDS]       sit and approve held calls
     gargoyle audit <receipt.json> <execution.json> [grant.json]
@@ -131,9 +133,11 @@ def cmd_init(args) -> int:
         "issuer": {"issuer-1": issuer_pub}, "approver": {"approver-1": approver_pub},
         "executor": {"executor-1": executor_pub}, "identity_provider": {"idp-1": idp_pub},
     }, indent=2) + "\n")
+    upstream = (["npx", "-y", "@modelcontextprotocol/server-filesystem", allowed] if args.upstream == "npx-filesystem"
+                else [client_python, "-m", "gargoyle.fs_server", allowed])
     _write(out / "mcp-config.json", json.dumps({"mcpServers": {"filesystem-gargoyle": {
         "command": client_python,
-        "args": ["-m", "gargoyle.mcp_server", "--", "npx", "-y", "@modelcontextprotocol/server-filesystem", allowed],
+        "args": ["-m", "gargoyle.mcp_server", "--", *upstream],
         "env": middleware_env,
     }}}, indent=2) + "\n", private=True)
     print("\nnext:  gargoyle issuer --out %s        (keeps running; writes record.json on start)" % out)
@@ -155,8 +159,13 @@ def cmd_issuer(args) -> int:
     from gargoyle.rules import RulesPolicy
     policy = RulesPolicy(os.environ["GARGOYLE_RULES_PATH"])
     (out / "record.json").write_text(json.dumps(policy.pin(), indent=2) + "\n")
-    print("record.json written; serving on %s:%d" % (args.host, args.port), file=sys.stderr)
-    uvicorn.run(app, host=args.host, port=args.port, log_level="warning")
+    tls = {}
+    if args.ssl_certfile or args.ssl_keyfile:
+        if not (args.ssl_certfile and args.ssl_keyfile):
+            raise SystemExit("--ssl-certfile and --ssl-keyfile go together")
+        tls = {"ssl_certfile": args.ssl_certfile, "ssl_keyfile": args.ssl_keyfile}
+    print("record.json written; serving on %s://%s:%d" % ("https" if tls else "http", args.host, args.port), file=sys.stderr)
+    uvicorn.run(app, host=args.host, port=args.port, log_level="warning", **tls)
     return 0
 
 
@@ -215,10 +224,13 @@ def main(argv=None) -> int:
     p.add_argument("--issuer-url", help="URL the client reaches the issuer at (default http://HOST:PORT)")
     p.add_argument("--client-python", help="the client's Python executable for the MCP entry (default: this one)")
     p.add_argument("--client-config-dir", help="where the client keeps middleware.env, record.json, audit.jsonl (default: --out)")
+    p.add_argument("--upstream", choices=["npx-filesystem", "python-fs"], default="npx-filesystem",
+                   help="the filesystem MCP server behind the gate: the official one via npx, or gargoyle.fs_server")
     p.set_defaults(fn=cmd_init)
     p = sub.add_parser("issuer", help="run the issuing service on the rules file")
     p.add_argument("--out", default="gargoyle-deploy")
     p.add_argument("--host", default="127.0.0.1"); p.add_argument("--port", type=int, default=8080)
+    p.add_argument("--ssl-certfile"); p.add_argument("--ssl-keyfile")
     p.set_defaults(fn=cmd_issuer)
     p = sub.add_parser("approve", help="review and release held calls")
     p.add_argument("--out", default="gargoyle-deploy")
