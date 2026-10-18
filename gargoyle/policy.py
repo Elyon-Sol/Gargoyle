@@ -33,7 +33,7 @@ is a policy.
 """
 
 from dataclasses import dataclass
-from typing import Any, Dict, Mapping, Protocol, runtime_checkable
+from typing import Any, Dict, Mapping, Optional, Protocol, runtime_checkable
 
 ELIGIBLE = "ELIGIBLE"
 REFUSE = "REFUSE"
