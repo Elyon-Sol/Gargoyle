@@ -73,13 +73,19 @@ def public_roots_http():
     """A requests session that trusts the public CA roots (certifi) whatever
     REQUESTS_CA_BUNDLE says. A deployment pins the issuer's private CA with
     that variable; Entra's endpoints are not signed by it, so the two trust
-    domains must not share one setting. Proxies from the environment still
-    apply."""
+    domains must not share one setting. requests applies the environment
+    bundle per request and lets it beat Session.verify, so the override is
+    made per request too. Proxies from the environment still apply."""
     import certifi
     import requests
-    s = requests.Session()
-    s.verify = certifi.where()
-    return s
+
+    class PublicRootsSession(requests.Session):
+        def request(self, method, url, **kwargs):
+            if kwargs.get("verify") in (None, True):
+                kwargs["verify"] = certifi.where()
+            return super().request(method, url, **kwargs)
+
+    return PublicRootsSession()
 
 
 def _app(tenant: str, client_id: str, cache: TokenCache, app_factory: Optional[Callable] = None) -> Any:

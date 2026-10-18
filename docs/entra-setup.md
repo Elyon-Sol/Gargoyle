@@ -139,5 +139,5 @@ client (Desktop: quit from the tray and reopen).
 | issuer answers 401 `REF_JWS_AUDIENCE_MISMATCH` | token `aud` is `api://...` (v1) but audience is the client id, or the reverse | set manifest token version to 2 and audience to `ISSUER_APP_ID`, or set audience to `api://ISSUER_APP_ID` |
 | issuer answers 401 `REF_JWS_KEY_UNKNOWN` | issuer started before the tenant was set, or tenant id wrong | check `GARGOYLE_ENTRA_TENANT`, restart |
 | middleware refuses `REF_TARGET_LOGIN_REQUIRED` | no cached account, or refresh rejected by tenant policy | run `gargoyle login` again |
-| middleware fails at start with `CERTIFICATE_VERIFY_FAILED` for `login.microsoftonline.com` (0.5.0 only) | `REQUESTS_CA_BUNDLE` pinned the private CA for MSAL too | upgrade to 0.5.1 or later: MSAL trusts the public roots on its own |
+| middleware fails at start with `CERTIFICATE_VERIFY_FAILED` for `login.microsoftonline.com` (0.5.0 only) | `REQUESTS_CA_BUNDLE` pinned the private CA for MSAL too | upgrade to 0.5.2 or later: MSAL trusts the public roots on its own |
 | login succeeds but the console still says the old principal | client not restarted, or the pasted MCP entry is stale | re-paste from `mcp-config.json`, restart |

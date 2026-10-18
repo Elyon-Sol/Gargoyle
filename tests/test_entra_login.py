@@ -148,7 +148,15 @@ def test_msal_gets_a_public_roots_http_client_and_is_built_lazily(tmp_path, monk
     src = EntraTokenSource("t", "c", "s", str(cache), msal_module=CapturingMsal)
     assert built == []                                   # constructed nothing yet
     assert src.token() == "at-refreshed"
-    assert len(built) == 1 and built[0].verify == certifi.where()   # public roots, not the private CA
+    assert len(built) == 1                               # one MSAL app, with our session
+    # Through requests' own environment merge: the private CA in REQUESTS_CA_BUNDLE loses.
+    import requests
+    sent = {}
+    def fake_send(self, prep, **kw):
+        sent.update(kw); r = requests.Response(); r.status_code = 200; r._content = b"{}"; return r
+    monkeypatch.setattr(requests.Session, "send", fake_send)
+    built[0].get("https://login.microsoftonline.com/x/v2.0/.well-known/openid-configuration")
+    assert sent["verify"] == certifi.where()
 
     # A tenant that cannot be reached is a refusal at call time, not a crash at startup.
     class Unreachable(FakeMsal):
