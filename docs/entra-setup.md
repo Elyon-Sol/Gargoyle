@@ -133,7 +133,7 @@ client (Desktop: quit from the tray and reopen).
 |---|---|---|
 | `AADSTS7000218` or "public client flows" error at login | step 2.3 not saved | Authentication, Allow public client flows, Yes |
 | `AADSTS65001` consent required | step 2.4 consent not granted | Grant admin consent, or let the user consent |
-| issuer answers 401 `REF_IDENTITY_AUDIENCE_MISMATCH` | token `aud` is `api://...` (v1) but audience is the client id, or the reverse | set manifest token version to 2 and audience to `ISSUER_APP_ID`, or set audience to `api://ISSUER_APP_ID` |
-| issuer answers 401 `REF_IDENTITY_KEY_UNKNOWN` | issuer started before the tenant was set, or tenant id wrong | check `GARGOYLE_ENTRA_TENANT`, restart |
+| issuer answers 401 `REF_JWS_AUDIENCE_MISMATCH` | token `aud` is `api://...` (v1) but audience is the client id, or the reverse | set manifest token version to 2 and audience to `ISSUER_APP_ID`, or set audience to `api://ISSUER_APP_ID` |
+| issuer answers 401 `REF_JWS_KEY_UNKNOWN` | issuer started before the tenant was set, or tenant id wrong | check `GARGOYLE_ENTRA_TENANT`, restart |
 | middleware refuses `REF_TARGET_LOGIN_REQUIRED` | no cached account, or refresh rejected by tenant policy | run `gargoyle login` again |
 | login succeeds but the console still says the old principal | client not restarted, or the pasted MCP entry is stale | re-paste from `mcp-config.json`, restart |
