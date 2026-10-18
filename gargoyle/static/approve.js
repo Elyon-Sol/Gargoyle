@@ -4,38 +4,18 @@
 // argsSha256 and grant signing match SPEC.md byte for byte (tests/test_console_js.py
 // checks them against the conformance vectors under Node).
 
+// RFC 8785 canonical JSON. Scalars through JSON.stringify (its escaping and
+// number format are the JCS rules); objects emitted by hand, because
+// JSON.stringify moves integer-like member names to the front.
 export function canonicalJson(value) {
-  if (value === null) return "null";
-  if (value === true) return "true";
-  if (value === false) return "false";
-  if (typeof value === "number") {
-    if (!Number.isFinite(value)) throw new TypeError("non-finite numbers are not JSON");
-    return Number.isInteger(value) ? value.toFixed(0) : String(value);
+  if (value === null || typeof value !== "object") {
+    if (typeof value === "number" && !Number.isFinite(value)) throw new TypeError("non-finite numbers are not JSON");
+    if (value === undefined) throw new TypeError("value is not JSON: undefined");
+    return JSON.stringify(value);
   }
-  if (typeof value === "string") return escapeString(value);
   if (Array.isArray(value)) return "[" + value.map(canonicalJson).join(",") + "]";
-  if (typeof value === "object") {
-    const keys = Object.keys(value).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
-    return "{" + keys.map((k) => escapeString(k) + ":" + canonicalJson(value[k])).join(",") + "}";
-  }
-  throw new TypeError("value is not JSON: " + typeof value);
-}
-
-function escapeString(s) {
-  let out = '"';
-  for (let i = 0; i < s.length; i++) {
-    const code = s.charCodeAt(i), ch = s[i];
-    if (ch === '"') out += '\\"';
-    else if (ch === "\\") out += "\\\\";
-    else if (ch === "\n") out += "\\n";
-    else if (ch === "\r") out += "\\r";
-    else if (ch === "\t") out += "\\t";
-    else if (ch === "\b") out += "\\b";
-    else if (ch === "\f") out += "\\f";
-    else if (code < 0x20 || code > 0x7e) out += "\\u" + code.toString(16).padStart(4, "0");
-    else out += ch;
-  }
-  return out + '"';
+  const keys = Object.keys(value).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  return "{" + keys.map((k) => JSON.stringify(k) + ":" + canonicalJson(value[k])).join(",") + "}";
 }
 
 const subtle = () => globalThis.crypto.subtle;

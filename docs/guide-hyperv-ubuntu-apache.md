@@ -358,6 +358,19 @@ approvals", a signer sees "you signed; 1 more needed", and the assistant's
 call runs only when the second key has signed. The receipt carries the
 terms, so an audit shows that two named keys released that write.
 
+**5.2 Hear about holds in Slack or Teams.** Add to `issuer.env`:
+
+```
+GARGOYLE_HOLD_WEBHOOK_URL=https://hooks.slack.com/services/T000/B000/XXXX
+GARGOYLE_APPROVE_URL=https://gargoyle.lan/approve
+```
+
+Every new hold posts one line to the channel: the tool, who asked, the
+target, when it expires, how many approvals it needs, and the console link.
+The message cannot approve anything; the approver still opens the console
+and signs with their key. Teams and most alerting products accept the same
+`{"text": ...}` body.
+
 ## Part 6: the audit trail
 
 Every decision appended one line to `C:\gargoyle\audit.jsonl`, honored or

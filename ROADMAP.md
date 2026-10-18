@@ -50,7 +50,7 @@ verifying itself for no external user; that is the failure mode to avoid.
 6. **Approval transport.** A webhook that posts the flagged receipt to
    Slack or an approval product, the key staying on the approver's device.
    Integrate, do not build. (The browser console below covers the "a button,
-   not a terminal" half of this without a third party.)
+   not a terminal" half of this without a third party.) (DONE, see Status.)
 
 ## Not on the roadmap
 
@@ -87,6 +87,21 @@ verifying itself for no external user; that is the failure mode to avoid.
   TypeScript port recomputes the JWS byte for byte. SPEC.md: sections 1, 2 (float
   note), 3, 6, 11, 12 and new 14.
 
+- Step 6: DONE (2026-10-18). gargoyle/notify.py: GARGOYLE_HOLD_WEBHOOK_URL posts a
+  notice of every new hold (Slack incoming-webhook shape: `text` plus the structured
+  hold and the receipt, with a link to /approve from GARGOYLE_APPROVE_URL); posted in
+  a thread, failures logged and ignored, the grant still only from the approver's
+  key. 80 lines. All six roadmap steps are done.
+- Standards (2026-10-18): canonical JSON moved to RFC 8785 (JCS), format gargoyle/3,
+  after finding three 2026 Internet-Drafts in the same space that all use JCS: Acta
+  signed receipts (MCP access decisions), EP authorization receipts (human pre-execution
+  signoff, m-of-n, WebAuthn, Merkle log) and XAIP receipts (signed execution records).
+  Python implements JCS itself (ECMAScript number formatting included, RFC examples as
+  tests); TypeScript and the console emit members by hand because JSON.stringify moves
+  integer-like keys first. Vectors regenerated; SPEC section 16 maps every field to the
+  three drafts and states what the chain here adds (one decision id across decision,
+  release and execution, with the policy version inside) and what they have that
+  Gargoyle layers rather than defines (WebAuthn keys, transparency log, DIDs).
 - Step 4: DONE (2026-10-18). A hold's terms live in the receipt: optional `approval`
   member {required, approvers}, hashed and signed, so a caller cannot lower the
   threshold or swap in a different approver set. Decision gained approvals_required

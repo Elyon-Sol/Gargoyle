@@ -221,5 +221,5 @@ def test_canonical_json_sorted_compact_ascii():
         {"a": 1, "c": {"x": 10, "y": 20}, "b": 2})
     s = canonical_json({"b": 2, "a": {"k": "caf\u00e9"}})
     assert " " not in s and "\n" not in s
-    assert "\\u00e9" in s and "\u00e9" not in s
+    assert "\u00e9" in s and "\\u00e9" not in s      # RFC 8785: literal UTF-8, no ensure_ascii
     assert json.loads(s) == {"a": {"k": "caf\u00e9"}, "b": 2}

@@ -128,7 +128,7 @@ def test_regions_match_the_spec():
     assert signed_region == VECTORS["signed_region"]
     assert hashlib.sha256(hash_region.encode()).hexdigest() == signed["decision_sha256"]
     assert set(signed["request_context"]) == {"tool", "args_sha256", "principal", "on_behalf_of"}
-    assert ENVELOPE_VERSION == "gargoyle/2"
+    assert ENVELOPE_VERSION == "gargoyle/3"
 
 
 def test_spec_quotes_the_vectors_verbatim():

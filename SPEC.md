@@ -1,6 +1,6 @@
 # Gargoyle wire specification
 
-Format version: `gargoyle/2` (pre-release; see section 12).
+Format version: `gargoyle/3` (pre-release; see section 12).
 This document defines the byte-level formats Gargoyle produces and checks:
 the receipt, its hash and signature regions, the verification procedure,
 replay semantics, the approval grant, the execution receipt and the offline
@@ -39,25 +39,26 @@ that this file quotes them verbatim.
 ## 2. Encodings
 
 **Canonical JSON.** Every hash and signature in this specification is
-computed over the UTF-8 bytes of the canonical JSON of an object:
+computed over the UTF-8 bytes of the RFC 8785 canonical form (JSON
+Canonicalization Scheme, JCS) of an object:
 
-- object keys sorted by Unicode code point, recursively;
-- no whitespace: separators are `,` between members and `:` between key and
-  value;
-- all non-ASCII characters escaped as `\uXXXX` (`ensure_ascii`), so the bytes
-  are pure ASCII;
-- `true`, `false`, `null` lowercase; integers without exponent or leading
-  zeros; floats as the shortest round-tripping decimal.
+- object members sorted by the UTF-16 code units of their names,
+  recursively;
+- no whitespace: `,` between members and `:` between name and value;
+- strings escaped only where JSON requires it: `\"`, `\\`, `\b`, `\f`,
+  `\n`, `\r`, `\t`, other control characters as `\u00XX` with lowercase
+  hex; every other character, non-ASCII included, is literal UTF-8;
+- `true`, `false`, `null` lowercase; numbers as ECMAScript
+  `Number::toString` (`1` not `1.0`, `1e+21`, `1e-7`, `0.000001`).
 
-Producers should keep arguments to strings, integers, booleans, null, arrays
-and objects. Floats are permitted but two producers may render the same
-float differently (Python writes `1.0`, JavaScript writes `1`; Python writes
-`1e+16`, JavaScript `10000000000000000`), and a target that hashes different
-bytes refuses the binding. Integers are safe up to 2^53 in every
-implementation. Object keys are sorted by code point in Python and by UTF-16
-code unit in JavaScript; the two agree for every key without characters
-outside the Basic Multilingual Plane, which is to say every key anyone
-should use.
+This is exactly what `JSON.stringify` produces for a key-sorted object in
+JavaScript, and what the reference implementation's `canonical_json`
+produces in Python. The same scheme is used by the Acta signed receipts and
+EP authorization receipts drafts (section 16), so a receipt's bytes can be
+recomputed by any JCS library. Integers are exact up to 2^53 in every
+implementation; producers should prefer strings and integers in arguments.
+`gargoyle/2` used Python's `ensure_ascii` escaping and code-point key order
+instead; verifiers of this version refuse it.
 
 **Hashes** are SHA-256, written as 64 lowercase hexadecimal characters.
 
@@ -82,7 +83,7 @@ signature region (section 5).
 
 | Field | Type | Hashed | Signed | Meaning |
 |---|---|---|---|---|
-| `envelope_version` | string | yes | yes | `"gargoyle/2"` |
+| `envelope_version` | string | yes | yes | `"gargoyle/3"` |
 | `decision` | string | yes | yes | `"ELIGIBLE"`; a receipt is only ever issued for an eligible call |
 | `requires_approval` | boolean | yes | yes | the policy flagged the call for a human; the receipt is honored only with a grant (section 8) |
 | `target_url` | string | yes | yes | the target the call is addressed to; compared as an exact string, no normalization |
@@ -425,27 +426,27 @@ signed under key id `issuer-2026-10` with `not_after`
 
 ```
 args_sha256      = e2363d59384e0a154faccbcc375337c59cc9c5fefa843519e0d5d311cf32bab7
-decision_sha256  = 6186ac4baead392be19c380c691a3d9194210c4abee8d0fc717789e0bab4a8c4
-issuer_signature = 6850a23730113a14cdef04d973526edefec88fb8172640b142a91b25dd779f2d85cc68e2930cc7850942aa02a73185f3b1e01a43a08e52f8030e13d307654502
+decision_sha256  = ba4b9b4cbd2155ef600dc7eab2f6f1781e12cfa7b9dff989b37b6640ba3ce5b2
+issuer_signature = 15e44ed8a513c969dd411b3e8b4289a17b5911cefd9afc3b21f0991b2947ba78e7b696fcd68a08cd75f680653ae598186d19b809c6aeb5760bc863a5d92e3d01
 ```
 
 Hash region bytes (section 4):
 
 ```
-{"decision":"ELIGIBLE","envelope_version":"gargoyle/2","policy":{"policy_id":"opa:payments/3","policy_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"request_context":{"args_sha256":"e2363d59384e0a154faccbcc375337c59cc9c5fefa843519e0d5d311cf32bab7","on_behalf_of":"user-42","principal":"agent-7","tool":"transfer_funds"},"requires_approval":true,"target_url":"https://tools.example.com/target"}
+{"decision":"ELIGIBLE","envelope_version":"gargoyle/3","policy":{"policy_id":"opa:payments/3","policy_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"request_context":{"args_sha256":"e2363d59384e0a154faccbcc375337c59cc9c5fefa843519e0d5d311cf32bab7","on_behalf_of":"user-42","principal":"agent-7","tool":"transfer_funds"},"requires_approval":true,"target_url":"https://tools.example.com/target"}
 ```
 
 Signed region bytes (section 5):
 
 ```
-{"approval_request_id":"req-0001","decision":"ELIGIBLE","decision_id":"5b6b0c7e-6f1e-4d5b-9c3a-1e2f3a4b5c6d","decision_sha256":"6186ac4baead392be19c380c691a3d9194210c4abee8d0fc717789e0bab4a8c4","envelope_version":"gargoyle/2","issuer_key_id":"issuer-2026-10","not_after":"2026-10-16T12:05:00+00:00","policy":{"policy_id":"opa:payments/3","policy_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"request_context":{"args_sha256":"e2363d59384e0a154faccbcc375337c59cc9c5fefa843519e0d5d311cf32bab7","on_behalf_of":"user-42","principal":"agent-7","tool":"transfer_funds"},"requires_approval":true,"target_url":"https://tools.example.com/target"}
+{"approval_request_id":"req-0001","decision":"ELIGIBLE","decision_id":"5b6b0c7e-6f1e-4d5b-9c3a-1e2f3a4b5c6d","decision_sha256":"ba4b9b4cbd2155ef600dc7eab2f6f1781e12cfa7b9dff989b37b6640ba3ce5b2","envelope_version":"gargoyle/3","issuer_key_id":"issuer-2026-10","not_after":"2026-10-16T12:05:00+00:00","policy":{"policy_id":"opa:payments/3","policy_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"request_context":{"args_sha256":"e2363d59384e0a154faccbcc375337c59cc9c5fefa843519e0d5d311cf32bab7","on_behalf_of":"user-42","principal":"agent-7","tool":"transfer_funds"},"requires_approval":true,"target_url":"https://tools.example.com/target"}
 ```
 
 Grant releasing that decision for hold `req-0001`, `grant_id` `grant-0001`,
 `not_after` `2026-10-16T12:10:00+00:00`, under key id `approver-alice`:
 
 ```
-approver_signature = 8116b67b02bbf96448a1998af6740a388b5fb6be183beb6f88f69fc123416ea1ca2d512db0a68cccd295fec18d731527dd30d0190b61fa4113d588d03292da04
+approver_signature = 1cfc8699ebfaa135ff854a04a1db6b9a07d8adbb471535fac154a9d8a800400827df94a20898f21a340042adae2bfa4496b992a546df25ffb612b4c11b811308
 ```
 
 Execution receipt (section 13) for that call, signed under key id
@@ -458,13 +459,13 @@ Execution receipt (section 13) for that call, signed under key id
 
 ```
 outputs_sha256     = a6cb76237119491aa9d6b1976bf763cb08d72f07dda4becf8bb32c0c4ee5914c
-executor_signature = de7575a5f3bbecf644b5cf6f30a03d19c6d8225759ab8e4cd8c488b86145cdcf54c4aefe390d705822c5e168ee926ce92d864bf6a176abf682ff403d7454cd04
+executor_signature = d45d58713917dceb9d4477f7fe880a681c6c8ead165cc18b1c43c9348ab05bbdf4e7cd8591bdd542baf9181262a10e8c223e2e96e856fcb676148c44e3d35007
 ```
 
 Execution signed region bytes:
 
 ```
-{"decision_id":"5b6b0c7e-6f1e-4d5b-9c3a-1e2f3a4b5c6d","decision_sha256":"6186ac4baead392be19c380c691a3d9194210c4abee8d0fc717789e0bab4a8c4","executed_at":"2026-10-16T12:01:00+00:00","execution_version":"gargoyle-execution/1","executor_key_id":"executor-2026-10","outputs_sha256":"a6cb76237119491aa9d6b1976bf763cb08d72f07dda4becf8bb32c0c4ee5914c","policy":{"policy_id":"opa:payments/3","policy_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"request_context":{"args_sha256":"e2363d59384e0a154faccbcc375337c59cc9c5fefa843519e0d5d311cf32bab7","on_behalf_of":"user-42","principal":"agent-7","tool":"transfer_funds"},"target_url":"https://tools.example.com/target"}
+{"decision_id":"5b6b0c7e-6f1e-4d5b-9c3a-1e2f3a4b5c6d","decision_sha256":"ba4b9b4cbd2155ef600dc7eab2f6f1781e12cfa7b9dff989b37b6640ba3ce5b2","executed_at":"2026-10-16T12:01:00+00:00","execution_version":"gargoyle-execution/1","executor_key_id":"executor-2026-10","outputs_sha256":"a6cb76237119491aa9d6b1976bf763cb08d72f07dda4becf8bb32c0c4ee5914c","policy":{"policy_id":"opa:payments/3","policy_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"request_context":{"args_sha256":"e2363d59384e0a154faccbcc375337c59cc9c5fefa843519e0d5d311cf32bab7","on_behalf_of":"user-42","principal":"agent-7","tool":"transfer_funds"},"target_url":"https://tools.example.com/target"}
 ```
 
 JWS form (section 14) of the same signed receipt: the header segment is
@@ -482,14 +483,14 @@ at the same timestamp, signed under `issuer-2026-10` with the same
 `6fc61147c2d3347101b0f875039433acda66d949090a2d382dfe170cebdd2e5d`.
 
 ```
-decision_sha256  = d3871b1e65f9c5957a3c974c0c3cc5f5b1310bfbd54561d0c03f011dbfb1ea9e
-issuer_signature = f5cfe124629e9e7d4aa7301883187aafcbb0d373f9da7e2e4cac2082b008f1b257de5199c859b9746f2b4d04bb49611f691552121d96e53bea058a32a4182f08
+decision_sha256  = 105cc4bbadf94f228cd8c75a5f73534fb0ae9b9ffa35ca2e611759efb2162964
+issuer_signature = ab1bd1dc7850ab4e2b30c1feb91be3afbbbf1388080b73311f5cfd19f1e5353c786e1067e9b216e26a9e1d43fb6a629d87497b861d976e4a7f5e0e21abd3390f
 ```
 
 Hash region bytes (the `approval` member sorts first):
 
 ```
-{"approval":{"approvers":["approver-alice","approver-bob"],"required":2},"decision":"ELIGIBLE","envelope_version":"gargoyle/2","policy":{"policy_id":"opa:payments/3","policy_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"request_context":{"args_sha256":"e2363d59384e0a154faccbcc375337c59cc9c5fefa843519e0d5d311cf32bab7","on_behalf_of":"user-42","principal":"agent-7","tool":"transfer_funds"},"requires_approval":true,"target_url":"https://tools.example.com/target"}
+{"approval":{"approvers":["approver-alice","approver-bob"],"required":2},"decision":"ELIGIBLE","envelope_version":"gargoyle/3","policy":{"policy_id":"opa:payments/3","policy_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"request_context":{"args_sha256":"e2363d59384e0a154faccbcc375337c59cc9c5fefa843519e0d5d311cf32bab7","on_behalf_of":"user-42","principal":"agent-7","tool":"transfer_funds"},"requires_approval":true,"target_url":"https://tools.example.com/target"}
 ```
 
 Two grants for hold `req-0002`, `not_after` `2026-10-16T12:10:00+00:00`:
@@ -497,8 +498,8 @@ Two grants for hold `req-0002`, `not_after` `2026-10-16T12:10:00+00:00`:
 `approver-bob`:
 
 ```
-approver_signature (alice) = 872945562049e88ff85ca7228014f75bdd82d29b445ffb5efb2dd77368b00639449ed5c90ea80872e98d2630e673269170276e66b33615455f13ec61c6e2680f
-approver_signature (bob)   = d1c01ffadee1e82460df500672858eb1253a97edc5eb559cacf02ba302a0fc0b9e19e4b16e71808eb591a61e982a959c0a9ddd8079382abdf58a7ec0a8eb2e0d
+approver_signature (alice) = 61c5ee3c017fda8b04721260828002502d51cd2b483b37eb62fc9e5406ee3134330de000af55e8828eeeaefed65cc4a74e5157dc39ada9a1300d6cc8c54a1109
+approver_signature (bob)   = 1204fa86cefd7e24dfed1b7f08f88dd45601a1e59c44a62697c6c222547e187a52c76c7dc073355479f38c1371d375836c0f4026b7898078cda2ae5ca3851604
 ```
 
 Either grant alone is `REF_APPROVAL_INSUFFICIENT`; both together release
@@ -506,7 +507,7 @@ the receipt, and the execution receipt signed under `executor-2026-10` at
 `2026-10-16T12:01:00+00:00` with the same outputs has
 
 ```
-executor_signature = d1d9d28c599ae974ca936f2c2f0f6f9a73cd77e58ba1f3c4a736122b5a82d2ec5a73644138badf36d9dddd54eb2e0cdf7a44cd8e577636b7524a7484db34e10e
+executor_signature = e51236163da24a354148a255b98589b2d1f642a57185929b1f3ad3ba295ff4079e06c16266551f82c1f62d12f1c37a7a7b94a3f6663781dc978720cebf2e0304
 ```
 
 The complete objects are the `threshold` member of
@@ -544,7 +545,8 @@ The complete objects are the `threshold` member of
 - `envelope_version` names this format. Any change to a field set, a hash
   or signature region, or the verification order is a new version;
   verifiers do not accept a version they do not implement
-  (`REF_VERIFY_VERSION_UNSUPPORTED`). `gargoyle/2` added `on_behalf_of`, the
+  (`REF_VERIFY_VERSION_UNSUPPORTED`). `gargoyle/3` moved canonical JSON to
+  RFC 8785 and added the `approval` member. `gargoyle/2` added `on_behalf_of`, the
   version check and the JWS form to `gargoyle/1`; nothing issued under
   `gargoyle/1` is honored. The format is pre-release and may still change
   before the first release.
@@ -706,3 +708,41 @@ shorter chain; an auditor who records the tail hash at each audit detects
 it at the next. There is no mechanism for amending the log, because it is
 not amended. The executor writes it (`GARGOYLE_MCP_AUDIT_LOG`) and
 `gargoyle audit --log` verifies it.
+
+## 16. Relation to other receipt formats
+
+Three Internet-Drafts of 2026 describe pieces of what this specification
+chains together. None is a standard yet; this section maps vocabulary so an
+implementer of one can read a Gargoyle receipt, and names what each lacks
+that the chain here supplies. All three and Gargoyle use RFC 8785 for the
+signed bytes (section 2) and Ed25519 signatures in lowercase hex.
+
+| Gargoyle | Acta signed receipts (draft-farley-acta-signed-receipts) | EP authorization receipts (draft-schrock-ep-authorization-receipts) | XAIP receipts (draft-xkumakichi-xaip-receipts) |
+|---|---|---|---|
+| receipt (section 3) | `payload` of type `protectmcp:decision` | Authorization Context | - |
+| `request_context.tool` | `tool_name` | `action_type` | `toolName` |
+| `request_context.args_sha256` | none (`payload_digest` is optional and unspecified; arguments MUST NOT be included) | `action_hash` over the Action Object (parameters included) | `taskHash` |
+| `request_context.principal` / `on_behalf_of` | `session_id` (opaque) | `initiator`, `agent_binding.agent_id` | `agentDid`, `callerDid` |
+| `policy.policy_id`, `policy.policy_sha256` | `policy_digest` (`sha256:<hex>`, optional) | `policy_id`, `policy_hash` | - |
+| `decision` | `decision` (`allow`/`deny`/`rate_limit`) | - | `success` (post hoc) |
+| `requires_approval`, `approval.required`, `approval.approvers` | - | `required_approvals`, `approver`, `approver_index` (one Context per approver) | - |
+| `decision_id` (single use, section 7) | none (`nonce` MAY be added; no semantics) | `nonce`, `ConsumeOnce` | - |
+| `not_after` | none (verifier freshness window RECOMMENDED 24 h) | `expires_at` | freshness window |
+| `issuer_key_id`, `issuer_signature` | `signature.kid`, `signature.sig` | log checkpoint signature | `signature` (executor) |
+| grant (section 8) | - | Signoff (`context_hash`, `signature`, `approver_key_id`, WebAuthn optional) | `callerSignature` (co-signature, not approval) |
+| execution receipt (section 13) | post-execution receipt (`tool_duration_ms`) | `consumption.committed_at` | the receipt itself (`resultHash`, `latencyMs`, `failureType`) |
+| evidence log (section 15) | `previousReceiptHash` chain (informal) | Merkle `log_proof` with signed checkpoint | - |
+
+What the chain here says that none of the three says alone: one
+`decision_id` ties the policy decision, the human release and the
+execution, and the policy pin inside all three names the policy version
+that was live (section 6, currency). Acta has no approval and no single
+use; EP has no execution record and binds the human to a hash of the whole
+action rather than to a receipt; XAIP has no authorization and no policy.
+What they have that this does not: Acta's Merkle commitment mode for
+selective disclosure, EP's WebAuthn-bound approver keys and Merkle-logged
+receipts with a signed checkpoint, XAIP's DID identities. An
+implementation that needs those should layer them above this
+specification: a grant's `approver_signature` may be produced by a
+WebAuthn authenticator, and the evidence log's entries may be committed to
+a transparency log, without changing any byte defined here.

@@ -3,7 +3,7 @@ import type { KeyObject } from "node:crypto";
 import { canonicalJson, Json } from "./canonical.js";
 import { sha256Hex, signHex } from "./crypto.js";
 
-export const ENVELOPE_VERSION = "gargoyle/2";
+export const ENVELOPE_VERSION = "gargoyle/3";
 export const REASSERTED = "REASSERTED";
 export const INVALIDATED = "INVALIDATED";
 export const RE_EVALUATE_REQUIRED = "RE-EVALUATE-REQUIRED";

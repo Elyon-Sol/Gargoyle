@@ -52,6 +52,7 @@ STATIC = Path(__file__).resolve().parent / "static"
 from gargoyle.approval import (REF_APPROVAL_APPROVER_NOT_ELIGIBLE, REF_APPROVAL_DUPLICATE_APPROVER,
                                verify_grant)
 from gargoyle.envelope import approval_terms
+from gargoyle.notify import notifier_from_env
 from gargoyle.identity import entra_keys, principal_from_token
 from gargoyle.issuer import DEFAULT_TTL_SECONDS, issue
 from gargoyle.policy import Policy
@@ -86,7 +87,11 @@ def build_issuer_app(
     audience: Optional[str] = None,
     ttl_seconds: int = DEFAULT_TTL_SECONDS,
     now: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
+    on_hold: Optional[Callable[[Dict[str, Any], Any], None]] = None,
 ) -> FastAPI:
+    """`on_hold(envelope, args)` is called once for every new hold (gargoyle.notify
+    posts it to a webhook); it is notice, not admission, and its failure
+    never affects the hold."""
     app = FastAPI(title="Gargoyle issuing service")
     app.state.pending: Dict[str, Dict[str, Any]] = {}     # approval_request_id -> envelope
     app.state.pending_args: Dict[str, Any] = {}           # approval_request_id -> the call's arguments
@@ -137,6 +142,12 @@ def build_issuer_app(
             arid = result.envelope["approval_request_id"]
             app.state.pending[arid] = result.envelope
             app.state.pending_args[arid] = body["args"]
+            if on_hold is not None:
+                try:
+                    on_hold(result.envelope, body["args"])
+                except Exception as exc:          # notice only; the hold stands
+                    import sys
+                    sys.stderr.write("gargoyle: on_hold failed: %s\n" % exc)
         return {"issued": True, "envelope": result.envelope}
 
     @app.get("/pending")
@@ -282,4 +293,5 @@ def app_from_env() -> FastAPI:
         approver_public_keys=approver,
         audience=os.environ.get(ENV_AUDIENCE) or None,
         ttl_seconds=int(os.environ.get(ENV_RECEIPT_TTL, DEFAULT_TTL_SECONDS)),
+        on_hold=notifier_from_env(os.environ),
     )

@@ -19,7 +19,7 @@ is included); the caller is authenticated by your transport (the
 proxy-verified client certificate, by default); Gargoyle sits in front of
 your MCP server and lets through only what both agreed to.
 
-Status: pre-release (`0.3.0.dev0`). The wire format is `gargoyle/2` and may
+Status: pre-release (`0.4.0.dev0`). The wire format is `gargoyle/3` and may
 still change before the first release; it is specified in [SPEC.md](SPEC.md).
 
 ## What a receipt gives you
@@ -189,6 +189,21 @@ did the agent try" as well as "what did it do". `gargoyle audit --log`
 verifies every entry and the chain, and prints the tail hash to note down
 so a later copy that lost its end is caught (SPEC.md section 15).
 
+## Where it sits
+
+MCP gateways (TrueFoundry, Monosign, hoop.dev, Akto and others) hold a
+tool call, notify a reviewer and log the click. Gargoyle is not a gateway.
+It runs beside the client, and its approval is a signature made with a key
+the issuer never holds, checked at execution and again by anyone later. In
+2026 three Internet-Drafts describe parts of the same shape: Acta signed
+receipts (an access decision, signed), EP authorization receipts (a human's
+pre-execution signoff), XAIP receipts (a signed execution record). Gargoyle
+chains all three on one decision id with the policy version inside, uses
+the same RFC 8785 canonical form they do, and SPEC.md section 16 maps every
+field. A hold can also be announced to Slack or any webhook
+(`GARGOYLE_HOLD_WEBHOOK_URL`); the notice carries no key, so nothing in a
+chat channel can approve anything.
+
 ## Deploy it
 
 Three commands, no policy engine, no containers, no client changes:
@@ -239,6 +254,7 @@ cannot attach receipts work unchanged. Configuration is by environment:
 | `GARGOYLE_MCP_APPROVER_KEY_ID`, `GARGOYLE_MCP_APPROVER_PUBLIC_KEY_HEX` | the approver keys whose grants release flagged calls (optional, both or neither; comma-separated lists for several) |
 | `GARGOYLE_MCP_EXECUTOR_KEY_ID`, `GARGOYLE_MCP_EXECUTOR_KEY_HEX` | this server's own signing key, so honored calls carry an execution receipt in `_meta["gargoyle/execution"]` (optional, both or neither) |
 | `GARGOYLE_MCP_ISSUER_URL`, `GARGOYLE_MCP_CLIENT_TOKEN` | self-issue mode: the issuing service and the identity token (whose subject is this server's principal) to obtain receipts with; `GARGOYLE_MCP_APPROVAL_TIMEOUT_SECONDS` and `GARGOYLE_MCP_POLL_SECONDS` tune the wait for a grant |
+| `GARGOYLE_HOLD_WEBHOOK_URL`, `GARGOYLE_APPROVE_URL` | issuer: POST a notice of every new hold (Slack incoming-webhook shape, `text` plus the hold) with a link to the console; notice only, the grant still needs the approver's key |
 | `GARGOYLE_MCP_AUDIT_LOG` | the evidence log: every decision, honored or refused, as one hash-chained JSON line with its receipt, grant and execution receipt; `gargoyle audit --log` verifies the file |
 
 **Issuing service** (`gargoyle.issuer_service`, run with uvicorn from

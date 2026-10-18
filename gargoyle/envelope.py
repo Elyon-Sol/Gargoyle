@@ -37,7 +37,7 @@ stands for it.
 Binding a receipt to the call being executed, and checking the signature,
 expiry and replay, is verifier.verify_envelope()'s job.
 
-Canonical JSON is sort_keys=True, separators=(",", ":"), ensure_ascii=True.
+Canonical JSON is RFC 8785 (JCS): sorted members, no whitespace, literal UTF-8.
 canonical_json() is the one serializer for receipts, grants and records, so
 every signature and hash in the package is computed over the same bytes.
 """
@@ -53,7 +53,7 @@ REASSERTED = "REASSERTED"
 INVALIDATED = "INVALIDATED"
 RE_EVALUATE_REQUIRED = "RE-EVALUATE-REQUIRED"
 
-ENVELOPE_VERSION = "gargoyle/2"
+ENVELOPE_VERSION = "gargoyle/3"
 
 # Excluded from decision_sha256: the hash itself, and every field that varies
 # per issuance of the same decision. Keeping the issuer fields, not_after and
@@ -77,7 +77,95 @@ _SIGNATURE_EXCLUDED_KEYS = ("issuer_signature", "timestamp_utc")
 
 
 def canonical_json(data: Any) -> str:
-    return json.dumps(data, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    """RFC 8785 (JSON Canonicalization Scheme): members sorted by UTF-16 code
+    units, no whitespace, strings escaped only where JSON requires it (so
+    non-ASCII is literal UTF-8), numbers as ECMAScript Number::toString.
+    The same bytes a JavaScript JSON.stringify of a key-sorted object
+    produces, which is why the TypeScript port and the browser console need
+    nothing beyond JSON.stringify."""
+    out: list = []
+    _jcs(data, out)
+    return "".join(out)
+
+
+def _jcs(value: Any, out: list) -> None:
+    if value is None:
+        out.append("null")
+    elif value is True:
+        out.append("true")
+    elif value is False:
+        out.append("false")
+    elif isinstance(value, int):
+        out.append(str(value))
+    elif isinstance(value, float):
+        out.append(_es6_number(value))
+    elif isinstance(value, str):
+        out.append(_jcs_string(value))
+    elif isinstance(value, (list, tuple)):
+        out.append("[")
+        for i, item in enumerate(value):
+            if i:
+                out.append(",")
+            _jcs(item, out)
+        out.append("]")
+    elif isinstance(value, dict):
+        out.append("{")
+        for i, key in enumerate(sorted(value, key=lambda k: str(k).encode("utf-16-be"))):
+            if not isinstance(key, str):
+                raise TypeError("object keys must be strings")
+            if i:
+                out.append(",")
+            out.append(_jcs_string(key))
+            out.append(":")
+            _jcs(value[key], out)
+        out.append("}")
+    else:
+        raise TypeError("value is not JSON: %s" % type(value).__name__)
+
+
+_SHORT_ESCAPES = {"\b": "\\b", "\f": "\\f", "\n": "\\n", "\r": "\\r", "\t": "\\t", '"': '\\"', "\\": "\\\\"}
+
+
+def _jcs_string(s: str) -> str:
+    parts = ['"']
+    for ch in s:
+        esc = _SHORT_ESCAPES.get(ch)
+        if esc is not None:
+            parts.append(esc)
+        elif ch < " ":
+            parts.append("\\u%04x" % ord(ch))
+        else:
+            parts.append(ch)
+    parts.append('"')
+    return "".join(parts)
+
+
+def _es6_number(x: float) -> str:
+    """ECMAScript Number::toString for a finite double (RFC 8785 section 3.2.2.3)."""
+    if x != x or x in (float("inf"), float("-inf")):
+        raise ValueError("non-finite numbers are not JSON")
+    if x == 0:
+        return "0"
+    sign = "-" if x < 0 else ""
+    r = repr(abs(x))                       # shortest round-tripping digits, as ECMAScript requires
+    mantissa, _, exp = r.partition("e")
+    whole, _, frac = mantissa.partition(".")
+    digits = (whole + frac).lstrip("0")
+    n = len(whole) + (int(exp) if exp else 0)   # value = 0.digits * 10**n before stripping
+    n -= len(whole + frac) - len((whole + frac).lstrip("0"))
+    digits = digits.rstrip("0") or "0"
+    k = len(digits)
+    if k <= n <= 21:
+        return sign + digits + "0" * (n - k)
+    if 0 < n <= 21:
+        return sign + digits[:n] + "." + digits[n:]
+    if -6 < n <= 0:
+        return sign + "0." + "0" * (-n) + digits
+    e = n - 1
+    exp_text = "e" + ("+" if e >= 0 else "-") + str(abs(e))
+    if k == 1:
+        return sign + digits + exp_text
+    return sign + digits[0] + "." + digits[1:] + exp_text
 
 
 def _sha256_text(value: str) -> str:
