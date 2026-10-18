@@ -127,14 +127,19 @@ class IssuerClient:
         return self._http.get(self.url + path, headers=self._headers, timeout=self.request_timeout)
 
     def issue(self, target_url: str, tool: str, args: Any) -> Dict[str, Any]:
-        """{"envelope": ...} or {"envelope": None, "reason": ...}."""
+        """{"envelope": ...} or {"envelope": None, "reason": ...}. The cause of
+        an unavailable issuer (TLS, DNS, a refused connection) goes to stderr,
+        where an MCP client's server log shows it; the refusal code stays
+        generic."""
         try:
             r = self._post("/issue", {"target_url": target_url, "tool": tool, "args": args})
             if r.status_code != 200:
                 detail = r.json().get("detail", {}) if r.headers.get("content-type", "").startswith("application/json") else {}
+                sys.stderr.write("gargoyle: issuer answered %s: %s\n" % (r.status_code, r.text[:300]))
                 return {"envelope": None, "reason": detail.get("reason", REF_TARGET_ISSUER_UNAVAILABLE)}
             body = r.json()
-        except Exception:
+        except Exception as exc:
+            sys.stderr.write("gargoyle: issuer unreachable at %s: %s: %s\n" % (self.url, type(exc).__name__, str(exc)[:300]))
             return {"envelope": None, "reason": REF_TARGET_ISSUER_UNAVAILABLE}
         if not body.get("issued"):
             return {"envelope": None, "reason": body.get("reason") or REF_TARGET_ISSUER_UNAVAILABLE}

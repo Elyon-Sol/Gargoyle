@@ -165,7 +165,7 @@ def cmd_issuer(args) -> int:
             raise SystemExit("--ssl-certfile and --ssl-keyfile go together")
         tls = {"ssl_certfile": args.ssl_certfile, "ssl_keyfile": args.ssl_keyfile}
     print("record.json written; serving on %s://%s:%d" % ("https" if tls else "http", args.host, args.port), file=sys.stderr)
-    uvicorn.run(app, host=args.host, port=args.port, log_level="warning", **tls)
+    uvicorn.run(app, host=args.host, port=args.port, log_level="info" if args.verbose else "warning", **tls)
     return 0
 
 
@@ -231,6 +231,7 @@ def main(argv=None) -> int:
     p.add_argument("--out", default="gargoyle-deploy")
     p.add_argument("--host", default="127.0.0.1"); p.add_argument("--port", type=int, default=8080)
     p.add_argument("--ssl-certfile"); p.add_argument("--ssl-keyfile")
+    p.add_argument("--verbose", action="store_true", help="log every request")
     p.set_defaults(fn=cmd_issuer)
     p = sub.add_parser("approve", help="review and release held calls")
     p.add_argument("--out", default="gargoyle-deploy")
