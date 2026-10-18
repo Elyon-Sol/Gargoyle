@@ -164,6 +164,16 @@ outside.
   executed chains; a refusal leaves no execution receipt, so refusals are visible in
   the middleware audit log and issuer log but not in `gargoyle audit`. The evidence
   log should record refusals and declines as first-class entries.
+- Encoding bug found by the Desktop run of step 5 (2026-10-18): the middleware
+  read stdin in text mode, so on Windows it decoded Desktop's UTF-8 as cp1252. An
+  em dash in notes.md came back as three characters and one undefined byte as a
+  lone surrogate, which the issuer accepted into a hold and then could not
+  serialize: /pending answered 500, the approval page showed nothing, the client
+  waited out its timeout. Fixed on both ends: both stdio servers and the upstream
+  pipe are UTF-8 regardless of locale (utf8_stdio), and /issue refuses arguments
+  that are not UTF-8 text (REF_ISSUER_ARGS_NOT_TEXT) rather than holding them.
+  The assistant itself flagged the mojibake in its reply, which is how it was
+  caught.
 - Enterprise identity (2026-10-16): identity tokens may be RS256 or ES256 from a
   provider's JWKS (keys_from_jwks, entra_keys; GARGOYLE_ENTRA_TENANT on the issuer);
   Entra's preferred_username/upn is the principal; groups and app roles are policy

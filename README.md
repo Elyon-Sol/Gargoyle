@@ -19,7 +19,7 @@ is included); the caller is authenticated by your transport (the
 proxy-verified client certificate, by default); Gargoyle sits in front of
 your MCP server and lets through only what both agreed to.
 
-Status: pre-release (`0.2.0.dev0`). The wire format is `gargoyle/2` and may
+Status: pre-release (`0.2.1.dev0`). The wire format is `gargoyle/2` and may
 still change before the first release; it is specified in [SPEC.md](SPEC.md).
 
 ## What a receipt gives you

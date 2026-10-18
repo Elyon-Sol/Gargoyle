@@ -33,6 +33,7 @@ grant that would be refused downstream; the executor checks and single-uses
 it again when the call runs. The pending set is in memory: one instance.
 """
 
+import json
 import os
 from datetime import datetime, timezone
 from pathlib import Path
@@ -63,6 +64,7 @@ ENV_RECEIPT_TTL = "GARGOYLE_RECEIPT_TTL_SECONDS"
 
 REF_ISSUER_UNAUTHENTICATED = "REF_ISSUER_UNAUTHENTICATED"
 REF_ISSUER_BAD_REQUEST = "REF_ISSUER_BAD_REQUEST"
+REF_ISSUER_ARGS_NOT_TEXT = "REF_ISSUER_ARGS_NOT_TEXT"   # arguments carry characters no UTF-8 text has
 REF_ISSUER_UNKNOWN_HOLD = "REF_ISSUER_UNKNOWN_HOLD"
 REF_ISSUER_NO_APPROVER_TRUST = "REF_ISSUER_NO_APPROVER_TRUST"
 
@@ -106,6 +108,13 @@ def build_issuer_app(
                 or not isinstance(body.get("tool"), str) or "args" not in body
                 or not isinstance(body.get("claims", {}), dict)):
             raise _refuse(400, REF_ISSUER_BAD_REQUEST)
+        try:
+            # Lone surrogates (a client that decoded UTF-8 with the wrong
+            # codepage) would hash and sign but could never be shown to an
+            # approver or written as UTF-8. Refuse them here, not in /pending.
+            json.dumps(body["args"], ensure_ascii=False).encode("utf-8")
+        except UnicodeEncodeError:
+            raise _refuse(400, REF_ISSUER_ARGS_NOT_TEXT)
         # The policy sees the identity provider's groups and roles as claims;
         # the receipt binds only the call and the principal.
         interaction = {**body.get("claims", {}), "tool": body["tool"], "args": body["args"],

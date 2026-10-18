@@ -182,9 +182,12 @@ class StdioUpstream:
         if not command:
             raise ValueError("upstream command must not be empty")
         self.command = list(command)
+        # MCP stdio is UTF-8 by specification. Never the locale codepage:
+        # on Windows that is cp1252, which turns a UTF-8 em dash into three
+        # characters and an undefined byte into a lone surrogate.
         self._proc = subprocess.Popen(
             self.command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-            text=True, bufsize=1,
+            encoding="utf-8", errors="replace", bufsize=1,
         )
         self._lock = threading.Lock()
 
@@ -528,8 +531,7 @@ def serve_stdio(state: ServerState, stdin=None, stdout=None) -> None:
     """The MCP stdio transport: newline-delimited JSON-RPC in on stdin, responses
     out on stdout. A parse error yields a JSON-RPC parse error; a notification
     yields no line."""
-    stdin = stdin if stdin is not None else sys.stdin
-    stdout = stdout if stdout is not None else sys.stdout
+    stdin, stdout = utf8_stdio(stdin, stdout)
     for line in stdin:
         line = line.strip()
         if not line:
@@ -544,6 +546,22 @@ def serve_stdio(state: ServerState, stdin=None, stdout=None) -> None:
         if response is not None:
             stdout.write(json.dumps(response) + "\n")
             stdout.flush()
+
+
+def utf8_stdio(stdin=None, stdout=None):
+    """The process's stdin and stdout as UTF-8 text streams, whatever the
+    locale says (MCP stdio is UTF-8). Streams passed in are used as they are;
+    a stream with no underlying buffer (a StringIO in a test) likewise."""
+    import io
+    if stdin is None:
+        stdin = sys.stdin
+        if hasattr(stdin, "buffer"):
+            stdin = io.TextIOWrapper(stdin.buffer, encoding="utf-8", errors="replace")
+    if stdout is None:
+        stdout = sys.stdout
+        if hasattr(stdout, "buffer"):
+            stdout = io.TextIOWrapper(stdout.buffer, encoding="utf-8", line_buffering=True)
+    return stdin, stdout
 
 
 def issuer_client_from_env() -> Optional[IssuerClient]:

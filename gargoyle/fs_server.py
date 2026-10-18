@@ -79,7 +79,8 @@ class Root:
 
 
 def serve(root: Root, stdin=None, stdout=None) -> None:
-    stdin = stdin or sys.stdin; stdout = stdout or sys.stdout
+    from gargoyle.mcp_server import utf8_stdio
+    stdin, stdout = utf8_stdio(stdin, stdout)
     for line in stdin:
         line = line.strip()
         if not line:
