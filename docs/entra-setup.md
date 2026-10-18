@@ -1,0 +1,139 @@
+# Entra ID setup for Gargoyle
+
+Two app registrations in your tenant, once. After this, each user runs
+`gargoyle login` on their workstation and every receipt and audit row
+names them.
+
+- **Gargoyle-Issuer-API**: represents the issuing service on the VM. It
+  exposes one scope. Tokens for it carry its client id as the audience.
+- **User-Client-Flow**: the public client that `gargoyle login` uses to
+  sign a user in by device code and obtain a token for the API.
+
+You need a role that can create app registrations and grant admin consent
+(Application Administrator or Global Administrator).
+
+## 1. Gargoyle-Issuer-API
+
+1. Open https://entra.microsoft.com and sign in. In the left menu choose
+   **Identity**, then **Applications**, then **App registrations**.
+2. Choose **New registration**.
+   - Name: `Gargoyle-Issuer-API`
+   - Supported account types: **Accounts in this organizational directory
+     only** (single tenant)
+   - Redirect URI: leave empty
+   - **Register**
+3. On the app's **Overview** page, copy two values and keep them:
+   - **Application (client) ID**. Call it `ISSUER_APP_ID`.
+   - **Directory (tenant) ID**. Call it `TENANT_ID`.
+4. In the app's left menu choose **Expose an API**.
+   - Next to **Application ID URI** choose **Add**, accept the default
+     `api://ISSUER_APP_ID`, **Save**.
+   - Choose **Add a scope**:
+     - Scope name: `access`
+     - Who can consent: **Admins and users**
+     - Admin consent display name: `Access the Gargoyle issuer`
+     - Admin consent description: `Obtain signed receipts for tool calls
+       as the signed-in user`
+     - User consent display name and description: same text
+     - State: **Enabled**
+     - **Add scope**
+   - The full scope now reads `api://ISSUER_APP_ID/access`. Call it
+     `SCOPE`.
+5. In the left menu choose **Manifest**. Find
+   `"requestedAccessTokenVersion"` (older tenants show
+   `"accessTokenAcceptedVersion"`). Set it to `2` and **Save**. This makes
+   the token's `aud` claim equal `ISSUER_APP_ID`, which is what the issuer
+   checks.
+6. Optional, for rules by department: in the left menu choose **Token
+   configuration**, **Add groups claim**, tick **Security groups**, and
+   under the Access token column choose **Group ID**. **Add**. Rules can
+   then match `"groups": ["<group object id>"]`.
+
+## 2. User-Client-Flow
+
+1. Back in **App registrations**, choose **New registration**.
+   - Name: `User-Client-Flow`
+   - Supported account types: **Accounts in this organizational directory
+     only**
+   - Redirect URI: leave empty
+   - **Register**
+2. On **Overview**, copy the **Application (client) ID**. Call it
+   `CLIENT_APP_ID`.
+3. In the left menu choose **Authentication**.
+   - Scroll to **Advanced settings**, **Allow public client flows**, set
+     to **Yes**. **Save**. Device code sign-in does not work without this.
+4. In the left menu choose **API permissions**.
+   - **Add a permission**, tab **My APIs** (or **APIs my organization
+     uses**), choose **Gargoyle-Issuer-API**.
+   - **Delegated permissions**, tick **access**, **Add permissions**.
+   - Choose **Grant admin consent for <your tenant>**, confirm **Yes**. The
+     Status column shows a green check. Without consent each user would be
+     asked to consent at first sign-in, which also works if your tenant
+     allows user consent.
+5. Optional: remove the default **User.Read** Microsoft Graph permission.
+   Gargoyle does not use it.
+
+## 3. Who may sign in
+
+By default any user in the tenant can sign in to User-Client-Flow. To
+restrict it: **Identity**, **Applications**, **Enterprise applications**,
+open **User-Client-Flow**, **Properties**, set **Assignment required** to
+**Yes**, then under **Users and groups** assign the people or a group.
+Conditional Access policies apply to this sign-in like any other, so MFA
+and device requirements are enforced by the tenant, not by Gargoyle.
+
+## 4. The issuer on the VM
+
+Add to the issuer's environment file (`/opt/gargoyle/deploy/issuer.env`
+in the guide; `/elyon/gargoyle-poc/deploy/issuer.env` in the PoC):
+
+```
+GARGOYLE_ENTRA_TENANT=TENANT_ID
+GARGOYLE_ISSUER_AUDIENCE=ISSUER_APP_ID
+```
+
+Keep the existing `GARGOYLE_IDP_KEY_ID` and `GARGOYLE_IDP_PUBLIC_KEY_HEX`
+lines: the issuer trusts both, so the approver console's init-minted token
+keeps working. Restart the issuer (`sudo systemctl restart gargoyle`, or
+stop and start the process). The issuer fetches the tenant's signing keys
+from `login.microsoftonline.com` at start, so the VM needs outbound HTTPS.
+
+## 5. Each Windows client
+
+```powershell
+python -m pip install --upgrade "gargoyle-receipts[entra]"
+gargoyle login --tenant TENANT_ID --client-id CLIENT_APP_ID --scope api://ISSUER_APP_ID/access --out C:\gargoyle
+```
+
+`gargoyle` is installed as a script; if PowerShell cannot find it, use
+`python -m gargoyle.cli login ...`. The command prints a URL and a code.
+Open the URL in any browser, enter the code, sign in as the user. The
+command then prints `signed in as <upn>` and rewrites
+`C:\gargoyle\middleware.env` and `C:\gargoyle\mcp-config.json`: the shared
+client token is gone, the four `GARGOYLE_MCP_ENTRA_*` settings are in, and
+`GARGOYLE_MCP_PRINCIPAL` is the user's UPN. The token cache is
+`C:\gargoyle\entra-token-cache.json`, readable by that user only.
+
+If the MCP entry was pasted into Claude Desktop's or Claude Code's config
+by hand, paste the updated entry from `mcp-config.json` again. Restart the
+client (Desktop: quit from the tray and reopen).
+
+## 6. Check
+
+1. Ask the assistant to list the project folder. On the VM,
+   `tail -f issuer.log` shows `POST /issue` 200.
+2. Hold a write and approve it in the console: the card's **requested by**
+   line now shows the UPN.
+3. On the client, `python -m gargoyle.cli audit --log C:\gargoyle\audit.jsonl --out C:\gargoyle`
+   shows the UPN in the principal column for new rows.
+
+## Troubleshooting
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `AADSTS7000218` or "public client flows" error at login | step 2.3 not saved | Authentication, Allow public client flows, Yes |
+| `AADSTS65001` consent required | step 2.4 consent not granted | Grant admin consent, or let the user consent |
+| issuer answers 401 `REF_IDENTITY_AUDIENCE_MISMATCH` | token `aud` is `api://...` (v1) but audience is the client id, or the reverse | set manifest token version to 2 and audience to `ISSUER_APP_ID`, or set audience to `api://ISSUER_APP_ID` |
+| issuer answers 401 `REF_IDENTITY_KEY_UNKNOWN` | issuer started before the tenant was set, or tenant id wrong | check `GARGOYLE_ENTRA_TENANT`, restart |
+| middleware refuses `REF_TARGET_LOGIN_REQUIRED` | no cached account, or refresh rejected by tenant policy | run `gargoyle login` again |
+| login succeeds but the console still says the old principal | client not restarted, or the pasted MCP entry is stale | re-paste from `mcp-config.json`, restart |
