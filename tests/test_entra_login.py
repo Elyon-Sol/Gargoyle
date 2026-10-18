@@ -124,3 +124,38 @@ def test_login_command_rewrites_the_client_config(tmp_path, monkeypatch, capsys)
     # Everything the middleware needs to pick the Entra source is there.
     for k in ("GARGOYLE_MCP_ENTRA_TENANT", "GARGOYLE_MCP_ENTRA_CLIENT_ID", "GARGOYLE_MCP_ENTRA_SCOPE", "GARGOYLE_MCP_ENTRA_TOKEN_CACHE"):
         assert env[k] and mcp[k] == env[k]
+
+
+def test_msal_gets_a_public_roots_http_client_and_is_built_lazily(tmp_path, monkeypatch):
+    """REQUESTS_CA_BUNDLE pins the issuer's private CA for the middleware; MSAL
+    must still trust the public roots. And nothing touches the network until
+    the first token is asked for."""
+    from gargoyle import entra_login
+    import certifi
+    built = []
+
+    class CapturingMsal(FakeMsal):
+        class PublicClientApplication:
+            def __init__(self, client_id, authority, token_cache, http_client=None):
+                built.append(http_client)
+                self.inner = FakeApp(client_id, authority, token_cache)
+            def get_accounts(self): return self.inner.get_accounts()
+            def acquire_token_silent(self, scopes, account): return self.inner.acquire_token_silent(scopes, account)
+    monkeypatch.setattr(entra_login, "_msal", lambda: CapturingMsal)
+    monkeypatch.setenv("REQUESTS_CA_BUNDLE", str(tmp_path / "private-ca.crt"))
+    cache = tmp_path / "cache.json"
+    device_code_login("t", "c", "s", str(cache), app_factory=FakeApp, msal_module=FakeMsal, prompt=lambda m: None)
+    src = EntraTokenSource("t", "c", "s", str(cache), msal_module=CapturingMsal)
+    assert built == []                                   # constructed nothing yet
+    assert src.token() == "at-refreshed"
+    assert len(built) == 1 and built[0].verify == certifi.where()   # public roots, not the private CA
+
+    # A tenant that cannot be reached is a refusal at call time, not a crash at startup.
+    class Unreachable(FakeMsal):
+        class PublicClientApplication:
+            def __init__(self, *a, **k): raise OSError("name resolution failed")
+    monkeypatch.setattr(entra_login, "_msal", lambda: Unreachable)
+    off = EntraTokenSource("t", "c", "s", str(cache), msal_module=Unreachable)
+    with pytest.raises(LoginRequired, match="could not be reached"):
+        off.token()
+    assert off.principal is None

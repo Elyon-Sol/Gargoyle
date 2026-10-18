@@ -69,10 +69,24 @@ class TokenCache:
                 pass
 
 
+def public_roots_http():
+    """A requests session that trusts the public CA roots (certifi) whatever
+    REQUESTS_CA_BUNDLE says. A deployment pins the issuer's private CA with
+    that variable; Entra's endpoints are not signed by it, so the two trust
+    domains must not share one setting. Proxies from the environment still
+    apply."""
+    import certifi
+    import requests
+    s = requests.Session()
+    s.verify = certifi.where()
+    return s
+
+
 def _app(tenant: str, client_id: str, cache: TokenCache, app_factory: Optional[Callable] = None) -> Any:
     if app_factory is not None:
         return app_factory(client_id=client_id, authority=AUTHORITY.format(tenant=tenant), token_cache=cache.cache)
-    return _msal().PublicClientApplication(client_id, authority=AUTHORITY.format(tenant=tenant), token_cache=cache.cache)
+    return _msal().PublicClientApplication(client_id, authority=AUTHORITY.format(tenant=tenant), token_cache=cache.cache,
+                                           http_client=public_roots_http())
 
 
 def device_code_login(tenant: str, client_id: str, scope: str, cache_path: str, *,
@@ -105,8 +119,26 @@ class EntraTokenSource:
     def __init__(self, tenant: str, client_id: str, scope: str, cache_path: str, *,
                  app_factory: Optional[Callable] = None, msal_module: Any = None) -> None:
         self.scope = scope
-        self._cache = TokenCache(cache_path, msal_module)
-        self._app = _app(tenant, client_id, self._cache, app_factory)
+        self._args = (tenant, client_id, cache_path, app_factory, msal_module)
+        self._cache: Optional[TokenCache] = None
+        self._app_obj: Any = None
+
+    @property
+    def _app(self) -> Any:
+        # Built on first use: MSAL fetches the tenant's OpenID configuration
+        # when the application object is created, and that must not happen
+        # while the MCP client is starting the middleware, nor kill it if
+        # the network is down. A failure here surfaces as LoginRequired on
+        # the call, which the middleware turns into a refusal.
+        if self._app_obj is None:
+            tenant, client_id, cache_path, app_factory, msal_module = self._args
+            self._cache = TokenCache(cache_path, msal_module)
+            try:
+                self._app_obj = _app(tenant, client_id, self._cache, app_factory)
+            except Exception as exc:
+                raise LoginRequired("Entra could not be reached to validate the sign-in: %s: %s"
+                                    % (type(exc).__name__, str(exc)[:200])) from exc
+        return self._app_obj
 
     def token(self) -> str:
         accounts: List[Dict[str, Any]] = self._app.get_accounts()
@@ -121,7 +153,10 @@ class EntraTokenSource:
 
     @property
     def principal(self) -> Optional[str]:
-        accounts = self._app.get_accounts()
+        try:
+            accounts = self._app.get_accounts()
+        except LoginRequired:
+            return None
         return accounts[0].get("username") if accounts else None
 
 
