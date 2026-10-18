@@ -546,7 +546,13 @@ The complete objects are the `threshold` member of
   or signature region, or the verification order is a new version;
   verifiers do not accept a version they do not implement
   (`REF_VERIFY_VERSION_UNSUPPORTED`). `gargoyle/3` moved canonical JSON to
-  RFC 8785 and added the `approval` member. `gargoyle/2` added `on_behalf_of`, the
+  RFC 8785 and added the `approval` member. Evidence outlives a format
+  change: an audit (`verify_chain`, `verify_log`, `verify_provenance` with
+  `historical`) verifies a receipt of an earlier version, with its grants
+  and execution receipt, under the canonical form that version was signed
+  with (`gargoyle/2`: the pre-RFC 8785 form). Admission never does; a
+  target honors only the current version. The TypeScript port verifies the
+  current version only. `gargoyle/2` added `on_behalf_of`, the
   version check and the JWS form to `gargoyle/1`; nothing issued under
   `gargoyle/1` is honored. The format is pre-release and may still change
   before the first release.
@@ -661,7 +667,7 @@ hashed over the one before:
 
 ```
 entry = {
-  "evidence_version": "gargoyle-evidence/1",
+  "evidence_version": "gargoyle-evidence/2",
   "seq":          <1, 2, 3 ...; dense>,
   "prev_sha256":  <entry_sha256 of seq-1; 64 "0" for seq 1>,
   "at":           <ISO 8601 UTC, when the executor decided>,
@@ -707,6 +713,10 @@ and hash as the new expectation, so one bad entry is reported once rather
 than failing every later one. The result names each entry's outcome, the
 count of honored and refused entries, and the last `entry_sha256` (the
 tail). The whole file is `EVIDENCE_VERIFIED` when every entry is.
+
+`gargoyle-evidence/1` entries hashed under the `gargoyle/2` canonical form;
+a verifier recomputes each entry's hash under its own `evidence_version`,
+so one log may span the change and still verify end to end.
 
 What the chain proves: no entry was edited, removed or inserted after the
 fact, and each honored one is a verified receipt chain. What it does not

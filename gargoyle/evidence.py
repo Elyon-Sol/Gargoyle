@@ -7,7 +7,7 @@ executor's record of every decision it made, honored or refused, each entry
 hashed over the one before it:
 
     entry = {
-        "evidence_version": "gargoyle-evidence/1",
+        "evidence_version": "gargoyle-evidence/2",
         "seq":           1, 2, 3 ...            (dense, from 1)
         "prev_sha256":   <entry_sha256 of seq-1; 64 zeros for seq 1>,
         "at":            <when the executor decided, ISO 8601, UTC>,
@@ -44,11 +44,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
-from gargoyle.envelope import args_sha256, canonical_json
+from gargoyle.envelope import args_sha256, canonical_json, canonical_json_legacy
 from gargoyle.execution import verify_chain
 from gargoyle.verifier import verify_provenance
 
-EVIDENCE_VERSION = "gargoyle-evidence/1"
+EVIDENCE_VERSION = "gargoyle-evidence/2"          # entry hashes over RFC 8785 canonical JSON
+EVIDENCE_VERSIONS = {"gargoyle-evidence/1": canonical_json_legacy, EVIDENCE_VERSION: canonical_json}
 GENESIS = "0" * 64
 
 HONORED = "honored"
@@ -67,9 +68,12 @@ _FIELDS = ("evidence_version", "seq", "prev_sha256", "at", "kind", "tool", "args
 
 
 def entry_sha256(entry: Dict[str, Any]) -> str:
-    """The hash an entry carries: over its canonical JSON without the hash itself."""
+    """The hash an entry carries: over its canonical JSON without the hash
+    itself, under the serializer of the entry's own evidence_version, so a
+    log that spans a format change still verifies end to end."""
     body = {k: v for k, v in entry.items() if k != "entry_sha256"}
-    return hashlib.sha256(canonical_json(body).encode("utf-8")).hexdigest()
+    serialize = EVIDENCE_VERSIONS.get(entry.get("evidence_version"), canonical_json)
+    return hashlib.sha256(serialize(body).encode("utf-8")).hexdigest()
 
 
 def build_entry(*, seq: int, prev_sha256: str, kind: str, tool: str, args: Any, principal: str,
@@ -113,7 +117,7 @@ class EvidenceLog:
         for line in self.path.read_text(encoding="utf-8").splitlines():
             if line.strip():
                 last = json.loads(line)
-                if last.get("evidence_version") == EVIDENCE_VERSION:
+                if last.get("evidence_version") in EVIDENCE_VERSIONS:
                     self._seq, self._tail = int(last["seq"]), str(last["entry_sha256"])
 
     def append(self, kind: str, tool: str, args: Any, principal: str, reason: str, *,
@@ -132,7 +136,7 @@ class EvidenceLog:
 
 def _well_formed(entry: Any) -> bool:
     return (isinstance(entry, dict) and set(entry) == set(_FIELDS)
-            and entry["evidence_version"] == EVIDENCE_VERSION
+            and entry["evidence_version"] in EVIDENCE_VERSIONS
             and isinstance(entry["seq"], int) and entry["seq"] >= 1
             and isinstance(entry["prev_sha256"], str) and len(entry["prev_sha256"]) == 64
             and isinstance(entry["at"], str) and entry["kind"] in (HONORED, REFUSED)
@@ -196,7 +200,7 @@ def verify_log(
             reason = ACCEPT_ENTRY_VERIFIED
             if e["receipt"] is not None:
                 p = verify_provenance(e["receipt"], pinned_public_keys=issuer_public_keys,
-                                      now=_parse_at(e["at"]))
+                                      now=_parse_at(e["at"]), historical=True)
                 ok, reason = p["accepted"], (ACCEPT_ENTRY_VERIFIED if p["accepted"] else p["reason"])
         counts[e["kind"]] += 1
         report.append({"seq": e["seq"], "kind": e["kind"], "tool": e["tool"], "principal": e["principal"],

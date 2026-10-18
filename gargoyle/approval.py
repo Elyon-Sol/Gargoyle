@@ -19,7 +19,7 @@ grant_id is present, so that claim cannot be skipped.
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
-from gargoyle.envelope import approval_terms, canonical_json
+from gargoyle.envelope import approval_terms, canonical_json, serializer_for
 from gargoyle.verifier import not_after_valid
 
 
@@ -129,8 +129,11 @@ def verify_grant(
     gate_key_id: str,
     now: Optional[datetime] = None,
     clock_skew: timedelta = timedelta(0),
+    serializer: Any = None,
 ) -> Dict[str, Any]:
-    """Is `grant` a valid human release of the held decision?
+    """Is `grant` a valid human release of the held decision? `serializer`
+    is the canonical form the grant was signed under (default: the current
+    one; an audit of a historical receipt passes its format's).
 
     Returns {"accepted", "reason"}. First failure wins:
       1. structure                          -> REF_APPROVAL_MALFORMED
@@ -180,7 +183,7 @@ def verify_grant(
 
     # 5. signature verifies (duck-typed; covers everything but the signature)
     region = {k: v for k, v in grant.items() if k not in _SIGNATURE_EXCLUDED_KEYS}
-    message = canonical_json(region).encode("utf-8")
+    message = (serializer or canonical_json)(region).encode("utf-8")
     try:
         public_key.verify(bytes.fromhex(signature_hex), message)
     except Exception:
@@ -236,6 +239,7 @@ def verify_grants(
     with the grants that were counted, so the caller can claim each one."""
     terms = approval_terms(envelope)
     items = as_grant_list(grants)
+    serializer = serializer_for(envelope.get("envelope_version")) or canonical_json
     seen: List[str] = []
     for grant in items:
         g = verify_grant(
@@ -246,6 +250,7 @@ def verify_grants(
             gate_key_id=envelope.get("issuer_key_id"),
             now=now,
             clock_skew=clock_skew,
+            serializer=serializer,
         )
         if not g["accepted"]:
             return {"accepted": False, "reason": g["reason"], "grants": []}

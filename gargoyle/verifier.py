@@ -46,6 +46,7 @@ from datetime import datetime, timedelta, timezone
 
 from gargoyle.envelope import (
     ENVELOPE_VERSION,
+    serializer_for,
     valid_approval,
     INVALIDATED,
     REASSERTED,
@@ -174,6 +175,7 @@ def verify_provenance(
     key_record_view: Dict[str, Any] = None,
     now: datetime = None,
     clock_skew: timedelta = timedelta(0),
+    historical: bool = False,
 ) -> Dict[str, Any]:
     """Steps 1 and 2 of verify_envelope on their own: the receipt is
     structurally usable, a trusted issuer key signed it, and it had not
@@ -181,7 +183,12 @@ def verify_provenance(
     offline on a stored receipt (with `now` set to when it was presented).
     Returns {"accepted": bool, "reason": str}; the accept reason is
     ACCEPT_PROVENANCE. Currency and binding are verify_envelope's steps 3
-    and 4 and are not checked here."""
+    and 4 and are not checked here.
+
+    `historical` lets an audit verify a receipt of an earlier format
+    version (envelope.HISTORICAL_VERSIONS) under the serializer it was
+    signed with. Admission never sets it: a target honors only the
+    current format."""
     if clock_skew < timedelta(0):
         raise ValueError("clock_skew must be non-negative")
     if pinned_public_keys is None and key_record_view is None:
@@ -192,8 +199,10 @@ def verify_provenance(
     for key in _REQUIRED_ENVELOPE_KEYS:
         if key not in envelope:
             return _reject(REF_VERIFY_ENVELOPE_ABSENT)
-    if envelope.get("envelope_version") != ENVELOPE_VERSION:
+    version = envelope.get("envelope_version")
+    if version != ENVELOPE_VERSION and not (historical and serializer_for(version) is not None):
         return _reject(REF_VERIFY_VERSION_UNSUPPORTED)
+    serialize = serializer_for(version)
     rc = envelope["request_context"]
     if not isinstance(rc, dict):
         return _reject(REF_VERIFY_ENVELOPE_ABSENT)
@@ -252,7 +261,7 @@ def verify_provenance(
         for k, v in envelope.items()
         if k not in ("issuer_signature", "timestamp_utc")
     }
-    message = canonical_json(signed_region).encode("utf-8")
+    message = serialize(signed_region).encode("utf-8")
     try:
         public_key.verify(bytes.fromhex(signature_hex), message)
     except Exception:

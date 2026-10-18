@@ -40,7 +40,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from gargoyle.approval import as_grant_list, verify_grants
-from gargoyle.envelope import args_sha256, canonical_json
+from gargoyle.envelope import args_sha256, canonical_json, serializer_for
 from gargoyle.verifier import verify_provenance
 
 EXECUTION_VERSION = "gargoyle-execution/1"
@@ -145,13 +145,16 @@ def verify_execution_receipt(
     public_key = executor_public_keys.get(key_id)
     if public_key is None:
         return _reject(REF_EXEC_KEY_UNKNOWN)
+    # The execution receipt was signed under the canonical form of the
+    # receipt's format version; an audit of a historical chain uses that.
+    serialize = serializer_for(envelope.get("envelope_version")) or canonical_json
     region = {k: v for k, v in execution.items() if k not in _SIGNATURE_EXCLUDED_KEYS}
     try:
-        public_key.verify(bytes.fromhex(signature_hex), canonical_json(region).encode("utf-8"))
+        public_key.verify(bytes.fromhex(signature_hex), serialize(region).encode("utf-8"))
     except Exception:
         return _reject(REF_EXEC_SIGNATURE_INVALID)
     for key in _BOUND_FROM_RECEIPT:
-        if key not in envelope or canonical_json(execution[key]) != canonical_json(envelope[key]):
+        if key not in envelope or serialize(execution[key]) != serialize(envelope[key]):
             return _reject(REF_EXEC_BINDING_MISMATCH)
     if check_outputs:
         try:
@@ -190,7 +193,8 @@ def verify_chain(
     except (ValueError, TypeError):
         return {"accepted": False, "reason": REF_EXEC_MALFORMED, "steps": steps}
 
-    provenance = verify_provenance(envelope, pinned_public_keys=issuer_public_keys, now=executed_at)
+    # An audit verifies historical formats; admission (the consumer) does not.
+    provenance = verify_provenance(envelope, pinned_public_keys=issuer_public_keys, now=executed_at, historical=True)
     steps.append(("authorization", provenance["reason"]))
     if not provenance["accepted"]:
         return {"accepted": False, "reason": provenance["reason"], "steps": steps}

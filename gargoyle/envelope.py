@@ -88,6 +88,28 @@ def canonical_json(data: Any) -> str:
     return "".join(out)
 
 
+def canonical_json_legacy(data: Any) -> str:
+    """The gargoyle/2 canonical form (Python json.dumps with sort_keys,
+    compact separators and ensure_ascii). Kept so that receipts, grants,
+    execution receipts and evidence entries written under gargoyle/2 can
+    still be verified in an audit. Nothing new is ever signed with it."""
+    return json.dumps(data, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+
+
+# Formats an auditor may still verify, each with the serializer its bytes
+# were signed under. Admission (Consumer.check) accepts only ENVELOPE_VERSION.
+HISTORICAL_VERSIONS = {"gargoyle/2": canonical_json_legacy}
+
+
+def serializer_for(version: Any):
+    """The canonical serializer for a receipt format version: the current
+    one for ENVELOPE_VERSION, the legacy one for a historical version, None
+    for anything else."""
+    if version == ENVELOPE_VERSION:
+        return canonical_json
+    return HISTORICAL_VERSIONS.get(version)
+
+
 def _jcs(value: Any, out: list) -> None:
     if value is None:
         out.append("null")
@@ -200,8 +222,11 @@ def valid_approval(approval: Any) -> bool:
 
 
 def decision_sha256_of(envelope: Dict[str, Any]) -> str:
+    """The hash-region digest, under the serializer of the receipt's own
+    format version (a historical receipt hashes as it was issued)."""
     hashable = {k: v for k, v in envelope.items() if k not in _HASH_EXCLUDED_KEYS}
-    return _sha256_text(canonical_json(hashable))
+    serializer = serializer_for(envelope.get("envelope_version")) or canonical_json
+    return _sha256_text(serializer(hashable))
 
 
 def live_pin(

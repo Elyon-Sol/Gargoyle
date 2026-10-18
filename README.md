@@ -21,7 +21,7 @@ your MCP server and lets through only what both agreed to.
 
 [![PyPI](https://img.shields.io/pypi/v/gargoyle-receipts)](https://pypi.org/project/gargoyle-receipts/)
 
-Status: pre-release (`0.5.2.dev0`, on PyPI as `gargoyle-receipts`). The wire format is `gargoyle/3` and may
+Status: pre-release (`0.5.3.dev0`, on PyPI as `gargoyle-receipts`). The wire format is `gargoyle/3` and may
 still change before the first release; it is specified in [SPEC.md](SPEC.md).
 
 ## What a receipt gives you
