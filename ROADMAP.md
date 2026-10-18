@@ -142,6 +142,18 @@ outside.
   middleware now logs why an issuer was unreachable instead of only the refusal
   code. Claude Code also prompts for each MCP tool on its own; that is the client's
   permission layer, orthogonal to the gate.
+- Claude Desktop PoC (2026-10-18): the same middleware entry dropped into Claude
+  Desktop (Microsoft Store build) worked with no code change. Desktop listed the
+  gated folder, a held write (todo.md) was approved in the browser, a delete was
+  refused and Desktop said so plainly, offering an empty overwrite instead, which
+  would itself have come to the approver as a card. `gargoyle audit` then showed
+  the two Desktop chains beside the five Claude Code ones: 7 entries, 0 failed,
+  all CHAIN_VERIFIED, one trail for both clients. Only snag: the Store build keeps
+  claude_desktop_config.json under the package's LocalCache\Roaming\Claude folder,
+  not %APPDATA% (guide updated). Observation for step 5: the audit trail holds only
+  executed chains; a refusal leaves no execution receipt, so refusals are visible in
+  the middleware audit log and issuer log but not in `gargoyle audit`. The evidence
+  log should record refusals and declines as first-class entries.
 - Enterprise identity (2026-10-16): identity tokens may be RS256 or ES256 from a
   provider's JWKS (keys_from_jwks, entra_keys; GARGOYLE_ENTRA_TENANT on the issuer);
   Entra's preferred_username/upn is the principal; groups and app roles are policy
