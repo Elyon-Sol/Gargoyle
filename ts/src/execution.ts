@@ -3,7 +3,7 @@ import type { KeyObject } from "node:crypto";
 import { canonicalJson, Json } from "./canonical.js";
 import { signHex, verifyHex } from "./crypto.js";
 import { argsSha256, Envelope } from "./envelope.js";
-import { verifyGrant } from "./approval.js";
+import { asGrantList, verifyGrants } from "./approval.js";
 import { KeyMap, parseAware, Verdict, verifyProvenance } from "./verifier.js";
 
 export const EXECUTION_VERSION = "gargoyle-execution/1";
@@ -86,14 +86,11 @@ export function verifyChain(envelope: unknown, execution: unknown, opts: {
   const env = envelope as Envelope;
 
   if (env.requires_approval) {
-    if (opts.grant === undefined || opts.grant === null) {
+    if (asGrantList(opts.grant).length === 0) {
       steps.push(["approval", REF_EXEC_GRANT_MISSING]);
       return { accepted: false, reason: REF_EXEC_GRANT_MISSING, steps };
     }
-    const g = verifyGrant(opts.grant, {
-      expectedDecisionSha256: env.decision_sha256 as string, expectedApprovalRequestId: env.approval_request_id as string,
-      approverPublicKeys: opts.approverPublicKeys ?? {}, gateKeyId: env.issuer_key_id as string, now: executedAt,
-    });
+    const g = verifyGrants(opts.grant, { envelope: env, approverPublicKeys: opts.approverPublicKeys ?? {}, now: executedAt });
     steps.push(["approval", g.reason]);
     if (!g.accepted) return { accepted: false, reason: g.reason, steps };
   }

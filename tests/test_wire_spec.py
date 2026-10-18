@@ -158,3 +158,43 @@ def test_spec_names_every_refusal_code():
         codes |= {v for k, v in vars(mod).items() if k.startswith("REF_") and isinstance(v, str)}
     documented = set(re.findall(r"REF_[A-Z_]+", SPEC))
     assert codes <= documented, sorted(codes - documented)
+
+
+def test_threshold_vector_recomputes_and_needs_both_grants():
+    """Section 11.1: the approval terms are in the hash region; one grant is
+    insufficient, two release the receipt, in the consumer and the chain."""
+    from gargoyle.approval import REF_APPROVAL_INSUFFICIENT, verify_grants
+    T = VECTORS["threshold"]
+    issuer = _key(VECTORS["issuer_seed_label"]); alice = _key(VECTORS["approver_seed_label"])
+    bob = _key(T["approver_2_seed_label"]); executor = _key(VECTORS["executor_seed_label"])
+    assert _pub_hex(bob) == T["approver_2_public_key_hex"]
+    env = build_envelope(decision="ELIGIBLE", target_url=VECTORS["unsigned"]["target_url"], call=VECTORS["call"],
+                         policy_pin=VECTORS["unsigned"]["policy"], timestamp_utc=VECTORS["unsigned"]["timestamp_utc"],
+                         requires_approval=True, approval=T["approval"])
+    signed = sign_envelope(env, issuer, T["signed"]["issuer_key_id"], not_after=datetime.fromisoformat(T["signed"]["not_after"]),
+                           decision_id=T["signed"]["decision_id"], approval_request_id=T["signed"]["approval_request_id"])
+    assert env == T["unsigned"] and signed == T["signed"]
+    assert canonical_json({k: v for k, v in signed.items() if k not in _HASH_EXCLUDED_KEYS}) == T["hash_region"]
+    grants = [sign_grant(build_grant(decision_sha256=env["decision_sha256"], approval_request_id=g["approval_request_id"],
+                                     grant_id=g["grant_id"], not_after=datetime.fromisoformat(g["not_after"])), key, g["approver_key_id"])
+              for g, key in zip(T["grants"], (alice, bob))]
+    assert grants == T["grants"]
+    execution = sign_execution_receipt(build_execution_receipt(envelope=signed, outputs=VECTORS["outputs"],
+                                                               executed_at=datetime.fromisoformat(T["execution"]["executed_at"])),
+                                       executor, T["execution"]["executor_key_id"])
+    assert execution == T["execution"]
+    approvers = {"approver-alice": alice.public_key(), "approver-bob": bob.public_key()}
+    now = datetime(2026, 10, 16, 12, 1, tzinfo=timezone.utc)
+    assert verify_grants(grants[:1], envelope=signed, approver_public_keys=approvers, now=now)["reason"] == REF_APPROVAL_INSUFFICIENT
+    assert verify_grants(grants, envelope=signed, approver_public_keys=approvers, now=now)["accepted"]
+    consumer = Consumer(target_id=signed["target_url"], record=signed["policy"],
+                        pinned_public_keys={signed["issuer_key_id"]: issuer.public_key()}, approver_public_keys=approvers)
+    assert consumer.check(signed, VECTORS["call"], grant=grants[1], now=now).reason == REF_APPROVAL_INSUFFICIENT
+    assert consumer.check(signed, VECTORS["call"], grant=grants, now=now).honored
+    chain = verify_chain(signed, execution, grant=grants, issuer_public_keys={signed["issuer_key_id"]: issuer.public_key()},
+                         executor_public_keys={execution["executor_key_id"]: executor.public_key()}, approver_public_keys=approvers)
+    assert chain["reason"] == ACCEPT_CHAIN_VERIFIED
+    for value in (T["approver_2_public_key_hex"], T["unsigned"]["decision_sha256"], T["signed"]["issuer_signature"],
+                  T["grants"][0]["approver_signature"], T["grants"][1]["approver_signature"], T["execution"]["executor_signature"],
+                  T["hash_region"], T["signed"]["decision_id"], T["signed"]["approval_request_id"]):
+        assert value in SPEC, value[:40]

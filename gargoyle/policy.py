@@ -33,7 +33,7 @@ is a policy.
 """
 
 from dataclasses import dataclass
-from typing import Any, Dict, Mapping, Optional, Protocol, runtime_checkable
+from typing import Any, Dict, Mapping, Optional, Protocol, Tuple, runtime_checkable
 
 ELIGIBLE = "ELIGIBLE"
 REFUSE = "REFUSE"
@@ -45,11 +45,27 @@ POLICY_INTERNAL = "POLICY_INTERNAL"   # the policy raised: fail closed
 class Decision:
     """A policy's answer. `reason` names why on REFUSE. `requires_approval`
     asks the issuer's caller to hold the call for a human-signed grant
-    (gargoyle.approval) before presenting the receipt."""
+    (gargoyle.approval) before presenting the receipt; `approvals_required`
+    says how many distinct approvers must sign (default 1) and `approvers`,
+    when given, which approver key ids are eligible to. Both go into the
+    receipt, hashed and signed, so the threshold is the issuer's word."""
 
     outcome: str
     reason: Optional[str] = None
     requires_approval: bool = False
+    approvals_required: int = 1
+    approvers: Optional[Tuple[str, ...]] = None
+
+    @property
+    def approval(self) -> Optional[Dict[str, Any]]:
+        """The receipt's `approval` member for this decision, or None when
+        the default (one grant from any trusted approver) applies."""
+        if not self.requires_approval or (self.approvals_required == 1 and not self.approvers):
+            return None
+        out: Dict[str, Any] = {"required": int(self.approvals_required)}
+        if self.approvers:
+            out["approvers"] = sorted(set(self.approvers))
+        return out
 
     @property
     def eligible(self) -> bool:

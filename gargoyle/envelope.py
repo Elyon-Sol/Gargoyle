@@ -95,6 +95,22 @@ def valid_principal(principal: Any) -> bool:
     return isinstance(principal, str) and bool(principal)
 
 
+def valid_approval(approval: Any) -> bool:
+    """True iff `approval` is a well-formed receipt `approval` member:
+    {"required": int >= 1, "approvers": [non-empty unique strings] optional}."""
+    if not isinstance(approval, dict) or not set(approval) <= {"required", "approvers"} or "required" not in approval:
+        return False
+    required = approval["required"]
+    if isinstance(required, bool) or not isinstance(required, int) or required < 1:
+        return False
+    if "approvers" in approval:
+        a = approval["approvers"]
+        if (not isinstance(a, list) or not a or not all(isinstance(x, str) and x for x in a)
+                or len(set(a)) != len(a) or len(a) < required):
+            return False
+    return True
+
+
 def decision_sha256_of(envelope: Dict[str, Any]) -> str:
     hashable = {k: v for k, v in envelope.items() if k not in _HASH_EXCLUDED_KEYS}
     return _sha256_text(canonical_json(hashable))
@@ -126,10 +142,14 @@ def build_envelope(
     policy_pin: Dict[str, str],
     timestamp_utc: Optional[str] = None,
     requires_approval: bool = False,
+    approval: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Assemble a receipt for `decision` on `call` at `target_url`, made under
     the policy identified by `policy_pin`. `requires_approval` records that
     the policy flagged the call for a human; it is part of the decision.
+    `approval`, only with requires_approval, says how many distinct approvers
+    must sign ("required") and optionally which key ids may ("approvers");
+    absent, one grant from any trusted approver releases the call.
 
     `call` must carry the three bound fields: "tool" (a non-empty string),
     "args" (any JSON value; the receipt stores its args_sha256) and
@@ -143,6 +163,8 @@ def build_envelope(
         raise ValueError("policy_pin must be {'policy_id': str, 'policy_sha256': <64 hex>}")
     if not isinstance(requires_approval, bool):
         raise TypeError("requires_approval must be a bool")
+    if approval is not None and (not requires_approval or not valid_approval(approval)):
+        raise ValueError("approval must be {'required': int >= 1, 'approvers'?: [key ids]} on a flagged receipt")
     if not isinstance(call, dict):
         raise TypeError("call must be a dict")
     tool = call["tool"]
@@ -176,8 +198,21 @@ def build_envelope(
     }
     if on_behalf_of is not None:
         envelope["request_context"]["on_behalf_of"] = on_behalf_of
+    if approval is not None:
+        envelope["approval"] = {"required": approval["required"]}
+        if "approvers" in approval:
+            envelope["approval"]["approvers"] = sorted(approval["approvers"])
     envelope["decision_sha256"] = decision_sha256_of(envelope)
     return envelope
+
+
+def approval_terms(envelope: Dict[str, Any]) -> Dict[str, Any]:
+    """{"required": n, "approvers": [...] or None} for a flagged receipt:
+    the receipt's `approval` member, or the default of one from anyone."""
+    a = envelope.get("approval")
+    if isinstance(a, dict):
+        return {"required": a["required"], "approvers": a.get("approvers")}
+    return {"required": 1, "approvers": None}
 
 
 def reassert(

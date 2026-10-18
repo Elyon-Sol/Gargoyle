@@ -7,7 +7,7 @@
 import type { KeyObject } from "node:crypto";
 import { Json } from "./canonical.js";
 import { Call, Envelope, PolicyPin } from "./envelope.js";
-import { REF_APPROVAL_REPLAY, verifyGrant } from "./approval.js";
+import { REF_APPROVAL_REPLAY, asGrantList, verifyGrants } from "./approval.js";
 import { buildExecutionReceipt, ExecutionReceipt, signExecutionReceipt } from "./execution.js";
 import { KeyMap, KeyRecordView, parseAware, REF_VERIFY_REPLAY, Verdict, verifyEnvelope } from "./verifier.js";
 
@@ -87,18 +87,17 @@ export class Consumer {
     if (typeof decisionId !== "string" || !decisionId) return { accepted: false, reason: REF_TARGET_NO_DECISION_ID };
 
     if (env.requires_approval) {
-      if (opts.grant === undefined || opts.grant === null) return { accepted: false, reason: REF_TARGET_APPROVAL_REQUIRED };
+      if (asGrantList(opts.grant).length === 0) return { accepted: false, reason: REF_TARGET_APPROVAL_REQUIRED };
       const approvers = this.approverKeys(env.issuer_key_id, now);
       if (Object.keys(approvers).length === 0) return { accepted: false, reason: REF_TARGET_NO_APPROVER_TRUST };
-      const g = verifyGrant(opts.grant, {
-        expectedDecisionSha256: env.decision_sha256 as string, expectedApprovalRequestId: env.approval_request_id as string,
-        approverPublicKeys: approvers, gateKeyId: env.issuer_key_id as string, now, clockSkewMs: skew,
-      });
-      if (!g.accepted) return g;
-      const grant = opts.grant as Record<string, Json>;
-      const gexp = parseAware(grant.not_after);
-      if (!this.replayCache.checkAndClaim(GRANT_CLAIM_PREFIX + (grant.grant_id as string), gexp && new Date(gexp.getTime() + skew), now)) {
-        return { accepted: false, reason: REF_APPROVAL_REPLAY };
+      // One grant or several: the receipt's own terms say how many distinct approvers, and which.
+      const g = verifyGrants(opts.grant, { envelope: env, approverPublicKeys: approvers, now, clockSkewMs: skew });
+      if (!g.accepted) return { accepted: false, reason: g.reason };
+      for (const grant of g.grants) {
+        const gexp = parseAware(grant.not_after);
+        if (!this.replayCache.checkAndClaim(GRANT_CLAIM_PREFIX + (grant.grant_id as string), gexp && new Date(gexp.getTime() + skew), now)) {
+          return { accepted: false, reason: REF_APPROVAL_REPLAY };
+        }
       }
     }
     const exp = parseAware(env.not_after);

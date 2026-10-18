@@ -39,7 +39,7 @@ log is the place to prove it afterwards).
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
-from gargoyle.approval import verify_grant
+from gargoyle.approval import as_grant_list, verify_grants
 from gargoyle.envelope import args_sha256, canonical_json
 from gargoyle.verifier import verify_provenance
 
@@ -174,7 +174,8 @@ def verify_chain(
     check_outputs: bool = False,
 ) -> Dict[str, Any]:
     """Offline, stateless audit of one call: authorization, release (if
-    flagged) and execution, each signed by a different key. `now` for the
+    flagged; `grant` one grant or the list a threshold needed) and
+    execution, each signed by a different key. `now` for the
     receipt's and grant's expiry is the execution receipt's executed_at,
     because what matters is that they were valid when the call ran.
     Returns {"accepted", "reason", "steps": [...]}, the steps naming each
@@ -195,17 +196,10 @@ def verify_chain(
         return {"accepted": False, "reason": provenance["reason"], "steps": steps}
 
     if envelope["requires_approval"]:
-        if grant is None:
+        if not as_grant_list(grant):
             steps.append(("approval", REF_EXEC_GRANT_MISSING))
             return {"accepted": False, "reason": REF_EXEC_GRANT_MISSING, "steps": steps}
-        g = verify_grant(
-            grant,
-            expected_decision_sha256=envelope["decision_sha256"],
-            expected_approval_request_id=envelope["approval_request_id"],
-            approver_public_keys=approver_public_keys or {},
-            gate_key_id=envelope.get("issuer_key_id"),
-            now=executed_at,
-        )
+        g = verify_grants(grant, envelope=envelope, approver_public_keys=approver_public_keys or {}, now=executed_at)
         steps.append(("approval", g["reason"]))
         if not g["accepted"]:
             return {"accepted": False, "reason": g["reason"], "steps": steps}

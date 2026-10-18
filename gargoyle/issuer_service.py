@@ -8,12 +8,17 @@ exchange for flagged calls.
     GET  /pending           Bearer; flagged receipts still waiting for a grant, each with
                             the full arguments the issuer saw, so a reviewer can read what
                             they are releasing (the receipt's args_sha256 binds them)
-    POST /grants            Bearer; body = a signed grant for one of them
+    POST /grants            Bearer; body = a signed grant for one of them; a hold whose
+                            receipt requires several approvers collects grants until enough
+                            distinct eligible approvers have signed
                             -> {"accepted": true|false, "reason": ...}
     POST /decline           Bearer; body {approval_request_id}: drop the hold, so the
                             middleware waiting on it stops at once instead of timing out
     GET  /grants/{approval_request_id}
-                            Bearer; -> {"pending": bool, "grant": <grant>|null, "declined": bool}
+                            Bearer; -> {"pending": bool, "grant": <grant>|null, "grants": [...],
+                            "collected": n, "required": m, "declined": bool}; `grant` is the
+                            single grant of a one-approver hold once released, `grants` the
+                            whole set once complete (empty until then)
     GET  /approve, /approve.js
                             the approval console: a page that lists the holds and
                             signs grants in the browser with the approver's key
@@ -44,7 +49,9 @@ from fastapi.responses import Response
 
 STATIC = Path(__file__).resolve().parent / "static"
 
-from gargoyle.approval import verify_grant
+from gargoyle.approval import (REF_APPROVAL_APPROVER_NOT_ELIGIBLE, REF_APPROVAL_DUPLICATE_APPROVER,
+                               verify_grant)
+from gargoyle.envelope import approval_terms
 from gargoyle.identity import entra_keys, principal_from_token
 from gargoyle.issuer import DEFAULT_TTL_SECONDS, issue
 from gargoyle.policy import Policy
@@ -142,9 +149,16 @@ def build_issuer_app(
                 del app.state.pending[arid]           # an expired hold can never be released
                 app.state.pending_args.pop(arid, None)
                 app.state.grants.pop(arid, None)
-            elif arid not in app.state.grants:
-                live[arid] = {"envelope": env, "args": app.state.pending_args.get(arid)}
+            elif not _complete(arid):
+                have = app.state.grants.get(arid, [])
+                live[arid] = {"envelope": env, "args": app.state.pending_args.get(arid),
+                              "collected": len(have), "required": approval_terms(env)["required"],
+                              "approvers": [g["approver_key_id"] for g in have]}
         return {"pending": list(live.values())}
+
+    def _complete(arid: str) -> bool:
+        env = app.state.pending.get(arid)
+        return env is not None and len(app.state.grants.get(arid, [])) >= approval_terms(env)["required"]
 
     @app.post("/grants")
     async def post_grant(request: Request, authorization: Optional[str] = Header(default=None)):
@@ -164,8 +178,16 @@ def build_issuer_app(
                          gate_key_id=key_id, now=now())
         if not g["accepted"]:
             return {"accepted": False, "reason": g["reason"]}
-        app.state.grants[arid] = grant
-        return {"accepted": True, "reason": g["reason"]}
+        # The receipt's own terms: distinct approvers, from the named set if any.
+        terms = approval_terms(env)
+        have = app.state.grants.setdefault(arid, [])
+        if any(h["approver_key_id"] == grant["approver_key_id"] for h in have):
+            return {"accepted": False, "reason": REF_APPROVAL_DUPLICATE_APPROVER}
+        if terms["approvers"] is not None and grant["approver_key_id"] not in terms["approvers"]:
+            return {"accepted": False, "reason": REF_APPROVAL_APPROVER_NOT_ELIGIBLE}
+        have.append(grant)
+        return {"accepted": True, "reason": g["reason"], "collected": len(have), "required": terms["required"],
+                "complete": len(have) >= terms["required"]}
 
     @app.post("/decline")
     async def decline(request: Request, authorization: Optional[str] = Header(default=None)):
@@ -188,8 +210,13 @@ def build_issuer_app(
     @app.get("/grants/{approval_request_id}")
     async def get_grant(approval_request_id: str, authorization: Optional[str] = Header(default=None)):
         authenticate(authorization)
-        return {"pending": approval_request_id in app.state.pending,
-                "grant": app.state.grants.get(approval_request_id),
+        env = app.state.pending.get(approval_request_id)
+        have = app.state.grants.get(approval_request_id, [])
+        complete = _complete(approval_request_id)
+        return {"pending": env is not None,
+                "grant": have[0] if complete and len(have) == 1 else None,
+                "grants": list(have) if complete else [],
+                "collected": len(have), "required": approval_terms(env)["required"] if env else None,
                 "declined": approval_request_id in app.state.declined}
 
     @app.get("/approve")
@@ -239,8 +266,12 @@ def app_from_env() -> FastAPI:
     if os.environ.get(ENV_APPROVER_KEY_ID) or os.environ.get(ENV_APPROVER_PUBLIC_KEY_HEX):
         if not (os.environ.get(ENV_APPROVER_KEY_ID) and os.environ.get(ENV_APPROVER_PUBLIC_KEY_HEX)):
             raise RuntimeError("approver key id and public key go together")
-        approver = {os.environ[ENV_APPROVER_KEY_ID]:
-                    Ed25519PublicKey.from_public_bytes(bytes.fromhex(os.environ[ENV_APPROVER_PUBLIC_KEY_HEX]))}
+        # Several approvers: comma-separated ids and hexes, in the same order.
+        ids = [x.strip() for x in os.environ[ENV_APPROVER_KEY_ID].split(",")]
+        hexes = [x.strip() for x in os.environ[ENV_APPROVER_PUBLIC_KEY_HEX].split(",")]
+        if len(ids) != len(hexes) or not all(ids):
+            raise RuntimeError("approver key ids and public keys must pair up")
+        approver = {i: Ed25519PublicKey.from_public_bytes(bytes.fromhex(h)) for i, h in zip(ids, hexes)}
     return build_issuer_app(
         policy=policy,
         signing_key=Ed25519PrivateKey.from_private_bytes(bytes.fromhex(required[ENV_ISSUER_KEY_HEX])),

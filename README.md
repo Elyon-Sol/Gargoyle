@@ -19,7 +19,7 @@ is included); the caller is authenticated by your transport (the
 proxy-verified client certificate, by default); Gargoyle sits in front of
 your MCP server and lets through only what both agreed to.
 
-Status: pre-release (`0.2.1.dev0`). The wire format is `gargoyle/2` and may
+Status: pre-release (`0.3.0.dev0`). The wire format is `gargoyle/2` and may
 still change before the first release; it is specified in [SPEC.md](SPEC.md).
 
 ## What a receipt gives you
@@ -205,9 +205,12 @@ The key never leaves the browser. Then paste the server entry from
 [docs/guide-hyperv-ubuntu-apache.md](docs/guide-hyperv-ubuntu-apache.md)
 is the full single-instance build: Ubuntu VM on Hyper-V, Apache with TLS,
 a Windows 11 client running Claude Code. Reads are free, writes block until the approver's key
-signs, deletes are refused; the policy is a JSON rules file you edit. Every
-honored call comes back with receipt, grant and execution receipt, and
-`gargoyle audit` verifies them later offline.
+signs, deletes are refused; the policy is a JSON rules file you edit. A
+hold can demand more than one signature: `"approvals": 2` on a rule, with
+an optional `"approvers": [...]` naming which keys count, puts the terms
+in the receipt itself, and `gargoyle init --approvers 2` creates the keys.
+Every honored call comes back with receipt, grants and execution receipt,
+and `gargoyle audit` verifies them later offline.
 [examples/filesystem-agent](examples/filesystem-agent/) walks through it,
 and through the alternative with OPA in Docker for sites that run a policy
 engine.
@@ -233,7 +236,7 @@ cannot attach receipts work unchanged. Configuration is by environment:
 | `GARGOYLE_MCP_TARGET_ID` | the target identity receipts bind to |
 | `GARGOYLE_MCP_PRINCIPAL` | the client this server serves |
 | `GARGOYLE_MCP_RECORD_PATH` | the published policy record |
-| `GARGOYLE_MCP_APPROVER_KEY_ID`, `GARGOYLE_MCP_APPROVER_PUBLIC_KEY_HEX` | the approver key whose grants release flagged calls (optional, both or neither) |
+| `GARGOYLE_MCP_APPROVER_KEY_ID`, `GARGOYLE_MCP_APPROVER_PUBLIC_KEY_HEX` | the approver keys whose grants release flagged calls (optional, both or neither; comma-separated lists for several) |
 | `GARGOYLE_MCP_EXECUTOR_KEY_ID`, `GARGOYLE_MCP_EXECUTOR_KEY_HEX` | this server's own signing key, so honored calls carry an execution receipt in `_meta["gargoyle/execution"]` (optional, both or neither) |
 | `GARGOYLE_MCP_ISSUER_URL`, `GARGOYLE_MCP_CLIENT_TOKEN` | self-issue mode: the issuing service and the identity token (whose subject is this server's principal) to obtain receipts with; `GARGOYLE_MCP_APPROVAL_TIMEOUT_SECONDS` and `GARGOYLE_MCP_POLL_SECONDS` tune the wait for a grant |
 | `GARGOYLE_MCP_AUDIT_LOG` | the evidence log: every decision, honored or refused, as one hash-chained JSON line with its receipt, grant and execution receipt; `gargoyle audit --log` verifies the file |

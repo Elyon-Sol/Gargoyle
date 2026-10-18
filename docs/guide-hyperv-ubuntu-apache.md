@@ -343,6 +343,21 @@ start; run `sudo systemctl restart gargoyle`, copy the new `record.json` to
 refuses every call with `REF_VERIFY_REASSERT_RE_EVALUATE_REQUIRED`, which
 is the design working: a receipt under the old policy is not honored.
 
+**5.1 Two approvers.** For calls that should never rest on one person,
+give the rule a threshold:
+
+```json
+{"tools": ["write_file"], "args": {"path": "*finance*"}, "action": "hold",
+ "approvals": 2, "approvers": ["approver-1", "approver-2"]}
+```
+
+Run `gargoyle init ... --approvers 2` so two approver keys exist (the
+second lands in `approver-2.env` and `approver-web-2.json`); each approver
+loads their own file in the console. The card then reads "0 of 2
+approvals", a signer sees "you signed; 1 more needed", and the assistant's
+call runs only when the second key has signed. The receipt carries the
+terms, so an audit shows that two named keys released that write.
+
 ## Part 6: the audit trail
 
 Every decision appended one line to `C:\gargoyle\audit.jsonl`, honored or

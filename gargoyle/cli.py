@@ -18,7 +18,7 @@ policy engine, a container runtime, or any client changes.
     issuer.env        the issuer's key and trust (private)
     middleware.env    what the MCP client's server entry needs (private)
     approver.env      the approver's key and token (private; move it to the
-                      approver's machine)
+                      approver's machine); with --approvers N also approver-2.env ...
     approver-web.json the same key and token in the form the browser approval
                       console loads (private; same machine as approver.env)
     mcp-config.json   the server entry to paste into the MCP client
@@ -92,7 +92,10 @@ def cmd_init(args) -> int:
                 k.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw).hex())
 
     issuer, issuer_hex, issuer_pub = new_key()
-    approver, approver_hex, approver_pub = new_key()
+    approvers = [("approver-%d" % (i + 1),) + new_key() for i in range(args.approvers)]
+    approver, approver_hex, approver_pub = approvers[0][1:]
+    approver_ids = ",".join(a[0] for a in approvers)
+    approver_pubs = ",".join(a[3] for a in approvers)
     idp, idp_hex, idp_pub = new_key()
     executor, executor_hex, executor_pub = new_key()
     exp = int((datetime.now(timezone.utc) + timedelta(days=args.token_days)).timestamp())
@@ -107,31 +110,34 @@ def cmd_init(args) -> int:
         "GARGOYLE_ISSUER_KEY_ID": "issuer-1", "GARGOYLE_ISSUER_KEY_HEX": issuer_hex,
         "GARGOYLE_IDP_KEY_ID": "idp-1", "GARGOYLE_IDP_PUBLIC_KEY_HEX": idp_pub,
         "GARGOYLE_ISSUER_AUDIENCE": "gargoyle-issuer",
-        "GARGOYLE_APPROVER_KEY_ID": "approver-1", "GARGOYLE_APPROVER_PUBLIC_KEY_HEX": approver_pub,
+        "GARGOYLE_APPROVER_KEY_ID": approver_ids, "GARGOYLE_APPROVER_PUBLIC_KEY_HEX": approver_pubs,
         "GARGOYLE_RULES_PATH": str(rules), "GARGOYLE_RECEIPT_TTL_SECONDS": "600",
     }), private=True)
     middleware_env = {
         "GARGOYLE_MCP_GATE_KEY_ID": "issuer-1", "GARGOYLE_MCP_GATE_PUBLIC_KEY_HEX": issuer_pub,
         "GARGOYLE_MCP_TARGET_ID": "mcp://filesystem/" + allowed, "GARGOYLE_MCP_PRINCIPAL": PRINCIPAL,
         "GARGOYLE_MCP_RECORD_PATH": client_dir + sep + "record.json",
-        "GARGOYLE_MCP_APPROVER_KEY_ID": "approver-1", "GARGOYLE_MCP_APPROVER_PUBLIC_KEY_HEX": approver_pub,
+        "GARGOYLE_MCP_APPROVER_KEY_ID": approver_ids, "GARGOYLE_MCP_APPROVER_PUBLIC_KEY_HEX": approver_pubs,
         "GARGOYLE_MCP_EXECUTOR_KEY_ID": "executor-1", "GARGOYLE_MCP_EXECUTOR_KEY_HEX": executor_hex,
         "GARGOYLE_MCP_ISSUER_URL": issuer_url, "GARGOYLE_MCP_CLIENT_TOKEN": client_token,
         "GARGOYLE_MCP_APPROVAL_TIMEOUT_SECONDS": "300",
         "GARGOYLE_MCP_AUDIT_LOG": client_dir + sep + "audit.jsonl",
     }
     _write(out / "middleware.env", _env_lines(middleware_env), private=True)
-    _write(out / "approver.env", _env_lines({
-        "GARGOYLE_APPROVER_KEY_ID": "approver-1", "GARGOYLE_APPROVER_KEY_HEX": approver_hex,
-        "GARGOYLE_APPROVER_TOKEN": approver_token, "GARGOYLE_ISSUER_URL": issuer_url,
-    }), private=True)
     b64url = lambda b: __import__("base64").urlsafe_b64encode(b).rstrip(b"=").decode()
-    _write(out / "approver-web.json", json.dumps({
-        "key_id": "approver-1", "token": approver_token, "issuer_url": issuer_url, "grant_ttl_seconds": 300,
-        "jwk": {"kty": "OKP", "crv": "Ed25519", "d": b64url(bytes.fromhex(approver_hex)), "x": b64url(bytes.fromhex(approver_pub))},
-    }, indent=2) + "\n", private=True)
+    for n, (kid, _k, khex, kpub) in enumerate(approvers, 1):
+        # approver.env / approver-web.json for the first; -2, -3 ... for the others.
+        suffix = "" if n == 1 else "-%d" % n
+        _write(out / ("approver%s.env" % suffix), _env_lines({
+            "GARGOYLE_APPROVER_KEY_ID": kid, "GARGOYLE_APPROVER_KEY_HEX": khex,
+            "GARGOYLE_APPROVER_TOKEN": approver_token, "GARGOYLE_ISSUER_URL": issuer_url,
+        }), private=True)
+        _write(out / ("approver-web%s.json" % suffix), json.dumps({
+            "key_id": kid, "token": approver_token, "issuer_url": issuer_url, "grant_ttl_seconds": 300,
+            "jwk": {"kty": "OKP", "crv": "Ed25519", "d": b64url(bytes.fromhex(khex)), "x": b64url(bytes.fromhex(kpub))},
+        }, indent=2) + "\n", private=True)
     _write(out / "public-keys.json", json.dumps({
-        "issuer": {"issuer-1": issuer_pub}, "approver": {"approver-1": approver_pub},
+        "issuer": {"issuer-1": issuer_pub}, "approver": {a[0]: a[3] for a in approvers},
         "executor": {"executor-1": executor_pub}, "identity_provider": {"idp-1": idp_pub},
     }, indent=2) + "\n")
     upstream = (["npx", "-y", "@modelcontextprotocol/server-filesystem", allowed] if args.upstream == "npx-filesystem"
@@ -226,6 +232,8 @@ def main(argv=None) -> int:
     p.add_argument("--issuer-url", help="URL the client reaches the issuer at (default http://HOST:PORT)")
     p.add_argument("--client-python", help="the client's Python executable for the MCP entry (default: this one)")
     p.add_argument("--client-config-dir", help="where the client keeps middleware.env, record.json, audit.jsonl (default: --out)")
+    p.add_argument("--approvers", type=int, default=1, metavar="N",
+                   help="how many approver keys to create (approver-1..N); a rule with \"approvals\": 2 then needs two of them")
     p.add_argument("--upstream", choices=["npx-filesystem", "python-fs"], default="npx-filesystem",
                    help="the filesystem MCP server behind the gate: the official one via npx, or gargoyle.fs_server")
     p.set_defaults(fn=cmd_init)

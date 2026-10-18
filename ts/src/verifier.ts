@@ -2,7 +2,7 @@
 import type { KeyObject } from "node:crypto";
 import { canonicalJson, Json } from "./canonical.js";
 import { verifyHex } from "./crypto.js";
-import { argsSha256, Call, Envelope, ENVELOPE_VERSION, INVALIDATED, PolicyPin, REASSERTED, RE_EVALUATE_REQUIRED, reassert, signedRegion, validPrincipal } from "./envelope.js";
+import { argsSha256, Call, Envelope, ENVELOPE_VERSION, INVALIDATED, PolicyPin, REASSERTED, RE_EVALUATE_REQUIRED, reassert, signedRegion, validPrincipal, validApproval } from "./envelope.js";
 
 export const REF_VERIFY_ENVELOPE_ABSENT = "REF_VERIFY_ENVELOPE_ABSENT";
 export const REF_VERIFY_VERSION_UNSUPPORTED = "REF_VERIFY_VERSION_UNSUPPORTED";
@@ -70,6 +70,7 @@ export function verifyProvenance(envelope: unknown, opts: ProvenanceOptions): Ve
   if ("on_behalf_of" in rc && !validPrincipal(rc.on_behalf_of)) return reject(REF_VERIFY_ENVELOPE_ABSENT);
   if (typeof env.requires_approval !== "boolean") return reject(REF_VERIFY_ENVELOPE_ABSENT);
   if (env.requires_approval && !validPrincipal(env.approval_request_id)) return reject(REF_VERIFY_ENVELOPE_ABSENT);
+  if ("approval" in env && (!env.requires_approval || !validApproval(env.approval))) return reject(REF_VERIFY_ENVELOPE_ABSENT);
 
   const keyId = env.issuer_key_id, signatureHex = env.issuer_signature;
   if (typeof keyId !== "string" || typeof signatureHex !== "string") return reject(REF_VERIFY_SIGNATURE_INVALID);

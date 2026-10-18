@@ -93,7 +93,8 @@ def test_flagged_call_is_held_until_a_valid_grant_is_posted(client):
     listed = client.get("/pending", headers=auth()).json()["pending"]
     assert [h["envelope"]["approval_request_id"] for h in listed] == [arid]
     assert listed[0]["args"] == {"path": "a.txt", "content": "x"}      # the reviewer sees the arguments
-    assert client.get("/grants/" + arid, headers=auth()).json() == {"pending": True, "grant": None, "declined": False}
+    assert client.get("/grants/" + arid, headers=auth()).json() == {"pending": True, "grant": None, "grants": [], "collected": 0,
+                                                                   "required": 1, "declined": False}
 
     def grant_by(key, kid, **over):
         g = build_grant(decision_sha256=over.get("decision_sha256", env["decision_sha256"]),
@@ -141,7 +142,8 @@ def test_decline_drops_the_hold_and_is_reported(client):
     arid = env["approval_request_id"]
     assert client.post("/decline", json={"approval_request_id": "nope"}, headers=auth()).json()["reason"] == REF_ISSUER_UNKNOWN_HOLD
     assert client.post("/decline", json={"approval_request_id": arid}, headers=auth()).json() == {"declined": True, "reason": None}
-    assert client.get("/grants/" + arid, headers=auth()).json() == {"pending": False, "grant": None, "declined": True}
+    assert client.get("/grants/" + arid, headers=auth()).json() == {"pending": False, "grant": None, "grants": [], "collected": 0,
+                                                                   "required": None, "declined": True}
     assert client.get("/pending", headers=auth()).json()["pending"] == []
     # A grant for a declined hold is refused: the hold is gone.
     g = sign_grant(build_grant(decision_sha256=env["decision_sha256"], approval_request_id=arid, grant_id="g",

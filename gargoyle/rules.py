@@ -10,6 +10,8 @@ not run a policy engine. First matching rule wins; no match is the default.
                                                                "action": "hold"},
         {"tools": ["git_push", "deploy_*"],                     "action": "hold",
          "principals": ["spiffe://example.org/agents/*"]},
+        {"tools": ["transfer_*", "pay_*"],                      "action": "hold",
+         "approvals": 2, "approvers": ["finance-lead", "finance-controller"]},
         {"tools": ["delete_*", "rm", "drop_*"],                 "action": "deny",
          "reason": "DESTRUCTIVE_TOOL"}
       ]
@@ -22,8 +24,10 @@ identity token: Entra group ids or app roles) matches one of the rule's,
 and every key in `args` is present in the call's arguments with a string
 value matching the glob. Actions: "allow" (free),
 "hold" (allowed, needs a human's grant), "deny" (refused; `reason` names
-why, default RULE_DENIED). `default` is "deny" unless the file says
-"allow" or "hold".
+why, default RULE_DENIED). A hold may say how many distinct approvers must
+sign (`approvals`, default 1) and which approver key ids count
+(`approvers`); both go into the receipt. `default` is "deny" unless the
+file says "allow" or "hold".
 
 The pin is the SHA-256 of the file's bytes under policy_id
 "gargoyle.rules/1": edit the file and every outstanding receipt stops
@@ -78,6 +82,14 @@ def validate_rules(doc: Any) -> Optional[str]:
             return "rule %d: args must map argument names to globs" % i
         if "reason" in rule and (not isinstance(rule["reason"], str) or not rule["reason"]):
             return "rule %d: reason must be a non-empty string" % i
+        if "approvals" in rule and (isinstance(rule["approvals"], bool) or not isinstance(rule["approvals"], int)
+                                    or rule["approvals"] < 1):
+            return "rule %d: approvals must be an integer >= 1" % i
+        if "approvers" in rule and (_globs(rule["approvers"]) is None or len(set(rule["approvers"])) != len(rule["approvers"])
+                                    or len(rule["approvers"]) < rule.get("approvals", 1)):
+            return "rule %d: approvers must list at least `approvals` distinct approver key ids" % i
+        if ("approvals" in rule or "approvers" in rule) and rule["action"] != "hold":
+            return "rule %d: approvals and approvers belong to a hold" % i
     return None
 
 
@@ -122,7 +134,10 @@ def decide_rules(doc: Dict[str, Any], interaction: Mapping[str, Any]) -> Decisio
         action = rule["action"]
         if action == "deny":
             return refuse(rule.get("reason", RULE_DENIED))
-        return Decision(ELIGIBLE, None, action == "hold")
+        if action == "hold":
+            return Decision(ELIGIBLE, None, True, rule.get("approvals", 1),
+                            tuple(rule["approvers"]) if "approvers" in rule else None)
+        return Decision(ELIGIBLE)
     default = doc.get("default", "deny")
     if default == "deny":
         return refuse(RULE_DENIED)

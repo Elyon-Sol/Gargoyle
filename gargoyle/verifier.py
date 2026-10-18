@@ -46,6 +46,7 @@ from datetime import datetime, timedelta, timezone
 
 from gargoyle.envelope import (
     ENVELOPE_VERSION,
+    valid_approval,
     INVALIDATED,
     REASSERTED,
     RE_EVALUATE_REQUIRED,
@@ -209,6 +210,10 @@ def verify_provenance(
         arid = envelope.get("approval_request_id")
         if not isinstance(arid, str) or not arid:
             return _reject(REF_VERIFY_ENVELOPE_ABSENT)
+    # The approval terms, when stated, must be well-formed and only on a
+    # flagged receipt; they are hashed and signed like the flag itself.
+    if "approval" in envelope and (not envelope["requires_approval"] or not valid_approval(envelope["approval"])):
+        return _reject(REF_VERIFY_ENVELOPE_ABSENT)
 
     # ----- Signature -----
     # A missing, malformed or unverifiable signature, or an unknown key, is

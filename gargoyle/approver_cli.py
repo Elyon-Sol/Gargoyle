@@ -132,6 +132,9 @@ def describe(pending: Dict[str, Any], args: Any = None) -> None:
     lines = ["About to APPROVE a held high-impact decision:",
              "  decision_sha256     : %s" % pending.get("decision_sha256"),
              "  approval_request_id : %s" % pending.get("approval_request_id")]
+    if isinstance(pending.get("approval"), dict):
+        lines.append("  approvals needed    : %s%s" % (pending["approval"].get("required"),
+                     (" from " + ", ".join(pending["approval"]["approvers"])) if pending["approval"].get("approvers") else ""))
     rc = pending.get("request_context")
     if isinstance(rc, dict):
         lines += ["  tool                : %s" % rc.get("tool"),
@@ -211,7 +214,10 @@ def approve_at_issuer(issuer_url: str, token: str, *, key_hex: str, key_id: str,
         except Exception as exc:
             body = {"accepted": False, "reason": str(exc)}
         if body.get("accepted"):
-            print("granted %s" % env["approval_request_id"], file=sys.stderr)
+            more = (body.get("required") or 1) - (body.get("collected") or 1)
+            print("granted %s%s" % (env["approval_request_id"],
+                                    "" if more <= 0 else " (%d more approver%s needed)" % (more, "" if more == 1 else "s")),
+                  file=sys.stderr)
         else:
             print("refused %s: %s" % (env["approval_request_id"], body.get("reason")), file=sys.stderr)
             status = 1

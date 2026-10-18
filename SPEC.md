@@ -92,6 +92,8 @@ signature region (section 5).
 | `request_context.args_sha256` | 64 hex | yes | yes | `sha256(canonical_json(args))` |
 | `request_context.principal` | string | yes | yes | the authenticated caller; non-empty |
 | `request_context.on_behalf_of` | string | yes | yes | optional: the party the caller acts for; non-empty when present |
+| `approval.required` | integer | yes | yes | optional, flagged receipts only: how many distinct approvers must sign (absent: 1) |
+| `approval.approvers` | array of string | yes | yes | optional, with `approval.required`: the approver key ids that count, sorted, unique, at least `required` of them (absent: any trusted approver) |
 | `timestamp_utc` | timestamp | no | no | when the receipt was built; informational only |
 | `decision_sha256` | 64 hex | - | yes | section 4 |
 | `issuer_key_id` | string | no | yes | names the issuer key in the target's trust material |
@@ -111,7 +113,11 @@ A receipt is **unusable** (refused `REF_VERIFY_ENVELOPE_ABSENT`) unless it is
 an object carrying `policy`, `request_context` (an object with all three
 required members, and a non-empty `on_behalf_of` if that key is present),
 `decision_sha256`, `target_url` and a boolean `requires_approval`, and, when
-that is true, a non-empty string `approval_request_id`. A receipt whose
+that is true, a non-empty string `approval_request_id`. An `approval`
+member, when present, must sit on a flagged receipt and be an object with
+exactly `required` (an integer, at least 1, not a boolean) and optionally
+`approvers` (a non-empty array of unique non-empty strings, no fewer than
+`required`), else the receipt is unusable. A receipt whose
 `envelope_version` is not the one the verifier implements is refused
 `REF_VERIFY_VERSION_UNSUPPORTED` before anything else is read.
 
@@ -246,9 +252,14 @@ without anyone having to detect the leak; single use bounds it to one call.
 
 When the policy's decision carries `requires_approval`, the issuer sets the
 receipt's `requires_approval` to true and gives it a signed
-`approval_request_id`. The target will not honor such a receipt without a
-grant, so the issuer may hand it out at once (or hold it, section 8.2). A
-human approver, with their own key on their own device, signs a grant:
+`approval_request_id`. The decision may also state terms: how many
+distinct approvers must sign and which approver key ids count; the issuer
+records them in the receipt's `approval` member (section 3), hashed and
+signed, so the threshold is the issuer's word and a caller cannot lower
+it. Absent terms mean one grant from any trusted approver. The target will
+not honor such a receipt without the grants, so the issuer may hand it out
+at once (or hold it, section 8.2). A human approver, with their own key on
+their own device, signs a grant:
 
 | Field | Type | Signed | Meaning |
 |---|---|---|---|
@@ -276,38 +287,53 @@ Verification (`verify_grant`), first failure wins:
 8. `not_after` present and `now < not_after + skew`, else
    `REF_APPROVAL_EXPIRED`.
 
+### 8.0 The grant set
+
+`verify_grants` judges one grant or a list of them against the receipt's
+terms (`approval.required`, default 1; `approval.approvers`, default any
+trusted key). Each grant is checked with `verify_grant` as above, the
+receipt supplying `decision_sha256`, `approval_request_id` and
+`issuer_key_id`; the first failing grant's reason is the answer. Then, in
+order: a key that signed twice is `REF_APPROVAL_DUPLICATE_APPROVER`; a key
+the receipt's `approvers` list does not name is
+`REF_APPROVAL_APPROVER_NOT_ELIGIBLE`; fewer distinct approvers than
+`required` (an empty list included) is `REF_APPROVAL_INSUFFICIENT`;
+otherwise `GRANTS_SUFFICIENT`. Grants beyond the threshold are accepted and
+counted; the set that verified is what the caller claims.
+
 ### 8.1 At the target
 
-The grant is presented alongside the receipt (section 12). After the
-receipt verifies (section 6) and has a `decision_id`, a consumer that finds
-`requires_approval` true:
+The grants are presented alongside the receipt (section 12), one or a
+list. After the receipt verifies (section 6) and has a `decision_id`, a
+consumer that finds `requires_approval` true:
 
 1. refuses `REF_TARGET_APPROVAL_REQUIRED` if no grant was presented;
 2. refuses `REF_TARGET_NO_APPROVER_TRUST` if it trusts no approver key. The
    approver map comes from the key record's `approver`-role keys when a key
    record is in use (unrevoked, in window, and never the issuer's key id),
    else from a pinned approver map;
-3. runs `verify_grant` with the receipt's own `decision_sha256` and
-   `approval_request_id` as the expected values and the receipt's
-   `issuer_key_id` as the separation-of-duties id, refusing with its
-   reason;
-4. claims `grant_id` in the replay store under its own namespace, retained
-   until the grant's `not_after + skew` (refuse `REF_APPROVAL_REPLAY`);
+3. runs `verify_grants` (section 8.0) against the receipt's own terms,
+   refusing with its reason;
+4. claims every counted grant's `grant_id` in the replay store under its
+   own namespace, retained until that grant's `not_after + skew` (refuse
+   `REF_APPROVAL_REPLAY`);
 5. then claims `decision_id` as in section 7.
 
-The grant is checked and claimed before the receipt is claimed, so a
-refused grant leaves the receipt unspent. Because `requires_approval` and
-`approval_request_id` are inside the issuer's signature, a caller cannot
-strip the hold from a flagged receipt.
+The grants are checked and claimed before the receipt is claimed, so a
+refused set leaves the receipt unspent. Because `requires_approval`,
+`approval_request_id` and `approval` are inside the issuer's signature, a
+caller cannot strip the hold from a flagged receipt or lower its
+threshold.
 
 ### 8.2 At the issuer (optional)
 
-An issuer that prefers not to release a flagged receipt until the grant
-exists records the hold in a pending set keyed by `approval_request_id` and
-consumes it by compare-and-delete against `decision_sha256` when the grant
-arrives (refuse `REF_APPROVAL_REQUEST_UNKNOWN` when unknown, expired or
-bound to another decision). This is defense in depth; the target's check
-in 8.1 does not depend on it.
+An issuer that prefers not to release a flagged receipt until the grants
+exist records the hold in a pending set keyed by `approval_request_id`,
+collects grants against it (refusing a repeated approver and an ineligible
+one with the section 8.0 codes), and releases the set once `required`
+distinct eligible approvers have signed; a grant for an unknown, expired or
+differently bound hold is `REF_APPROVAL_REQUEST_UNKNOWN`. This is defense
+in depth; the target's check in 8.1 does not depend on it.
 
 The approver map should come from a signed key record (section 10) where
 the key's role is exactly `approver`; a key-id comparison alone cannot stop
@@ -445,7 +471,46 @@ JWS form (section 14) of the same signed receipt: the header segment is
 `eyJhbGciOiJFZERTQSIsImtpZCI6Imlzc3Vlci0yMDI2LTEwIiwidHlwIjoiSldUIn0` (`{"alg":"EdDSA","kid":"issuer-2026-10","typ":"JWT"}`); the full token
 is the `jws` member of the fixture.
 
-The complete objects are in `tests/fixtures/wire_vectors.json`.
+### 11.1 Threshold vector
+
+The same call and policy pin, flagged with terms
+`{"required": 2, "approvers": ["approver-alice", "approver-bob"]}`, built
+at the same timestamp, signed under `issuer-2026-10` with the same
+`not_after`, `decision_id` `7c8d1e2f-0a1b-4c2d-8e3f-4a5b6c7d8e9f` and
+`approval_request_id` `req-0002`. The second approver's seed label is
+`gargoyle-spec-approver-2`, public key
+`6fc61147c2d3347101b0f875039433acda66d949090a2d382dfe170cebdd2e5d`.
+
+```
+decision_sha256  = d3871b1e65f9c5957a3c974c0c3cc5f5b1310bfbd54561d0c03f011dbfb1ea9e
+issuer_signature = f5cfe124629e9e7d4aa7301883187aafcbb0d373f9da7e2e4cac2082b008f1b257de5199c859b9746f2b4d04bb49611f691552121d96e53bea058a32a4182f08
+```
+
+Hash region bytes (the `approval` member sorts first):
+
+```
+{"approval":{"approvers":["approver-alice","approver-bob"],"required":2},"decision":"ELIGIBLE","envelope_version":"gargoyle/2","policy":{"policy_id":"opa:payments/3","policy_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"request_context":{"args_sha256":"e2363d59384e0a154faccbcc375337c59cc9c5fefa843519e0d5d311cf32bab7","on_behalf_of":"user-42","principal":"agent-7","tool":"transfer_funds"},"requires_approval":true,"target_url":"https://tools.example.com/target"}
+```
+
+Two grants for hold `req-0002`, `not_after` `2026-10-16T12:10:00+00:00`:
+`grant-0002-a` under `approver-alice` and `grant-0002-b` under
+`approver-bob`:
+
+```
+approver_signature (alice) = 872945562049e88ff85ca7228014f75bdd82d29b445ffb5efb2dd77368b00639449ed5c90ea80872e98d2630e673269170276e66b33615455f13ec61c6e2680f
+approver_signature (bob)   = d1c01ffadee1e82460df500672858eb1253a97edc5eb559cacf02ba302a0fc0b9e19e4b16e71808eb591a61e982a959c0a9ddd8079382abdf58a7ec0a8eb2e0d
+```
+
+Either grant alone is `REF_APPROVAL_INSUFFICIENT`; both together release
+the receipt, and the execution receipt signed under `executor-2026-10` at
+`2026-10-16T12:01:00+00:00` with the same outputs has
+
+```
+executor_signature = d1d9d28c599ae974ca936f2c2f0f6f9a73cd77e58ba1f3c4a736122b5a82d2ec5a73644138badf36d9dddd54eb2e0cdf7a44cd8e577636b7524a7484db34e10e
+```
+
+The complete objects are the `threshold` member of
+`tests/fixtures/wire_vectors.json`.
 
 ## 12. Transport and versioning
 

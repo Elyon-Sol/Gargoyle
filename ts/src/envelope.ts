@@ -43,10 +43,37 @@ export function decisionSha256Of(envelope: Envelope): string {
   return sha256Hex(canonicalJson(without(envelope, HASH_EXCLUDED_KEYS)));
 }
 
+/** The receipt's optional `approval` member (SPEC.md section 3). */
+export type ApprovalTerms = { required: number; approvers?: string[] };
+
+export function validApproval(approval: unknown): approval is ApprovalTerms {
+  if (typeof approval !== "object" || approval === null || Array.isArray(approval)) return false;
+  const a = approval as Record<string, Json>;
+  const keys = Object.keys(a);
+  if (!keys.includes("required") || keys.some((k) => k !== "required" && k !== "approvers")) return false;
+  if (typeof a.required !== "number" || !Number.isInteger(a.required) || a.required < 1) return false;
+  if ("approvers" in a) {
+    const list = a.approvers;
+    if (!Array.isArray(list) || list.length === 0 || !list.every((x) => typeof x === "string" && x)) return false;
+    if (new Set(list).size !== list.length || list.length < a.required) return false;
+  }
+  return true;
+}
+
+/** {required, approvers} for a flagged receipt: its `approval` member, or the default of one from anyone. */
+export function approvalTerms(envelope: Envelope): { required: number; approvers: string[] | null } {
+  const a = envelope.approval;
+  if (validApproval(a)) return { required: a.required, approvers: a.approvers ?? null };
+  return { required: 1, approvers: null };
+}
+
 export function buildEnvelope(opts: {
   decision: string; targetUrl: string; call: Call; policyPin: PolicyPin;
-  timestampUtc?: string; requiresApproval?: boolean;
+  timestampUtc?: string; requiresApproval?: boolean; approval?: ApprovalTerms;
 }): Envelope {
+  if (opts.approval !== undefined && (!opts.requiresApproval || !validApproval(opts.approval))) {
+    throw new Error("approval must be {required >= 1, approvers?: [key ids]} on a flagged receipt");
+  }
   if (!validPin(opts.policyPin)) throw new Error("policy_pin must be {policy_id, policy_sha256 (64 hex)}");
   if (typeof opts.call.tool !== "string" || !opts.call.tool) throw new Error("call.tool must be a non-empty string");
   if (!validPrincipal(opts.call.principal)) throw new Error("call.principal must be a non-empty string");
@@ -62,6 +89,11 @@ export function buildEnvelope(opts: {
     timestamp_utc: opts.timestampUtc ?? new Date().toISOString().replace("Z", "+00:00"),
   };
   if (obo !== undefined) (envelope.request_context as Record<string, Json>).on_behalf_of = obo;
+  if (opts.approval !== undefined) {
+    const approval: Record<string, Json> = { required: opts.approval.required };
+    if (opts.approval.approvers) approval.approvers = [...opts.approval.approvers].sort();
+    envelope.approval = approval;
+  }
   envelope.decision_sha256 = decisionSha256Of(envelope);
   return envelope;
 }

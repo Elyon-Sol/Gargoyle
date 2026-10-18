@@ -16,6 +16,7 @@ import {
   REF_VERIFY_SIGNATURE_INVALID, buildEnvelope, buildExecutionReceipt, buildGrant, canonicalJson, decisionSha256Of,
   privateKeyFromSeed, publicKeyFromRaw, publicKeyRawHex, signEnvelope, signExecutionReceipt, signGrant,
   verifyChain, verifyEnvelope, encodeReceipt, decodeReceipt, REF_JWS_PAYLOAD_MISMATCH, REF_JWS_ALG_UNSUPPORTED, encode,
+  REF_APPROVAL_INSUFFICIENT, REF_APPROVAL_APPROVER_NOT_ELIGIBLE, REF_VERIFY_ENVELOPE_ABSENT, verifyGrants,
 } from "../src/index.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -118,4 +119,44 @@ test("delegation: on_behalf_of is bound when the target knows it", () => {
   assert.equal(verifyEnvelope(signed, withoutDelegation, signed.target_url as string, opts).accepted, true);
   assert.equal(verifyEnvelope(signed, { ...V.call, on_behalf_of: "user-43" }, signed.target_url as string, opts).reason, REF_VERIFY_PRINCIPAL_MISMATCH);
   void on_behalf_of;
+});
+
+test("threshold vector: terms in the hash region, two grants needed", () => {
+  const T = V.threshold;
+  const issuer = keyFor(V.issuer_seed_label), alice = keyFor(V.approver_seed_label), bob = keyFor(T.approver_2_seed_label), executor = keyFor(V.executor_seed_label);
+  assert.equal(publicKeyRawHex(bob), T.approver_2_public_key_hex);
+  const env = buildEnvelope({ decision: "ELIGIBLE", targetUrl: V.unsigned.target_url, call: V.call, policyPin: V.unsigned.policy,
+                              timestampUtc: V.unsigned.timestamp_utc, requiresApproval: true, approval: T.approval });
+  const signed = signEnvelope(env, issuer, T.signed.issuer_key_id,
+                              { notAfter: T.signed.not_after, decisionId: T.signed.decision_id, approvalRequestId: T.signed.approval_request_id });
+  assert.deepEqual(env, T.unsigned);
+  assert.deepEqual(signed, T.signed);
+  assert.equal(canonicalJson(Object.fromEntries(Object.entries(signed).filter(([k]) => !(HASH_EXCLUDED_KEYS as readonly string[]).includes(k)))), T.hash_region);
+  const grants = T.grants.map((g: Record<string, string>, i: number) => signGrant(buildGrant({
+    decisionSha256: env.decision_sha256 as string, approvalRequestId: g.approval_request_id, grantId: g.grant_id, notAfter: g.not_after,
+  }), i === 0 ? alice : bob, g.approver_key_id));
+  assert.deepEqual(grants, T.grants);
+  const execution = signExecutionReceipt(buildExecutionReceipt({ envelope: signed, outputs: V.outputs, executedAt: T.execution.executed_at }),
+                                         executor, T.execution.executor_key_id);
+  assert.deepEqual(execution, T.execution);
+
+  const now = new Date("2026-10-16T12:01:00+00:00");
+  const issuerKeys = { [T.signed.issuer_key_id]: publicKeyFromRaw(V.issuer_public_key_hex) };
+  const approvers = { "approver-alice": publicKeyFromRaw(V.approver_public_key_hex), "approver-bob": publicKeyFromRaw(T.approver_2_public_key_hex),
+                      "approver-carol": publicKeyFromRaw(V.executor_public_key_hex) };
+  assert.equal(verifyGrants(grants[0], { envelope: signed, approverPublicKeys: approvers, now }).reason, REF_APPROVAL_INSUFFICIENT);
+  assert.equal(verifyGrants(grants, { envelope: signed, approverPublicKeys: approvers, now }).accepted, true);
+  const carol = signGrant(buildGrant({ decisionSha256: env.decision_sha256 as string, approvalRequestId: "req-0002", grantId: "g-c", notAfter: T.grants[0].not_after }), executor, "approver-carol");
+  assert.equal(verifyGrants([grants[0], carol], { envelope: signed, approverPublicKeys: approvers, now }).reason, REF_APPROVAL_APPROVER_NOT_ELIGIBLE);
+  const consumer = new Consumer({ targetId: signed.target_url as string, record: T.signed.policy, pinnedPublicKeys: issuerKeys, approverPublicKeys: approvers });
+  assert.equal(consumer.check(signed, V.call, { grant: grants[1], now }).reason, REF_APPROVAL_INSUFFICIENT);
+  assert.equal(consumer.check(signed, V.call, { grant: grants, now }).accepted, true);
+  const chain = verifyChain(signed, execution, { issuerPublicKeys: issuerKeys, executorPublicKeys: { [T.execution.executor_key_id]: publicKeyFromRaw(V.executor_public_key_hex) },
+                                                 grant: grants, approverPublicKeys: approvers });
+  assert.equal(chain.reason, ACCEPT_CHAIN_VERIFIED);
+  // Lowering the threshold breaks the signature; a malformed member is unusable.
+  const opts = { recordSource: T.signed.policy, pinnedPublicKeys: issuerKeys, now };
+  assert.equal(verifyEnvelope({ ...signed, approval: { required: 1, approvers: T.approval.approvers } }, V.call, signed.target_url as string, opts).reason, REF_VERIFY_SIGNATURE_INVALID);
+  assert.equal(verifyEnvelope({ ...signed, approval: { required: 0 } }, V.call, signed.target_url as string, opts).reason, REF_VERIFY_ENVELOPE_ABSENT);
+  assert.equal(verifyEnvelope({ ...V.signed, requires_approval: false, approval: { required: 1 } }, V.call, V.signed.target_url, opts).reason, REF_VERIFY_ENVELOPE_ABSENT);
 });

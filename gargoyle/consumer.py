@@ -60,7 +60,7 @@ import threading
 from datetime import datetime, timedelta
 from typing import Any, Callable, Dict, NamedTuple, Optional
 
-from gargoyle.approval import verify_grant
+from gargoyle.approval import as_grant_list, verify_grants
 from gargoyle.approver_trust import resolve_approver_keys
 from gargoyle.execution import build_execution_receipt, sign_execution_receipt
 from gargoyle.policy import valid_pin
@@ -265,10 +265,11 @@ class Consumer:
     ) -> Verdict:
         """Decide whether to honor `envelope` for `call` ({"tool", "args",
         "principal"}, the principal being the one this consumer
-        authenticated), with `grant` the human's release presented alongside
-        a flagged receipt (None when none was). Fail-closed on every
-        undecidable path; the caller performs the side effect only when
-        honored is True."""
+        authenticated), with `grant` the human release presented alongside
+        a flagged receipt: one grant, or a list of them when the receipt
+        requires several approvers (None when none was). Fail-closed on
+        every undecidable path; the caller performs the side effect only
+        when honored is True."""
         if not isinstance(envelope, dict):
             envelope = None  # absent or not an object: verify_envelope refuses
 
@@ -310,30 +311,27 @@ class Consumer:
         # caller's. The grant is checked and claimed before the receipt is
         # claimed, so a refused grant leaves the receipt unspent.
         if envelope["requires_approval"]:
-            if grant is None:
+            grants = as_grant_list(grant)
+            if not grants:
                 return Verdict(False, REF_TARGET_APPROVAL_REQUIRED)
             approver_keys = self._approver_keys(key_record_view, envelope.get("issuer_key_id"), now)
             if not approver_keys:
                 return Verdict(False, REF_TARGET_NO_APPROVER_TRUST)
-            g = verify_grant(
-                grant,
-                expected_decision_sha256=envelope["decision_sha256"],
-                expected_approval_request_id=envelope["approval_request_id"],
-                approver_public_keys=approver_keys,
-                gate_key_id=envelope.get("issuer_key_id"),
-                now=now,
-                clock_skew=self.clock_skew,
-            )
+            # One grant or several: the receipt's own `approval` terms say
+            # how many distinct approvers, and which, must have signed.
+            g = verify_grants(grants, envelope=envelope, approver_public_keys=approver_keys,
+                              now=now, clock_skew=self.clock_skew)
             if not g["accepted"]:
                 return Verdict(False, g["reason"])
-            grant_exp = None
-            try:
-                grant_exp = datetime.fromisoformat(grant["not_after"]) + self.clock_skew
-            except (ValueError, TypeError, KeyError):
+            for one in g["grants"]:
                 grant_exp = None
-            if not self.replay_cache.check_and_claim(
-                    _GRANT_CLAIM_PREFIX + grant["grant_id"], grant_exp, now=now):
-                return Verdict(False, REF_APPROVAL_REPLAY)
+                try:
+                    grant_exp = datetime.fromisoformat(one["not_after"]) + self.clock_skew
+                except (ValueError, TypeError, KeyError):
+                    grant_exp = None
+                if not self.replay_cache.check_and_claim(
+                        _GRANT_CLAIM_PREFIX + one["grant_id"], grant_exp, now=now):
+                    return Verdict(False, REF_APPROVAL_REPLAY)
         # Keep the claim for the whole window the verifier honors: it accepts
         # until not_after + clock_skew, so expiring the claim at the bare
         # not_after would let the id be claimed again inside the skew.

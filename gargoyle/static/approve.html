@@ -74,7 +74,16 @@ async function refresh() {
   const ids = new Set();
   for (const item of pending) {
     const env = item.envelope, id = env.approval_request_id; ids.add(id);
-    if (state.seen.has(id)) continue;
+    const required = item.required ?? 1, collected = item.collected ?? 0, signers = item.approvers ?? [];
+    const mine = signers.includes(state.keyId);
+    const eligible = !env.approval?.approvers || env.approval.approvers.includes(state.keyId);
+    const progress = required > 1 ? `${collected} of ${required} approvals` + (signers.length ? ` (${signers.map(esc).join(", ")})` : "") : "";
+    if (state.seen.has(id)) {
+      const card = state.seen.get(id);
+      const p = card.querySelector(".progress"); if (p) p.textContent = progress;
+      if (mine) { card.querySelector(".approve").disabled = true; card.querySelector(".result").innerHTML = '<span class="ok">you signed; waiting for the others</span>'; }
+      continue;
+    }
     const card = document.createElement("article"); card.className = "hold"; card.dataset.id = id;
     const rc = env.request_context;
     const bound = item.args !== null && item.args !== undefined ? (await argsSha256(item.args)) === rc.args_sha256 : false;
@@ -87,10 +96,12 @@ async function refresh() {
         <dt>policy</dt><dd>${esc(env.policy.policy_id)} <span class="badge">${esc(env.policy.policy_sha256.slice(0, 12))}</span></dd>
         <dt>expires</dt><dd data-exp="${expires.toISOString()}">${expires.toLocaleTimeString()}</dd>
         <dt>decision</dt><dd>${esc(env.decision_sha256.slice(0, 16))}&hellip;</dd>
+        ${required > 1 ? `<dt>approvals</dt><dd class="progress">${progress}</dd>` : ""}
+        ${env.approval?.approvers ? `<dt>eligible</dt><dd>${env.approval.approvers.map(esc).join(", ")}${eligible ? "" : ' <span class="badge bad">not you</span>'}</dd>` : ""}
       </dl>
       <pre>${esc(JSON.stringify(item.args, null, 2))}</pre>
       <div class="actions">
-        <button class="approve" ${bound ? "" : "disabled"}>Approve</button>
+        <button class="approve" ${bound && eligible && !mine ? "" : "disabled"}>Approve</button>
         <button class="decline">Decline</button>
         <span class="result"></span>
       </div>`;
@@ -112,6 +123,12 @@ async function approve(card, env) {
       grantId: newGrantId(), notAfter: isoUtc(new Date(Date.now() + state.ttl * 1000)),
     }), state.key, state.keyId);
     const res = await api("grants", { method: "POST", body: JSON.stringify(grant) });
+    if (res.accepted && res.complete === false) {
+      // A threshold hold: this signature is in, the call waits for the others.
+      card.querySelector(".result").innerHTML = `<span class="ok">you signed; ${res.required - res.collected} more needed</span>`;
+      card.querySelector(".decline").disabled = false;
+      return;
+    }
     card.querySelector(".result").innerHTML = res.accepted ? '<span class="ok">approved; the call is running</span>' : `<span class="bad">refused: ${esc(res.reason)}</span>`;
     card.dataset.done = "1"; setTimeout(() => { card.remove(); state.seen.delete(env.approval_request_id); }, 8000);
   } catch (err) { card.querySelector(".result").innerHTML = `<span class="bad">${esc(err.message)}</span>`; buttons.forEach((b) => b.disabled = false); }

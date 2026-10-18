@@ -43,7 +43,7 @@ work is positioning and outreach, not step 4. Elyon-Sol spent a year
 verifying itself for no external user; that is the failure mode to avoid.
 
 4. **m-of-n grants.** A flagged receipt names a threshold; the consumer
-   requires that many distinct approver keys.
+   requires that many distinct approver keys. (DONE, see Status.)
 5. **Evidence log.** An append-only hash chain of receipts, verdicts and
    execution receipts, exportable and checkable offline. A log, a few
    hundred lines; never rules about how it may be amended.
@@ -87,6 +87,22 @@ verifying itself for no external user; that is the failure mode to avoid.
   TypeScript port recomputes the JWS byte for byte. SPEC.md: sections 1, 2 (float
   note), 3, 6, 11, 12 and new 14.
 
+- Step 4: DONE (2026-10-18). A hold's terms live in the receipt: optional `approval`
+  member {required, approvers}, hashed and signed, so a caller cannot lower the
+  threshold or swap in a different approver set. Decision gained approvals_required
+  and approvers; rules say `"approvals": 2, "approvers": [...]` on a hold and OPA
+  results may carry approvals_required / approvers. approval.verify_grants judges a
+  grant set (distinct approvers, eligibility, count; REF_APPROVAL_INSUFFICIENT,
+  _DUPLICATE_APPROVER, _APPROVER_NOT_ELIGIBLE); Consumer.check and verify_chain take
+  one grant or a list and claim every grant id. The issuing service collects grants
+  per hold and releases the set when complete; /pending shows progress; the browser
+  console shows "1 of 2 approvals", disables the button for a key that already
+  signed or is not eligible, and the approver CLI prints how many more are needed.
+  Middleware waits for the whole set. `gargoyle init --approvers N` writes N approver
+  keys (comma-separated lists in both env files, approver-2.env, approver-web-2.json).
+  SPEC.md sections 3, 8.0, 8.1, 8.2 and 11.1 (threshold vector, two grants); the
+  TypeScript port verifies it byte for byte (verifyGrants). Roles beyond a key-id
+  list are deliberately not in the receipt: a key record maps ids to people.
 - Step 5: DONE (2026-10-18). gargoyle/evidence.py: the middleware's audit log
   became an evidence log, `gargoyle-evidence/1`, one hash-chained entry per decision
   with kind honored or refused, the verdict, and the receipt, grant and execution

@@ -89,6 +89,7 @@ def issue(
             policy_pin=pin,
             timestamp_utc=issued_at.isoformat(),
             requires_approval=bool(decision.requires_approval),
+            approval=decision.approval,
         )
     except (KeyError, TypeError, ValueError):
         return IssueResult(refuse(ISSUE_UNBINDABLE_CALL))

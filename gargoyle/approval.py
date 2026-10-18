@@ -17,9 +17,9 @@ grant_id is present, so that claim cannot be skipped.
 """
 
 from datetime import datetime, timedelta
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
-from gargoyle.envelope import canonical_json
+from gargoyle.envelope import approval_terms, canonical_json
 from gargoyle.verifier import not_after_valid
 
 
@@ -45,7 +45,13 @@ REF_APPROVAL_EXPIRED = "REF_APPROVAL_EXPIRED"
 REF_APPROVAL_REPLAY = "REF_APPROVAL_REPLAY"
 REF_APPROVAL_REQUEST_UNKNOWN = "REF_APPROVAL_REQUEST_UNKNOWN"
 
+# verify_grants: the set does not meet the receipt's terms.
+REF_APPROVAL_INSUFFICIENT = "REF_APPROVAL_INSUFFICIENT"          # fewer distinct approvers than required
+REF_APPROVAL_DUPLICATE_APPROVER = "REF_APPROVAL_DUPLICATE_APPROVER"  # the same key signed twice
+REF_APPROVAL_APPROVER_NOT_ELIGIBLE = "REF_APPROVAL_APPROVER_NOT_ELIGIBLE"  # a key the receipt does not name
+
 ACCEPT_GRANT_VALID = "GRANT_VALID"
+ACCEPT_GRANTS_SUFFICIENT = "GRANTS_SUFFICIENT"
 
 # Top-level keys a usable grant must carry before verify_grant can run.
 _REQUIRED_GRANT_KEYS = (
@@ -197,3 +203,58 @@ def verify_grant(
 
     # 9. accept
     return _accept()
+
+
+def as_grant_list(grant: Any) -> List[Any]:
+    """One grant or a list of them, as a list; None is the empty list."""
+    if grant is None:
+        return []
+    if isinstance(grant, list):
+        return grant
+    return [grant]
+
+
+def verify_grants(
+    grants: Any,
+    *,
+    envelope: Dict[str, Any],
+    approver_public_keys: Dict[str, Any],
+    now: Optional[datetime] = None,
+    clock_skew: timedelta = timedelta(0),
+) -> Dict[str, Any]:
+    """Do these grants release the flagged `envelope` under its own terms?
+
+    The receipt's `approval` member (default: one grant from any trusted
+    approver) says how many distinct approvers are required and, when it
+    lists `approvers`, which key ids count. Each grant is checked with
+    verify_grant against the receipt's decision_sha256, approval_request_id
+    and issuer_key_id; the first failing grant's reason is the answer. Then:
+    a key named by no grant more than once (REF_APPROVAL_DUPLICATE_APPROVER),
+    every key eligible (REF_APPROVAL_APPROVER_NOT_ELIGIBLE), and at least
+    `required` of them (REF_APPROVAL_INSUFFICIENT). An empty list is
+    REF_APPROVAL_INSUFFICIENT. Returns {"accepted", "reason", "grants"}
+    with the grants that were counted, so the caller can claim each one."""
+    terms = approval_terms(envelope)
+    items = as_grant_list(grants)
+    seen: List[str] = []
+    for grant in items:
+        g = verify_grant(
+            grant,
+            expected_decision_sha256=envelope["decision_sha256"],
+            expected_approval_request_id=envelope["approval_request_id"],
+            approver_public_keys=approver_public_keys,
+            gate_key_id=envelope.get("issuer_key_id"),
+            now=now,
+            clock_skew=clock_skew,
+        )
+        if not g["accepted"]:
+            return {"accepted": False, "reason": g["reason"], "grants": []}
+        key_id = grant["approver_key_id"]
+        if key_id in seen:
+            return {"accepted": False, "reason": REF_APPROVAL_DUPLICATE_APPROVER, "grants": []}
+        if terms["approvers"] is not None and key_id not in terms["approvers"]:
+            return {"accepted": False, "reason": REF_APPROVAL_APPROVER_NOT_ELIGIBLE, "grants": []}
+        seen.append(key_id)
+    if len(seen) < terms["required"]:
+        return {"accepted": False, "reason": REF_APPROVAL_INSUFFICIENT, "grants": []}
+    return {"accepted": True, "reason": ACCEPT_GRANTS_SUFFICIENT, "grants": list(items)}

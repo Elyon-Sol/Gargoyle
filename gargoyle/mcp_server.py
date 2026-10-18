@@ -147,8 +147,9 @@ class IssuerClient:
         return {"envelope": body.get("envelope"), "reason": None}
 
     def wait_for_grant(self, approval_request_id: str) -> Dict[str, Any]:
-        """Poll until the hold has a grant, a human declined it, the hold
-        disappears, or the timeout passes: {"grant": <grant>|None,
+        """Poll until the hold has its grant (or, for a receipt that needs
+        several approvers, the whole set), a human declined it, the hold
+        disappears, or the timeout passes: {"grant": <grant>|[<grant>...]|None,
         "reason": None | REF_TARGET_APPROVAL_DECLINED | REF_TARGET_APPROVAL_TIMEOUT}."""
         deadline = time.monotonic() + self.approval_timeout
         while True:
@@ -159,6 +160,8 @@ class IssuerClient:
                 body = {}
             if isinstance(body.get("grant"), dict):
                 return {"grant": body["grant"], "reason": None}
+            if isinstance(body.get("grants"), list) and body["grants"]:
+                return {"grant": body["grants"], "reason": None}
             if body.get("declined") is True:
                 return {"grant": None, "reason": REF_TARGET_APPROVAL_DECLINED}
             if body and not body.get("pending", True):
@@ -483,7 +486,8 @@ def config_from_env() -> Optional[Dict[str, Any]]:
     policy_sha256}) is read from GARGOYLE_MCP_RECORD_PATH. All five are
     required; there is no default record. GARGOYLE_MCP_APPROVER_KEY_ID and
     GARGOYLE_MCP_APPROVER_PUBLIC_KEY_HEX, both or neither, pin the approver
-    key whose grants release flagged receipts."""
+    keys whose grants release flagged receipts (comma-separated lists for
+    several)."""
     import os
 
     key_id = os.environ.get(ENV_GATE_KEY_ID)
@@ -506,10 +510,14 @@ def config_from_env() -> Optional[Dict[str, Any]]:
 
         public_key = Ed25519PublicKey.from_public_bytes(bytes.fromhex(key_hex))
         executor_key = Ed25519PrivateKey.from_private_bytes(bytes.fromhex(ex_key_hex)) if ex_key_id else None
-        approver_keys = (
-            {ap_key_id: Ed25519PublicKey.from_public_bytes(bytes.fromhex(ap_key_hex))}
-            if ap_key_id else None
-        )
+        approver_keys = None
+        if ap_key_id:
+            # Several approvers: comma-separated ids and hexes, in the same order.
+            ids = [x.strip() for x in ap_key_id.split(",")]
+            hexes = [x.strip() for x in ap_key_hex.split(",")]
+            if len(ids) != len(hexes) or not all(ids):
+                return None
+            approver_keys = {i: Ed25519PublicKey.from_public_bytes(bytes.fromhex(h)) for i, h in zip(ids, hexes)}
         with open(record_path, "rb") as f:
             record = json.loads(f.read().decode("utf-8"))
         if not valid_pin(record):

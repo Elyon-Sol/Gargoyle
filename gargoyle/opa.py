@@ -110,6 +110,14 @@ class OpaPolicy:
             if not result["allow"]:
                 return refuse(reason or OPA_DENIED)
             hold = result.get("requires_approval", False)
+            required = result.get("approvals_required", 1)
+            approvers = result.get("approvers")
+            if (isinstance(required, bool) or not isinstance(required, int) or required < 1
+                    or (approvers is not None and (not isinstance(approvers, list) or not approvers
+                                                   or not all(isinstance(a, str) and a for a in approvers)))):
+                return refuse(OPA_UNRECOGNIZED_RESULT)
             # Only an explicit false frees the call; anything else holds it.
-            return Decision(ELIGIBLE, None, hold is not False)
+            if hold is False:
+                return Decision(ELIGIBLE)
+            return Decision(ELIGIBLE, None, True, required, tuple(approvers) if approvers else None)
         return refuse(OPA_UNRECOGNIZED_RESULT)
