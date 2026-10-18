@@ -128,6 +128,20 @@ outside.
   Added for the PoC: gargoyle/fs_server.py (a Python filesystem MCP server, so a
   Windows client needs only Python; `init --upstream python-fs`) and
   `gargoyle issuer --ssl-certfile/--ssl-keyfile` to serve TLS without a proxy.
+- First cross-machine PoC (2026-10-18): Windows 11 host running Claude Code
+  (Microsoft Store Python 3.13), this VirtualBox Ubuntu VM as the issuer with TLS on
+  its host-only address, approvals in Edge via /approve. Free listing and reads, a
+  held write and a held rename approved in the browser, a delete refused by policy,
+  and `gargoyle audit --log` verifying all five honored calls, CHAIN_VERIFIED. Claude
+  Code itself refused to shell-write around the gate when the issuer was unreachable.
+  Friction found and fixed on the way: the package required Python 3.14 (now 3.12+,
+  CI matrix 3.12/3.13/3.14) and that exposed a missing typing import that 3.14's
+  deferred annotations had hidden; PowerShell 5.1 writes JSON with a BOM (setup
+  script now writes without one); a CA certificate without keyUsage is refused by
+  the OpenSSL inside Windows Python though browsers accept it (guide fixed); the
+  middleware now logs why an issuer was unreachable instead of only the refusal
+  code. Claude Code also prompts for each MCP tool on its own; that is the client's
+  permission layer, orthogonal to the gate.
 - Enterprise identity (2026-10-16): identity tokens may be RS256 or ES256 from a
   provider's JWKS (keys_from_jwks, entra_keys; GARGOYLE_ENTRA_TENANT on the issuer);
   Entra's preferred_username/upn is the principal; groups and app roles are policy
