@@ -92,6 +92,10 @@ verifying itself for no external user; that is the failure mode to avoid.
   hold and the receipt, with a link to /approve from GARGOYLE_APPROVE_URL); posted in
   a thread, failures logged and ignored, the grant still only from the approver's
   key. 80 lines. All six roadmap steps are done.
+- Published (2026-10-18): gargoyle-receipts 0.4.0.dev0 on PyPI by trusted publishing
+  (.github/workflows/publish.yml, runs on a GitHub release or by hand). Dependencies are
+  floors, not pins. A clean venv installs and imports it; `pip install gargoyle-receipts`
+  is the install line everywhere now.
 - Standards (2026-10-18): canonical JSON moved to RFC 8785 (JCS), format gargoyle/3,
   after finding three 2026 Internet-Drafts in the same space that all use JCS: Acta
   signed receipts (MCP access decisions), EP authorization receipts (human pre-execution

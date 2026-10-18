@@ -83,7 +83,7 @@ python3 --version          # the package needs 3.12 or later
 sudo useradd --system --home /opt/gargoyle --shell /usr/sbin/nologin gargoyle
 sudo mkdir -p /opt/gargoyle && sudo chown gargoyle:gargoyle /opt/gargoyle
 sudo -u gargoyle python3 -m venv /opt/gargoyle/venv
-sudo -u gargoyle /opt/gargoyle/venv/bin/pip install "git+https://github.com/Elyon-Sol/Gargoyle"
+sudo -u gargoyle /opt/gargoyle/venv/bin/pip install gargoyle-receipts
 sudo -u gargoyle /opt/gargoyle/venv/bin/gargoyle --help
 ```
 
@@ -225,7 +225,7 @@ PATH"), Node.js 22 LTS from nodejs.org (for the filesystem MCP server),
 and Claude Code (`npm install -g @anthropic-ai/claude-code`). Then:
 
 ```powershell
-pip install "git+https://github.com/Elyon-Sol/Gargoyle"
+pip install gargoyle-receipts
 mkdir C:\gargoyle
 scp you@gargoyle.lan:/opt/gargoyle/handoff/* C:\gargoyle\
 certutil -addstore -f Root C:\gargoyle\ca.crt      # elevated: trust the local CA
