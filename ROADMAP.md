@@ -92,6 +92,12 @@ verifying itself for no external user; that is the failure mode to avoid.
   hold and the receipt, with a link to /approve from GARGOYLE_APPROVE_URL); posted in
   a thread, failures logged and ignored, the grant still only from the approver's
   key. 80 lines. All six roadmap steps are done.
+- Scoped grants live (2026-10-19): Claude Desktop asked for a plan covering two held
+  writes; one card, one grant from the enrolled approver, then both writes ran with no
+  card. The issuer log shows the plan hold's polls, one POST /grants, then two POST /issue
+  each followed only by the middleware fetching approver keys to verify the plan's grant:
+  no per-call hold, as designed. The assistant read both files first (free) and composed
+  the writes itself.
 - Scoped grants (2026-10-19): gargoyle/plans.py. A signed plan (steps as tool plus exact
   args or argument globs, note, expiry, policy pin, approval terms) issued by POST /plans
   after judging every step; `"plan": false` on a hold rule keeps a tool individual; the
