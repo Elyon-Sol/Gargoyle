@@ -567,6 +567,11 @@ before it is approved.
 
 ## Operations
 
+For a client beta, work through docs/beta-checklist.md. `gargoyle init`
+writes `gargoyle-issuer.service` and `apache-gargoyle.conf` into the deploy
+folder; `GET /health` is the monitor's endpoint and reports whether holds
+are persistent.
+
 | Task | How |
 |---|---|
 | Issuer logs | `journalctl -u gargoyle -f`; Apache: `/var/log/apache2/gargoyle-*.log` |

@@ -26,6 +26,8 @@ policy engine, a container runtime, or any client changes.
                       approver's machine); with --approvers N also approver-2.env ...
     approver-web.json the same key and token in the form the browser approval
                       console loads (private; same machine as approver.env)
+    gargoyle-issuer.service, apache-gargoyle.conf
+                      a systemd unit and an Apache virtual host for the issuer
     mcp-config.json   the server entry to paste into the MCP client
     public-keys.json  issuer, approver and executor public keys, for audits
 
@@ -147,6 +149,33 @@ def cmd_init(args) -> int:
         "issuer": {"issuer-1": issuer_pub}, "approver": {a[0]: a[3] for a in approvers},
         "executor": {"executor-1": executor_pub}, "identity_provider": {"idp-1": idp_pub},
     }, indent=2) + "\n")
+    _write(out / "gargoyle-issuer.service", """[Unit]
+Description=Gargoyle issuing service
+After=network-online.target
+
+[Service]
+User=gargoyle
+WorkingDirectory=%(out)s
+ExecStart=%(python)s -m gargoyle.cli issuer --out %(out)s --host 127.0.0.1 --port %(port)d
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+""" % {"out": str(out), "python": sys.executable, "port": args.port})
+    _write(out / "apache-gargoyle.conf", """# Apache in front of the issuer: TLS from a trusted CA, one virtual host.
+<VirtualHost *:443>
+    ServerName %(host)s
+    SSLEngine on
+    SSLCertificateFile    /etc/ssl/certs/gargoyle.crt
+    SSLCertificateKeyFile /etc/ssl/private/gargoyle.key
+    ProxyPreserveHost On
+    ProxyPass        / http://127.0.0.1:%(port)d/
+    ProxyPassReverse / http://127.0.0.1:%(port)d/
+    ErrorLog  ${APACHE_LOG_DIR}/gargoyle-error.log
+    CustomLog ${APACHE_LOG_DIR}/gargoyle-access.log combined
+</VirtualHost>
+""" % {"host": (args.issuer_url or "gargoyle.example").replace("https://", "").replace("http://", "").split("/")[0].split(":")[0], "port": args.port})
     upstream = (["npx", "-y", "@modelcontextprotocol/server-filesystem", allowed] if args.upstream == "npx-filesystem"
                 else [client_python, "-m", "gargoyle.fs_server", allowed])
     _write(out / "mcp-config.json", json.dumps({"mcpServers": {"filesystem-gargoyle": {
@@ -260,6 +289,8 @@ def cmd_issuer(args) -> int:
     out = Path(args.out).resolve()
     os.environ.update(_read_env(out / "issuer.env"))
     os.environ.setdefault("GARGOYLE_APPROVERS_PATH", str(out / "approvers.json"))   # enrolled approvers live beside the keys
+    os.environ.setdefault("GARGOYLE_HOLDS_PATH", str(out / "holds.sqlite"))          # holds, grants, declines, plans survive restarts
+    os.environ.setdefault("GARGOYLE_LOG_JSON", "1")
     app = app_from_env()
     # The middleware reads the policy pin from a file; write it next to the
     # config so the client-side entry finds it at the configured path.

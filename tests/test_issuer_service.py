@@ -166,3 +166,33 @@ def test_record_and_keys_are_public(client):
     assert client.get("/record").json() == PIN
     from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
     assert client.get("/keys").json() == {"issuer-1": issuer.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw).hex()}
+
+
+def test_holds_grants_and_declines_survive_a_restart(tmp_path):
+    """The same SQLite file, a new app: what a human was acting on is still there."""
+    from gargoyle.holdstore import HoldStore
+    path = str(tmp_path / "holds.sqlite")
+    events = []
+
+    def app_on(path):
+        return build_issuer_app(policy=ToolPolicy(), signing_key=issuer, key_id="issuer-1", idp_public_keys={"idp-1": idp.public_key()},
+                                approver_public_keys={"approver-alice": approver.public_key()}, hold_store=HoldStore(path),
+                                log_events=events.append, now=lambda: NOW)
+    c1 = TestClient(app_on(path))
+    env = c1.post("/issue", json={"target_url": TARGET, "tool": "write_file", "args": {"path": "a.txt", "content": "x"}}, headers=auth()).json()["envelope"]
+    arid = env["approval_request_id"]
+    h = c1.get("/health").json()
+    assert h["ok"] and h["pending_receipts"] == 1 and h["persistent"] is True and h["policy"] == PIN
+    c2 = TestClient(app_on(path))                                   # restart
+    assert c2.get("/health").json()["pending_receipts"] == 1
+    assert c2.get("/pending", headers=auth()).json()["pending"][0]["envelope"]["approval_request_id"] == arid
+    g = sign_grant(build_grant(decision_sha256=env["decision_sha256"], approval_request_id=arid, grant_id="g-1",
+                               not_after=NOW + timedelta(minutes=10)), approver, "approver-alice")
+    assert c2.post("/grants", json=g, headers=auth()).json()["accepted"]
+    c3 = TestClient(app_on(path))                                   # restart again: the grant is still there
+    assert c3.get("/grants/" + arid, headers=auth()).json()["grant"]["approver_key_id"] == "approver-alice"
+    assert c3.post("/decline", json={"approval_request_id": arid}, headers=auth()).json()["declined"] is True
+    c4 = TestClient(app_on(path))
+    assert c4.get("/grants/" + arid, headers=auth()).json()["declined"] is True
+    assert [e["event"] for e in events] == ["issued", "granted", "declined"]
+    assert events[1]["approver"] == "approver-alice" and events[1]["hold_kind"] == "receipt"

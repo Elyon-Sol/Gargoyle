@@ -92,6 +92,11 @@ verifying itself for no external user; that is the failure mode to avoid.
   hold and the receipt, with a link to /approve from GARGOYLE_APPROVE_URL); posted in
   a thread, failures logged and ignored, the grant still only from the approver's
   key. 80 lines. All six roadmap steps are done.
+- Beta hardening (2026-10-19): gargoyle/holdstore.py backs the issuer's holds, grants,
+  declines and plans with SQLite (standard library; memory in tests), so a restart drops
+  nothing a person is acting on; `GET /health`; one JSON event per decision on stderr;
+  `gargoyle init` writes a systemd unit and an Apache virtual host; docs/beta-checklist.md
+  for the first client beta. 0.13.0.dev0.
 - Scoped grants live (2026-10-19): Claude Desktop asked for a plan covering two held
   writes; one card, one grant from the enrolled approver, then both writes ran with no
   card. The issuer log shows the plan hold's polls, one POST /grants, then two POST /issue

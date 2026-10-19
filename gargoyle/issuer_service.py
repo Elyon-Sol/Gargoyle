@@ -40,6 +40,7 @@ it again when the call runs. The pending set is in memory: one instance.
 
 import json
 import os
+import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
@@ -53,6 +54,7 @@ from gargoyle.approval import (REF_APPROVAL_APPROVER_NOT_ELIGIBLE, REF_APPROVAL_
                                verify_grant)
 from gargoyle.envelope import approval_terms
 from gargoyle.state import state_sha256, valid_description
+from gargoyle.holdstore import ENV_HOLDS_PATH, HoldStore
 from gargoyle.plans import (REF_PLAN_MALFORMED, REF_PLAN_STEP_NOT_PLANNABLE, REF_PLAN_STEP_REFUSED, build_plan,
                             sign_plan, valid_step)
 from gargoyle.notify import notifier_from_env
@@ -100,17 +102,33 @@ def build_issuer_app(
     approver_role: str = DEFAULT_APPROVER_ROLE,
     approver_groups: Optional[list] = None,
     console_entra: Optional[Dict[str, str]] = None,
+    hold_store: Optional[HoldStore] = None,
+    log_events: Optional[Callable[[Dict[str, Any]], None]] = None,
 ) -> FastAPI:
     """`on_hold(envelope, args)` is called once for every new hold (gargoyle.notify
     posts it to a webhook); it is notice, not admission, and its failure
     never affects the hold."""
     app = FastAPI(title="Gargoyle issuing service")
-    app.state.pending: Dict[str, Dict[str, Any]] = {}     # approval_request_id -> envelope
-    app.state.pending_args: Dict[str, Any] = {}           # approval_request_id -> the call's arguments
-    app.state.pending_state: Dict[str, Any] = {}          # approval_request_id -> the target's state when held
-    app.state.grants: Dict[str, Dict[str, Any]] = {}      # approval_request_id -> grant
-    app.state.declined: set = set()                       # approval_request_ids a human refused
-    app.state.pending_plans: Dict[str, Dict[str, Any]] = {}   # approval_request_id -> signed plan (gargoyle.plans)
+    # Everything a human may be in the middle of acting on lives in the hold
+    # store (gargoyle.holdstore): SQLite on disk in a deployment, memory in tests.
+    store = hold_store if hold_store is not None else HoldStore(None)
+    app.state.store = store
+    app.state.pending = store.dict("pending")             # approval_request_id -> envelope
+    app.state.pending_args = store.dict("pending_args")   # approval_request_id -> the call's arguments
+    app.state.pending_state = store.dict("pending_state") # approval_request_id -> the target's state when held
+    app.state.grants = store.dict("grants")               # approval_request_id -> [grant, ...]
+    app.state.declined = store.set("declined")            # approval_request_ids a human refused
+    app.state.pending_plans = store.dict("pending_plans") # approval_request_id -> signed plan (gargoyle.plans)
+    app.state.started_at = now().isoformat()
+
+    def event(kind: str, **fields: Any) -> None:
+        """One structured line per decision the service makes, for the
+        operator's log; never the admission path."""
+        if log_events is not None:
+            try:
+                log_events({"event": kind, "at": now().isoformat(), **fields})
+            except Exception:
+                pass
     registry = approver_registry if approver_registry is not None else ApproverRegistry(None)
     static_approvers = dict(approver_public_keys or {})
 
@@ -166,6 +184,7 @@ def build_issuer_app(
         result = issue(policy, body["target_url"], interaction, signing_key=signing_key, key_id=key_id,
                        ttl_seconds=ttl_seconds, now=now())
         if result.envelope is None:
+            event("refused", principal=who["principal"], tool=body["tool"], reason=result.decision.reason)
             return {"issued": False, "reason": result.decision.reason}
         covered = False
         plan_id = body.get("plan_id")
@@ -180,6 +199,8 @@ def build_issuer_app(
                 if plan["plan_id"] == plan_id and _complete(arid_p) and match_step(plan, body["tool"], body["args"]) is not None:
                     covered = True
                     break
+        event("issued", principal=who["principal"], tool=body["tool"], held=bool(result.envelope["requires_approval"]),
+              covered=covered, decision_id=result.envelope.get("decision_id"))
         if result.envelope["requires_approval"] and not covered:
             arid = result.envelope["approval_request_id"]
             app.state.pending[arid] = result.envelope
@@ -245,6 +266,7 @@ def build_issuer_app(
                                     approval=approval), signing_key, key_id)
         if held:
             app.state.pending_plans[plan["approval_request_id"]] = plan
+        event("plan", principal=who["principal"], steps=len(norm), held=held, plan_id=plan["plan_id"])
         return {"issued": True, "plan": plan, "held": held}
 
     def _plan_terms(plan):
@@ -306,12 +328,15 @@ def build_issuer_app(
             return {"accepted": False, "reason": g["reason"]}
         # The receipt's (or plan's) own terms: distinct approvers, from the named set if any.
         terms = approval_terms(env) if env else _plan_terms(plan)
-        have = app.state.grants.setdefault(arid, [])
+        have = list(app.state.grants.get(arid, []))
         if any(h["approver_key_id"] == grant["approver_key_id"] for h in have):
             return {"accepted": False, "reason": REF_APPROVAL_DUPLICATE_APPROVER}
         if terms["approvers"] is not None and grant["approver_key_id"] not in terms["approvers"]:
             return {"accepted": False, "reason": REF_APPROVAL_APPROVER_NOT_ELIGIBLE}
         have.append(grant)
+        app.state.grants[arid] = have                      # written back: the store persists on assignment
+        event("granted", approval_request_id=arid, approver=grant["approver_key_id"], collected=len(have), required=terms["required"],
+              hold_kind="plan" if plan else "receipt")
         return {"accepted": True, "reason": g["reason"], "collected": len(have), "required": terms["required"],
                 "complete": len(have) >= terms["required"]}
 
@@ -319,7 +344,7 @@ def build_issuer_app(
     async def decline(request: Request, authorization: Optional[str] = Header(default=None)):
         """A human's refusal: the hold is dropped, a waiting middleware learns
         at once. No signature is needed to say no; nothing can run on it."""
-        authenticate(authorization)
+        who = authenticate(authorization)
         try:
             body = await request.json()
         except Exception:
@@ -333,6 +358,7 @@ def build_issuer_app(
         app.state.pending_state.pop(arid, None)
         app.state.grants.pop(arid, None)
         app.state.declined.add(arid)
+        event("declined", approval_request_id=arid, by=who["principal"])
         return {"declined": True, "reason": None}
 
     @app.get("/grants/{approval_request_id}")
@@ -369,6 +395,7 @@ def build_issuer_app(
         if not isinstance(body, dict) or not valid_public_key_hex(body.get("public_key_hex")):
             raise _refuse(400, REF_ISSUER_BAD_REQUEST)
         result = registry.enroll(who["principal"], body["public_key_hex"], now=now())
+        event("enrolled", approver=who["principal"], replaced=result["replaced"])
         return {"enrolled": True, "key_id": who["principal"], "replaced": result["replaced"]}
 
     @app.get("/me")
@@ -380,6 +407,15 @@ def build_issuer_app(
         upn = who["principal"]
         return {"principal": upn, "may_approve": may_enroll(who, role=approver_role, groups=approver_groups) or upn in static_approvers,
                 "enrolled_public_key_hex": registry.public_hex().get(upn)}
+
+    @app.get("/health")
+    async def health():
+        """Public, for a monitor: the service is up, which policy it runs,
+        how much is waiting, and since when. No secrets."""
+        return {"ok": True, "policy": policy.pin(), "issuer_key_id": key_id,
+                "pending_receipts": len(app.state.pending), "pending_plans": len(app.state.pending_plans),
+                "enrolled_approvers": len(registry.public_hex()), "static_approvers": len(static_approvers),
+                "entra": bool(console_entra), "persistent": store.path != ":memory:", "started_at": app.state.started_at}
 
     @app.get("/approve-config")
     async def approve_config():
@@ -455,6 +491,8 @@ def app_from_env() -> FastAPI:
         audience=os.environ.get(ENV_AUDIENCE) or None,
         ttl_seconds=int(os.environ.get(ENV_RECEIPT_TTL, DEFAULT_TTL_SECONDS)),
         on_hold=notifier_from_env(os.environ),
+        hold_store=HoldStore(os.environ.get(ENV_HOLDS_PATH) or None),
+        log_events=(lambda e: sys.stderr.write(json.dumps(e, sort_keys=True) + "\n")) if os.environ.get("GARGOYLE_LOG_JSON") else None,
         approver_registry=ApproverRegistry(os.environ.get(ENV_APPROVERS_PATH)),
         approver_role=os.environ.get(ENV_APPROVER_ROLE, DEFAULT_APPROVER_ROLE),
         approver_groups=[g.strip() for g in os.environ.get(ENV_APPROVER_GROUPS, "").split(",") if g.strip()] or None,

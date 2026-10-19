@@ -21,7 +21,7 @@ your MCP server and lets through only what both agreed to.
 
 [![PyPI](https://img.shields.io/pypi/v/gargoyle-receipts)](https://pypi.org/project/gargoyle-receipts/)
 
-Status: pre-release (`0.12.0.dev0`, on PyPI as `gargoyle-receipts`). The wire format is `gargoyle/3` and may
+Status: pre-release (`0.13.0.dev0`, on PyPI as `gargoyle-receipts`). The wire format is `gargoyle/3` and may
 still change before the first release; it is specified in [SPEC.md](SPEC.md).
 
 ## What a receipt gives you
@@ -330,6 +330,8 @@ cannot attach receipts work unchanged. Configuration is by environment:
 | `GARGOYLE_MCP_ENTRA_TENANT`, `_CLIENT_ID`, `_SCOPE`, `_TOKEN_CACHE` | instead of a fixed client token: the user's own Entra ID token, written by `gargoyle login` (device code, MSAL cache, silent refresh); the principal is their UPN. No usable token refuses `REF_TARGET_LOGIN_REQUIRED` |
 | issuer `GARGOYLE_ENTRA_CLIENT_ID`, `GARGOYLE_ENTRA_SCOPE` | lets the console sign approvers in with Entra (code flow with PKCE, no library); the browser generates a non-exportable key and enrolls it under the UPN |
 | issuer `GARGOYLE_APPROVERS_PATH`, `GARGOYLE_APPROVER_ROLE`, `GARGOYLE_APPROVER_GROUPS` | where enrolled approvers persist (default `approvers.json` beside the keys) and which Entra app role (default `Approver`) or groups may enroll |
+| issuer `GARGOYLE_HOLDS_PATH` | SQLite file for holds, grants, declines and plans, so a restart loses nothing a person is acting on (`gargoyle issuer` sets `holds.sqlite` beside the keys); `GET /health` reports it |
+| issuer `GARGOYLE_LOG_JSON` | one JSON line per decision on stderr: issued, refused, granted, declined, plan, enrolled |
 | `GARGOYLE_HOLD_WEBHOOK_URL`, `GARGOYLE_APPROVE_URL` | issuer: POST a notice of every new hold (Slack incoming-webhook shape, `text` plus the hold) with a link to the console; notice only, the grant still needs the approver's key |
 | `GARGOYLE_MCP_STATE_PROBE` | `filesystem` (default) binds a held file write to the file's current state: the approver sees the change as a diff, the call refuses if the file moved before the run (`REF_VERIFY_STATE_MISMATCH`), and the execution receipt records pre and post state; `none` disables |
 | `GARGOYLE_MCP_ADAPTER_SPEC` | with `GARGOYLE_MCP_STATE_PROBE=graph`: the tool-to-resource mapping JSON (default: the reference naming) |
