@@ -21,7 +21,7 @@ your MCP server and lets through only what both agreed to.
 
 [![PyPI](https://img.shields.io/pypi/v/gargoyle-receipts)](https://pypi.org/project/gargoyle-receipts/)
 
-Status: pre-release (`0.10.0.dev0`, on PyPI as `gargoyle-receipts`). The wire format is `gargoyle/3` and may
+Status: pre-release (`0.11.0.dev0`, on PyPI as `gargoyle-receipts`). The wire format is `gargoyle/3` and may
 still change before the first release; it is specified in [SPEC.md](SPEC.md).
 
 ## What a receipt gives you
@@ -254,6 +254,22 @@ and `gargoyle audit` verifies them later offline.
 and through the alternative with OPA in Docker for sites that run a policy
 engine.
 
+## Microsoft 365 and other targets: adapters
+
+What a held call changes is the adapter's business (`gargoyle.adapters`):
+it describes the target's state before and after, tells the approver what
+the call means in plain words, and composes the call that undoes it. Files
+on the executor's host are the default. `GARGOYLE_MCP_STATE_PROBE=graph`
+selects the Graph adapter for a Microsoft Graph MCP server: inbox rules,
+calendar events, contacts and Teams membership are bound to their state,
+explained on the card ("creates inbox rule 'Fwd invoices' (to an outside
+address: x@evil.example)"), undone by the inverse Graph call, and a send
+is marked as something that cannot be undone. The adapter reads state
+through the upstream server itself, so the gate needs no Graph credential
+of its own. Which tool is which is a JSON spec; the reference naming is in
+`gargoyle/specs/graph-reference.json`, and a different server's names are
+mapped there, not in code.
+
 ## Remote mode
 
 Claude's hosted connectors (claude.ai in the browser, Claude Desktop's
@@ -303,6 +319,7 @@ cannot attach receipts work unchanged. Configuration is by environment:
 | issuer `GARGOYLE_APPROVERS_PATH`, `GARGOYLE_APPROVER_ROLE`, `GARGOYLE_APPROVER_GROUPS` | where enrolled approvers persist (default `approvers.json` beside the keys) and which Entra app role (default `Approver`) or groups may enroll |
 | `GARGOYLE_HOLD_WEBHOOK_URL`, `GARGOYLE_APPROVE_URL` | issuer: POST a notice of every new hold (Slack incoming-webhook shape, `text` plus the hold) with a link to the console; notice only, the grant still needs the approver's key |
 | `GARGOYLE_MCP_STATE_PROBE` | `filesystem` (default) binds a held file write to the file's current state: the approver sees the change as a diff, the call refuses if the file moved before the run (`REF_VERIFY_STATE_MISMATCH`), and the execution receipt records pre and post state; `none` disables |
+| `GARGOYLE_MCP_ADAPTER_SPEC` | with `GARGOYLE_MCP_STATE_PROBE=graph`: the tool-to-resource mapping JSON (default: the reference naming) |
 | `GARGOYLE_MCP_UPSTREAM_URL`, `GARGOYLE_MCP_UPSTREAM_TOKEN` | remote mode: the MCP server to front over Streamable HTTP, and its bearer |
 | `GARGOYLE_MCP_SNAPSHOT_DIR` | where the bytes a held, state-bound write replaces are kept (default `snapshots/` beside the audit log; `none` disables undo); the middleware then offers a `gargoyle_revert` tool that restores an approved change through the gate, held and state-bound like any write |
 | `GARGOYLE_MCP_AUDIT_LOG` | the evidence log: every decision, honored or refused, as one hash-chained JSON line with its receipt, grant and execution receipt; `gargoyle audit --log` verifies the file |

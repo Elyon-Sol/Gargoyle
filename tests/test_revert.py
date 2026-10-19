@@ -18,6 +18,7 @@ from gargoyle.mcp_server import EXECUTED_META_KEY, REASON_META_KEY, IssuerClient
 from gargoyle.policy import ELIGIBLE, Decision, refuse
 from gargoyle.revert import (REF_REVERT_NEEDS_DELETE, REF_REVERT_STATE_CHANGED, REF_REVERT_UNKNOWN, REVERT_TOOL,
                              SnapshotStore, plan_revert)
+from gargoyle.adapters import FilesystemAdapter
 from gargoyle.state import describe, filesystem_probe, state_sha256
 
 issuer, executor, approver, idp = (Ed25519PrivateKey.generate() for _ in range(4))
@@ -43,17 +44,17 @@ def test_snapshot_store_and_plan(tmp_path):
     store = SnapshotStore(str(tmp_path / "snap"))
     f = tmp_path / "n.md"; f.write_bytes(b"one\n")
     desc = describe(str(f), b"one\n")
-    meta = store.put("d-1", desc, b"one\n", "write_file")
+    meta = store.put("d-1", desc, b"one\n", "write_file", {"path": str(f), "content": "two\n"})
     assert meta["pre_state_sha256"] == state_sha256(desc) and meta["existed"] and meta["post_state_sha256"] is None
-    assert plan_revert(store, "d-1", filesystem_probe)["reason"] == REF_REVERT_UNKNOWN        # not finished yet
+    assert plan_revert(store, "d-1", FilesystemAdapter())["reason"] == REF_REVERT_UNKNOWN        # not finished yet
     f.write_bytes(b"two\n"); store.record_post("d-1", state_sha256(describe(str(f), b"two\n")))
-    plan = plan_revert(store, "last", filesystem_probe)
+    plan = plan_revert(store, "last", FilesystemAdapter())
     assert plan["reverts"] == "d-1" and plan["params"] == {"name": "write_file", "arguments": {"path": str(f), "content": "one\n"}}
     f.write_bytes(b"three\n")
-    assert plan_revert(store, "d-1", filesystem_probe)["reason"] == REF_REVERT_STATE_CHANGED
-    assert plan_revert(store, "nope", filesystem_probe)["reason"] == REF_REVERT_UNKNOWN
-    store.put("d-2", describe(str(tmp_path / "new.md"), None), None, "write_file"); store.record_post("d-2", "b" * 64)
-    assert plan_revert(store, "d-2", filesystem_probe)["reason"] == REF_REVERT_NEEDS_DELETE
+    assert plan_revert(store, "d-1", FilesystemAdapter())["reason"] == REF_REVERT_STATE_CHANGED
+    assert plan_revert(store, "nope", FilesystemAdapter())["reason"] == REF_REVERT_UNKNOWN
+    store.put("d-2", describe(str(tmp_path / "new.md"), None), None, "write_file", {"path": str(tmp_path / "new.md"), "content": "x"}); store.record_post("d-2", "b" * 64)
+    assert plan_revert(store, "d-2", FilesystemAdapter())["reason"] == REF_REVERT_NEEDS_DELETE
 
 
 def _rig(tmp_path, root):

@@ -99,6 +99,7 @@ ENV_APPROVAL_TIMEOUT = "GARGOYLE_MCP_APPROVAL_TIMEOUT_SECONDS"
 ENV_POLL_SECONDS = "GARGOYLE_MCP_POLL_SECONDS"
 ENV_AUDIT_LOG = "GARGOYLE_MCP_AUDIT_LOG"
 ENV_STATE_PROBE = "GARGOYLE_MCP_STATE_PROBE"
+ENV_ADAPTER_SPEC = "GARGOYLE_MCP_ADAPTER_SPEC"    # with GARGOYLE_MCP_STATE_PROBE=graph: the tool mapping JSON
 ENV_SNAPSHOT_DIR = "GARGOYLE_MCP_SNAPSHOT_DIR"   # where pre-change snapshots live (default: snapshots/ beside the audit log); "none" disables undo   # "filesystem" (default): bind held calls to the target file's state; "none" to disable
 REF_TARGET_LOGIN_REQUIRED = "REF_TARGET_LOGIN_REQUIRED"   # Entra login mode and no usable token: run `gargoyle login`   # the evidence log: one hash-chained JSON line per decision, honored or refused
 
@@ -302,15 +303,18 @@ class ServerState:
         audit_log: Optional[str] = None,
         state_probe: Any = "filesystem",
         snapshot_dir: Optional[str] = None,
+        adapter_spec: Optional[str] = None,
     ) -> None:
-        from gargoyle.state import probe_from_name
+        from gargoyle.adapters import adapter_from_name
         from gargoyle.revert import SnapshotStore
         self.config = config
-        self.probe = state_probe if callable(state_probe) else probe_from_name(state_probe)
+        # The adapter describes, explains and undoes what a tool changes
+        # (gargoyle.adapters): files on this host by default, a Graph server by spec.
+        self.adapter = adapter_from_name(state_probe, upstream, adapter_spec)
         if snapshot_dir is None and audit_log:
             snapshot_dir = str(Path(audit_log).parent / "snapshots")
         self.snapshots: Optional[SnapshotStore] = (SnapshotStore(snapshot_dir)
-                                                   if snapshot_dir and snapshot_dir != "none" and self.probe is not None else None)
+                                                   if snapshot_dir and snapshot_dir != "none" and self.adapter is not None else None)
         self.upstream = upstream
         self.issuer_client = issuer_client
         self.evidence: Optional[EvidenceLog] = EvidenceLog(audit_log) if audit_log else None
@@ -363,8 +367,8 @@ def _gate(state: ServerState, params: Dict[str, Any]) -> Dict[str, Any]:
         # verified against the pinned issuer key like any other. The
         # target's current state goes with the request (gargoyle.state), so
         # a hold is approved against it and bound to it.
-        pre_state = state.probe(name, args) if state.probe is not None else None
-        res = state.issuer_client.issue(state.config["target_id"], name, args, state=pre_state)
+        probed = state.adapter.probe(name, args) if state.adapter is not None else None
+        res = state.issuer_client.issue(state.config["target_id"], name, args, state=probed[0] if probed else None)
         if res["envelope"] is None:
             return refused(res["reason"])
         envelope, self_issued = res["envelope"], True
@@ -376,12 +380,12 @@ def _gate(state: ServerState, params: Dict[str, Any]) -> Dict[str, Any]:
 
     # A state-bound receipt is checked against the state as it is now, after
     # any wait for approval: if the target moved, the call does not run.
-    live_state = None
+    live_state, now_probe = None, None
     if isinstance(envelope, dict) and isinstance(envelope.get("request_context"), dict) \
-            and "state_sha256" in envelope["request_context"] and state.probe is not None:
+            and "state_sha256" in envelope["request_context"] and state.adapter is not None:
         from gargoyle.state import state_sha256 as _state_hash
-        now_desc = state.probe(name, args)
-        live_state = _state_hash(now_desc) if now_desc is not None else None
+        now_probe = state.adapter.probe(name, args)
+        live_state = _state_hash(now_probe[0]) if now_probe is not None else None
     verdict = state.consumer.check(envelope, call_for(name, args, state.config["principal"], live_state),
                                    grant=grant)
     if not verdict.honored:
@@ -390,12 +394,9 @@ def _gate(state: ServerState, params: Dict[str, Any]) -> Dict[str, Any]:
     # Undo material: for a held, state-bound call, keep the target as it is
     # right now (the state the receipt bound and the check just confirmed).
     if (state.snapshots is not None and isinstance(envelope, dict) and envelope.get("requires_approval")
-            and live_state is not None and isinstance(envelope.get("decision_id"), str)):
+            and now_probe is not None and isinstance(envelope.get("decision_id"), str)):
         try:
-            desc = state.probe(name, args)
-            if desc is not None and state.config and state.config.get("principal"):
-                from gargoyle.state import read_target
-                state.snapshots.put(envelope["decision_id"], desc, read_target(desc), name)
+            state.snapshots.put(envelope["decision_id"], now_probe[0], now_probe[1], name, args)
         except Exception as exc:
             sys.stderr.write("gargoyle: snapshot failed: %s\n" % exc)
 
@@ -445,14 +446,15 @@ def _attest(state: ServerState, envelope: Optional[Dict[str, Any]], outputs: Any
     probed again after the run, so the receipt says what it changed."""
     if state.consumer is None or not state.consumer.attests or envelope is None:
         return None
-    post = None
-    if params is not None and state.probe is not None and "state_sha256" in (envelope.get("request_context") or {}):
+    post, post_data = None, None
+    if params is not None and state.adapter is not None and "state_sha256" in (envelope.get("request_context") or {}):
         from gargoyle.state import state_sha256 as _state_hash
-        desc = state.probe(str(params.get("name")), params.get("arguments", {}))
-        post = _state_hash(desc) if desc is not None else None
+        probed = state.adapter.probe(str(params.get("name")), params.get("arguments", {}))
+        if probed is not None:
+            post, post_data = _state_hash(probed[0]), probed[1]
     if post is not None and state.snapshots is not None and isinstance(envelope.get("decision_id"), str):
         try:
-            state.snapshots.record_post(envelope["decision_id"], post)
+            state.snapshots.record_post(envelope["decision_id"], post, post_data)
         except Exception:
             pass
     return state.consumer.attest(envelope, outputs, post_state_sha256=post)
@@ -532,7 +534,7 @@ def handle_message(state: ServerState, msg: Dict[str, Any]) -> Optional[Dict[str
             if state.snapshots is None:
                 return _success(msg_id, {"content": [{"type": "text", "text": "refused: undo is not enabled"}], "isError": True,
                                          "_meta": {EXECUTED_META_KEY: False, REASON_META_KEY: "REF_REVERT_UNKNOWN"}})
-            plan = plan_revert(state.snapshots, str((params.get("arguments") or {}).get("decision_id") or "last"), state.probe)
+            plan = plan_revert(state.snapshots, str((params.get("arguments") or {}).get("decision_id") or "last"), state.adapter)
             if "reason" in plan:
                 return _success(msg_id, {"content": [{"type": "text", "text": "refused: " + plan["reason"]}], "isError": True,
                                          "_meta": {EXECUTED_META_KEY: False, REASON_META_KEY: plan["reason"]}})
@@ -719,7 +721,8 @@ if __name__ == "__main__":
     try:
         serve_stdio(ServerState(config_from_env(), upstream=_upstream, issuer_client=issuer_client_from_env(),
                                 audit_log=_os.environ.get(ENV_AUDIT_LOG) or None,
-                                state_probe=_os.environ.get(ENV_STATE_PROBE) or "filesystem"))
+                                state_probe=_os.environ.get(ENV_STATE_PROBE) or "filesystem",
+                                adapter_spec=_os.environ.get(ENV_ADAPTER_SPEC) or None))
     finally:
         if _upstream is not None:
             _upstream.close()

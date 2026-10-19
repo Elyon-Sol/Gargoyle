@@ -61,7 +61,9 @@ def valid_description(d: Any) -> bool:
             and (d.get("size") is None or (isinstance(d["size"], int) and not isinstance(d["size"], bool) and d["size"] >= 0))
             and (d.get("sha256") is None) == (d.get("size") is None)
             and ("text" not in d or isinstance(d["text"], str))
-            and set(d) <= {"ref", "sha256", "size", "text"})
+            and ("summary" not in d or isinstance(d["summary"], str))
+            and ("irreversible" not in d or isinstance(d["irreversible"], bool))
+            and set(d) <= {"ref", "sha256", "size", "text", "summary", "irreversible"})
 
 
 def filesystem_probe(tool: str, args: Any) -> Optional[Dict[str, Any]]:

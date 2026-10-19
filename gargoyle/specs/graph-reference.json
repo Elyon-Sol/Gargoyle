@@ -1,0 +1,56 @@
+{
+  "internal_domains": [],
+  "kinds": {
+    "mailRule": {
+      "label": "inbox rule", "name_field": "displayName", "id_field": "id",
+      "list_tool": "list_mail_rules", "list_args": {}, "items_path": "value",
+      "get_tool": "get_mail_rule", "id_arg": "id",
+      "create_tool": "create_mail_rule", "create_arg": "rule",
+      "update_tool": "update_mail_rule", "update_arg": "rule",
+      "delete_tool": "delete_mail_rule",
+      "writable_fields": ["displayName", "sequence", "conditions", "exceptions", "actions", "isEnabled"]
+    },
+    "event": {
+      "label": "calendar event", "name_field": "subject", "id_field": "id",
+      "list_tool": "list_events", "list_args": {}, "items_path": "value",
+      "get_tool": "get_event", "id_arg": "id",
+      "create_tool": "create_event", "create_arg": "event",
+      "update_tool": "update_event", "update_arg": "event",
+      "delete_tool": "delete_event",
+      "writable_fields": ["subject", "body", "start", "end", "location", "attendees", "isAllDay", "showAs"]
+    },
+    "contact": {
+      "label": "contact", "name_field": "displayName", "id_field": "id",
+      "list_tool": "list_contacts", "list_args": {}, "items_path": "value",
+      "get_tool": "get_contact", "id_arg": "id",
+      "create_tool": "create_contact", "create_arg": "contact",
+      "update_tool": "update_contact", "update_arg": "contact",
+      "delete_tool": "delete_contact",
+      "writable_fields": ["displayName", "givenName", "surname", "emailAddresses", "businessPhones", "mobilePhone", "companyName"]
+    },
+    "channelMember": {
+      "label": "Teams channel member", "name_field": "displayName", "id_field": "id",
+      "list_tool": "list_channel_members", "list_args": {}, "items_path": "value",
+      "get_tool": "get_channel_member", "id_arg": "id",
+      "create_tool": "add_channel_member", "create_arg": "member",
+      "delete_tool": "remove_channel_member",
+      "writable_fields": ["userId", "roles"]
+    }
+  },
+  "tools": {
+    "create_mail_rule": {"kind": "mailRule", "op": "create"},
+    "update_mail_rule": {"kind": "mailRule", "op": "update"},
+    "delete_mail_rule": {"kind": "mailRule", "op": "delete"},
+    "create_event": {"kind": "event", "op": "create"},
+    "update_event": {"kind": "event", "op": "update"},
+    "delete_event": {"kind": "event", "op": "delete"},
+    "create_contact": {"kind": "contact", "op": "create"},
+    "update_contact": {"kind": "contact", "op": "update"},
+    "delete_contact": {"kind": "contact", "op": "delete"},
+    "add_channel_member": {"kind": "channelMember", "op": "create"},
+    "remove_channel_member": {"kind": "channelMember", "op": "delete"},
+    "send_mail": {"op": "irreversible", "label": "send mail", "summary": "sends mail to {to}, subject '{subject}'"},
+    "send_channel_message": {"op": "irreversible", "label": "Teams post", "summary": "posts to Teams channel {channelId}"},
+    "reply_to_mail": {"op": "irreversible", "label": "mail reply", "summary": "replies to message {messageId}"}
+  }
+}

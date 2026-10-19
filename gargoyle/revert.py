@@ -32,6 +32,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from gargoyle.state import state_sha256
+from gargoyle.adapters import (REF_REVERT_IRREVERSIBLE, REF_REVERT_NEEDS_DELETE, REF_REVERT_NOT_TEXT, REF_REVERT_UNKNOWN,
+                               REF_REVERT_UNSUPPORTED)
 
 REVERT_TOOL = "gargoyle_revert"
 REVERT_TOOL_DEF = {
@@ -42,10 +44,7 @@ REVERT_TOOL_DEF = {
     "inputSchema": {"type": "object", "properties": {"decision_id": {"type": "string", "default": "last"}}},
 }
 
-REF_REVERT_UNKNOWN = "REF_REVERT_UNKNOWN"
 REF_REVERT_STATE_CHANGED = "REF_REVERT_STATE_CHANGED"
-REF_REVERT_NEEDS_DELETE = "REF_REVERT_NEEDS_DELETE"
-REF_REVERT_NOT_TEXT = "REF_REVERT_NOT_TEXT"
 
 
 class SnapshotStore:
@@ -57,9 +56,12 @@ class SnapshotStore:
     def _ensure(self) -> None:
         self.dir.mkdir(parents=True, exist_ok=True)
 
-    def put(self, decision_id: str, description: Dict[str, Any], data: Optional[bytes], tool: str) -> Dict[str, Any]:
+    def put(self, decision_id: str, description: Dict[str, Any], data: Optional[bytes], tool: str,
+            args: Any = None) -> Dict[str, Any]:
         """Keep the pre-state of `decision_id`: the bytes (None when the target
-        did not exist) and a sidecar. Returns the sidecar."""
+        did not exist) and a sidecar naming the call, so the same probe can be
+        repeated later to ask whether the target is still as the call left it.
+        Returns the sidecar."""
         self._ensure()
         key = state_sha256(description)
         if data is not None:
@@ -70,17 +72,23 @@ class SnapshotStore:
                     os.chmod(blob, stat.S_IRUSR | stat.S_IWUSR)
                 except OSError:
                     pass
-        meta = {"decision_id": decision_id, "tool": tool, "ref": description["ref"], "pre_state_sha256": key,
+        meta = {"decision_id": decision_id, "tool": tool, "args": args, "ref": description["ref"], "pre_state_sha256": key,
                 "existed": data is not None, "post_state_sha256": None, "at": datetime.now(timezone.utc).isoformat()}
         (self.dir / (decision_id + ".json")).write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
         return meta
 
-    def record_post(self, decision_id: str, post_state_sha256: Optional[str]) -> None:
+    def record_post(self, decision_id: str, post_state_sha256: Optional[str], data: Optional[bytes] = None) -> None:
+        """The state the call left: its hash in the sidecar, its bytes under
+        that hash (an adapter may need both snapshots to compose the undo)."""
         p = self.dir / (decision_id + ".json")
         if p.exists():
             meta = json.loads(p.read_text(encoding="utf-8"))
             meta["post_state_sha256"] = post_state_sha256
             p.write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
+        if data is not None and post_state_sha256:
+            blob = self.dir / (post_state_sha256 + ".bin")
+            if not blob.exists():
+                blob.write_bytes(data)
 
     def sidecars(self) -> List[Dict[str, Any]]:
         if not self.dir.exists():
@@ -100,25 +108,26 @@ class SnapshotStore:
         return p.read_bytes() if p.exists() else None
 
 
-def plan_revert(store: SnapshotStore, decision_id: str, probe) -> Dict[str, Any]:
-    """The write that undoes `decision_id`, or a refusal:
-    {"params": {"name": "write_file", "arguments": {...}}, "reverts": id} |
-    {"reason": REF_REVERT_*}. `probe` is the state probe, used to confirm the
+def plan_revert(store: SnapshotStore, decision_id: str, adapter) -> Dict[str, Any]:
+    """The call that undoes `decision_id`, or a refusal:
+    {"params": {"name", "arguments"}, "reverts": id} | {"reason": REF_REVERT_*}.
+    The adapter composes the inverse from the two snapshots and confirms the
     target is still as that call left it."""
     meta = store.find(decision_id or "last")
     if meta is None or not meta.get("post_state_sha256"):
         return {"reason": REF_REVERT_UNKNOWN}
-    if not meta.get("existed"):
-        return {"reason": REF_REVERT_NEEDS_DELETE}
-    data = store.content(meta["pre_state_sha256"])
-    if data is None:
+    if adapter is None:
+        return {"reason": REF_REVERT_UNSUPPORTED}
+    pre = store.content(meta["pre_state_sha256"]) if meta.get("existed") else None
+    if meta.get("existed") and pre is None:
         return {"reason": REF_REVERT_UNKNOWN}
-    try:
-        text = data.decode("utf-8")
-    except UnicodeDecodeError:
-        return {"reason": REF_REVERT_NOT_TEXT}
-    args = {"path": meta["ref"], "content": text}
-    now = probe("write_file", args) if probe is not None else None
-    if now is None or state_sha256(now) != meta["post_state_sha256"]:
+    post = store.content(meta["post_state_sha256"])
+    plan = adapter.restore(meta, pre, post)
+    if "reason" in plan:
+        return plan
+    # Still as the original call left it? Repeat the original call's probe
+    # now and compare with the state recorded after it ran.
+    probe = adapter.probe(meta["tool"], meta.get("args") if meta.get("args") is not None else {"path": meta["ref"]})
+    if probe is None or state_sha256(probe[0]) != meta["post_state_sha256"]:
         return {"reason": REF_REVERT_STATE_CHANGED}
-    return {"params": {"name": "write_file", "arguments": args}, "reverts": meta["decision_id"]}
+    return {"params": plan["params"], "reverts": meta["decision_id"]}

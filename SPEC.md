@@ -232,6 +232,9 @@ apply to that state alone. The description is the executor's own statement
 state_sha256 = sha256(canonical_json(description))
 ```
 
+A description may also carry `summary`, a sentence for the approver in
+the target's own terms, and `irreversible`, true when no later call can
+restore the state (a sent message); neither is hashed, both are shown.
 The issuer records `state_sha256` in the receipt's `request_context`,
 hashed and signed, when the request carries a description; the reference
 issuing service accepts it as `state` beside `args` and shows it to the

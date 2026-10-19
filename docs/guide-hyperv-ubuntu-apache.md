@@ -506,6 +506,50 @@ had not. And a hosted client reaches the remote gate from the vendor's
 servers, so that port faces the internet (Part 7); the capability URL is
 the credential until OAuth is in place.
 
+## Part 9: Microsoft 365 through a Graph MCP server
+
+The same gate covers Outlook, calendar, contacts and Teams when the
+upstream is a Microsoft Graph MCP server. Three decisions, then one
+command.
+
+1. **The server.** Any MCP server that exposes Graph as tools. Register it
+   in Entra as its own application with the delegated permissions it
+   needs (`MailboxSettings.ReadWrite` for inbox rules, `Mail.Send`,
+   `Calendars.ReadWrite`, `Contacts.ReadWrite`, `ChannelMember.ReadWrite.All`
+   as applicable); the gate never holds a Graph credential, it reads state
+   through the server with the same identity the write will use.
+2. **The mapping.** The gate's reference naming is
+   `gargoyle/specs/graph-reference.json` (`list_mail_rules`,
+   `create_mail_rule`, `send_mail` and so on). If your server names its
+   tools differently, copy that file, change the tool names, and set
+   `GARGOYLE_MCP_ADAPTER_SPEC` to your copy. Put your mail domains in
+   `internal_domains` so the card calls out forwarding or sending to
+   anyone else.
+3. **The policy.** In `rules.json`, hold what matters and free the rest:
+
+```json
+{"tools": ["create_mail_rule", "update_mail_rule"], "action": "hold", "approvals": 1},
+{"tools": ["send_mail", "reply_to_mail"], "action": "hold"},
+{"tools": ["delete_mail_rule"], "action": "hold", "approvers": ["sysops@yourclient.com"]},
+{"tools": ["list_*", "get_*", "read_*", "search_*"], "action": "allow"}
+```
+
+Then run the gate in remote mode in front of the server (Part 7), with
+the Graph adapter:
+
+```bash
+gargoyle remote --out . --port 8444 --ssl-certfile ... --ssl-keyfile ... --state-probe graph --upstream-url https://graph-mcp.yourclient.com/mcp --upstream-token ...
+```
+
+What the approver sees for a rule: "creates inbox rule 'Fwd invoices' (to
+an outside address: x@evil.example); 3 inbox rule(s) exist now", the
+current rule set under a fold, and the proposed rule. For a send: "sends
+mail to bob@partner.example, subject 'Q3 numbers' (to an outside address:
+bob@partner.example). Cannot be undone." Undo works for rules, events,
+contacts and membership through the inverse Graph call, held and
+state-bound like everything else; a send has no undo and the gate says so
+before it is approved.
+
 ## Operations
 
 | Task | How |

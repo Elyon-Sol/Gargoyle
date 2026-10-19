@@ -92,6 +92,17 @@ verifying itself for no external user; that is the failure mode to avoid.
   hold and the receipt, with a link to /approve from GARGOYLE_APPROVE_URL); posted in
   a thread, failures logged and ignored, the grant still only from the approver's
   key. 80 lines. All six roadmap steps are done.
+- Graph adapter (2026-10-19): gargoyle/adapters.py. The probe, the card text and the undo
+  are now an adapter's job; FilesystemAdapter is the old behaviour, GraphAdapter fronts a
+  Microsoft Graph MCP server by a JSON spec (gargoyle/specs/graph-reference.json: mail
+  rules, events, contacts, Teams membership; sends and posts as irreversible). State is
+  read through the upstream server with the write's own credential; the card says what
+  the call does and calls out addresses outside the internal domains; a create is undone
+  by deleting the object that appeared, an update by restoring the writable fields, a
+  delete by re-creating; an undo is refused before any card if the object changed since.
+  Snapshots now keep both states and the original call, so the "still as left" check
+  repeats the original probe. Tested against a fake Graph server; not yet run against a
+  real one (the server choice and its Entra permissions are the prerequisite). 0.11.0.dev0.
 - Model-agnostic by record (2026-10-19): evidence entries (gargoyle-evidence/3) carry the
   MCP client's name and version from the initialize handshake; `gargoyle audit` prints
   "via Claude Desktop 1.4". The receipt stays model-agnostic by design. Guide Part 8:

@@ -207,7 +207,8 @@ function stateBlock(item) {
   const st = item.state; if (!st) return "";
   const args = item.args || {};
   let head;
-  if (st.sha256 === null || st.sha256 === undefined) head = `creates <code>${esc(st.ref)}</code> (does not exist yet)`;
+  if (st.summary) head = esc(st.summary) + (st.irreversible ? ' <span class="badge bad">cannot be undone</span>' : "");
+  else if (st.sha256 === null || st.sha256 === undefined) head = `creates <code>${esc(st.ref)}</code> (does not exist yet)`;
   else head = `changes <code>${esc(st.ref)}</code> (${st.size} bytes now, state ${esc(String(st.sha256).slice(0, 12))}&hellip;)`;
   let body = "";
   if (typeof st.text === "string" && typeof args.content === "string") {
@@ -215,6 +216,8 @@ function stateBlock(item) {
     body = `<pre class="diff">${rows.join("\n")}</pre>`;
   } else if (st.sha256 !== null && st.sha256 !== undefined && typeof args.content === "string") {
     body = `<div class="note">current content is not text or is too large to show; the new content is below</div>`;
+  } else if (typeof st.text === "string") {
+    body = `<details><summary>state now</summary><pre>${esc(st.text)}</pre></details>`;   // the object as it is; the proposed arguments follow
   }
   return `<div class="state"><strong>${head}</strong>${body}</div>`;
 }

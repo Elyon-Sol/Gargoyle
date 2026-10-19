@@ -138,6 +138,7 @@ def build_remote_app(
     issuer_url: Optional[str] = None,
     audit_log: Optional[str] = None,
     state_probe: Any = "none",
+    adapter_spec: Optional[str] = None,
     snapshot_dir: Optional[str] = None,
     issuer_http: Any = None,
     approval_timeout: float = 300.0,
@@ -177,7 +178,7 @@ def build_remote_app(
                 kw["sleep"] = sleep
             ic = IssuerClient(issuer_url, issuer_token, **kw)
         st = ServerState(dict(config, principal=principal), replay_cache=replay, upstream=upstream, issuer_client=ic,
-                         audit_log=audit_log, state_probe=state_probe, snapshot_dir=snapshot_dir)
+                         audit_log=audit_log, state_probe=state_probe, snapshot_dir=snapshot_dir, adapter_spec=adapter_spec)
         # One log and one snapshot store for the whole process: the chain and
         # the sidecars must not interleave from several session objects.
         if st.evidence is not None:

@@ -238,6 +238,7 @@ def cmd_remote(args) -> int:
     app = build_remote_app(config, tokens, upstream=upstream, issuer_url=env.get("GARGOYLE_MCP_ISSUER_URL"),
                            audit_log=env.get("GARGOYLE_MCP_AUDIT_LOG") or str(out / "remote-audit.jsonl"),
                            state_probe=args.state_probe, snapshot_dir=env.get("GARGOYLE_MCP_SNAPSHOT_DIR"),
+                           adapter_spec=args.adapter_spec or env.get("GARGOYLE_MCP_ADAPTER_SPEC"),
                            approval_timeout=float(env.get("GARGOYLE_MCP_APPROVAL_TIMEOUT_SECONDS", "300")))
     tls = {}
     if args.ssl_certfile or args.ssl_keyfile:
@@ -375,8 +376,9 @@ def main(argv=None) -> int:
     p.add_argument("--ssl-certfile"); p.add_argument("--ssl-keyfile")
     p.add_argument("--upstream-url", help="front a remote MCP server (Streamable HTTP)")
     p.add_argument("--upstream-token", help="bearer for that server (or GARGOYLE_MCP_UPSTREAM_TOKEN)")
-    p.add_argument("--state-probe", default="none", choices=["none", "filesystem"],
-                   help="filesystem only when the upstream is a local filesystem server on this host")
+    p.add_argument("--state-probe", default="none", choices=["none", "filesystem", "graph"],
+                   help="filesystem when the upstream is a local filesystem server on this host; graph for a Microsoft Graph MCP server")
+    p.add_argument("--adapter-spec", help="with --state-probe graph: the tool mapping JSON (default: the reference naming)")
     p.add_argument("--verbose", action="store_true")
     p.add_argument("rest", nargs=argparse.REMAINDER, help="-- <command> for a stdio server to front")
     p.set_defaults(fn=cmd_remote)
