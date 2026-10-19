@@ -160,7 +160,8 @@ def verify_log(
     {"accepted", "reason", "tail_sha256", "count", "honored", "refused",
      "entries": [{"seq", "kind", "tool", "principal", "accepted", "reason", "verdict", "released_by"}, ...]},
     `reason` the verification outcome, `verdict` what the executor recorded,
-    `released_by` the approver key ids of the grants an honored held call carried.
+    `released_by` the approver key ids of the grants an honored held call carried,
+    `state` {"pre", "post"} the target's state hashes when the call was state-bound.
     Verification continues past a bad entry so the report names every one."""
     trust = dict(issuer_public_keys=issuer_public_keys, executor_public_keys=executor_public_keys,
                  approver_public_keys=approver_public_keys)
@@ -178,7 +179,7 @@ def verify_log(
             rc = rc if isinstance(rc, dict) else {}
             report.append({"seq": None, "kind": None, "tool": rc.get("tool"), "principal": rc.get("principal"),
                            "accepted": False, "reason": REF_EVIDENCE_UNCHAINED if legacy else REF_EVIDENCE_MALFORMED,
-                           "verdict": None, "released_by": []})
+                           "verdict": None, "released_by": [], "state": None})
             all_ok = False
             continue
         e = raw
@@ -206,8 +207,12 @@ def verify_log(
         counts[e["kind"]] += 1
         released_by = [g.get("approver_key_id") for g in (e["grant"] if isinstance(e["grant"], list) else [e["grant"]])
                        if isinstance(g, dict)] if e["grant"] is not None else []
+        ex = e["execution"] if isinstance(e["execution"], dict) else {}
+        state = ({"pre": ex.get("pre_state_sha256"), "post": ex.get("post_state_sha256")}
+                 if ex.get("pre_state_sha256") or ex.get("post_state_sha256") else None)
         report.append({"seq": e["seq"], "kind": e["kind"], "tool": e["tool"], "principal": e["principal"],
-                       "accepted": ok, "reason": reason, "verdict": e["reason"], "released_by": released_by})
+                       "accepted": ok, "reason": reason, "verdict": e["reason"], "released_by": released_by,
+                       "state": state})
         all_ok = all_ok and ok
         # The chain continues from what the file says, so one bad entry is
         # reported once rather than cascading into every later one.

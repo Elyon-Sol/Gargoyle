@@ -246,6 +246,10 @@ def cmd_audit(args) -> int:
             why = (" (%s)" % r["verdict"]) if r["kind"] == "refused" and r["verdict"] else ""
             if r.get("released_by"):
                 why += " released by " + ", ".join(r["released_by"])
+            if r.get("state"):
+                # A state-bound call: the target as it was approved, and as the run left it.
+                pre, post = (r["state"].get("pre") or "")[:8], (r["state"].get("post") or "")[:8]
+                why += " state %s -> %s" % (pre or "?", post or "?") if post else " state %s" % pre
             print("%4s %-5s %-8s %-24s %-28s %s%s" % (r["seq"] if r["seq"] is not None else "?",
                                                       "ok" if r["accepted"] else "FAIL", r["kind"] or "?",
                                                       (r["tool"] or "?")[:24], (r["principal"] or "?")[:28], r["reason"], why))

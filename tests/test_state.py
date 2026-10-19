@@ -168,3 +168,13 @@ def test_middleware_refuses_when_the_file_moved_between_card_and_run(tmp_path):
     chain = verify_chain(gate["envelope"], ex, grant=gate["grant"], issuer_public_keys=ISSUER_KEYS,
                          executor_public_keys={"executor-1": executor.public_key()}, approver_public_keys={"approver-1": approver.public_key()})
     assert chain["reason"] == ACCEPT_CHAIN_VERIFIED
+    # The audit names the state transition.
+    from gargoyle.evidence import verify_log
+    entry = {"evidence_version": "gargoyle-evidence/2", "seq": 1, "prev_sha256": "0" * 64, "at": NOW.isoformat(), "kind": "honored",
+             "tool": "write_file", "args_sha256": gate["envelope"]["request_context"]["args_sha256"], "principal": "agent-7",
+             "reason": gate["reason"], "receipt": gate["envelope"], "grant": gate["grant"], "execution": ex}
+    from gargoyle.evidence import entry_sha256
+    entry["entry_sha256"] = entry_sha256(entry)
+    v = verify_log([entry], issuer_public_keys=ISSUER_KEYS, executor_public_keys={"executor-1": executor.public_key()},
+                   approver_public_keys={"approver-1": approver.public_key()})
+    assert v["accepted"] and v["entries"][0]["state"] == {"pre": ex["pre_state_sha256"], "post": ex["post_state_sha256"]}
