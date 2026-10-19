@@ -433,6 +433,21 @@ you approve or decline, and it runs only if the file is still as the
 original change left it. The audit then shows the revert row with
 "reverts #N" pointing at the row it undid, proven by the state hashes.
 
+**5.6 One card for a whole task.** For a long task the assistant can ask
+for a plan instead of a card per write:
+
+> Using filesystem-gargoyle, request a plan for rewriting the three notes
+> files under C:\gargoyle-poc\project, then do it.
+
+The assistant calls `gargoyle_plan` with the steps; one card appears
+listing them, with a warning that approving the plan releases every
+matching call without showing its contents. Approve it, and the writes
+run with no further cards until the steps are used up or the plan
+expires. A write outside the plan still gets its own card. The audit
+shows "(plan 1a2b3c4d step 2)" on each released row. To keep a tool out
+of plans, add `"plan": false` to its hold rule; the reference rules keep
+sends individual.
+
 ## Part 6: the audit trail
 
 Every decision appended one line to `C:\gargoyle\audit.jsonl`, honored or

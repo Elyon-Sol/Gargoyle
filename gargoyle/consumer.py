@@ -273,6 +273,7 @@ class Consumer:
         *,
         grant: Any = None,
         now: Optional[datetime] = None,
+        plan_release: Any = None,
     ) -> Verdict:
         """Decide whether to honor `envelope` for `call` ({"tool", "args",
         "principal"}, the principal being the one this consumer
@@ -321,7 +322,26 @@ class Consumer:
         # inside the signed region, so they are the issuer's word, not the
         # caller's. The grant is checked and claimed before the receipt is
         # claimed, so a refused grant leaves the receipt unspent.
-        if envelope["requires_approval"]:
+        if envelope["requires_approval"] and plan_release is not None:
+            # A scoped grant (gargoyle.plans): the plan's step is claimed once
+            # in place of a per-call grant id.
+            from gargoyle.plans import verify_plan_release
+            approver_keys = self._approver_keys(key_record_view, envelope.get("issuer_key_id"), now)
+            if not approver_keys:
+                return Verdict(False, REF_TARGET_NO_APPROVER_TRUST)
+            r = verify_plan_release(plan_release, envelope, call, issuer_public_keys=pinned_public_keys,
+                                    approver_public_keys=approver_keys, now=now, clock_skew=self.clock_skew)
+            if not r["accepted"]:
+                return Verdict(False, r["reason"])
+            plan = plan_release["plan"]
+            try:
+                plan_exp = datetime.fromisoformat(plan["not_after"]) + self.clock_skew
+            except (ValueError, TypeError, KeyError):
+                plan_exp = None
+            if not self.replay_cache.check_and_claim("plan:%s:%d" % (plan["plan_id"], r["step"]), plan_exp, now=now):
+                from gargoyle.plans import REF_PLAN_STEP_CONSUMED
+                return Verdict(False, REF_PLAN_STEP_CONSUMED)
+        elif envelope["requires_approval"]:
             grants = as_grant_list(grant)
             if not grants:
                 return Verdict(False, REF_TARGET_APPROVAL_REQUIRED)

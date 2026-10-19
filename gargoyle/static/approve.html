@@ -128,6 +128,7 @@ async function refresh() {
   if (!pending.length) { holds.innerHTML = '<div class="empty">Nothing waiting for you.</div>'; return; }
   const ids = new Set();
   for (const item of pending) {
+    if (item.plan) { renderPlan(item, ids); continue; }
     const env = item.envelope, id = env.approval_request_id; ids.add(id);
     const required = item.required ?? 1, collected = item.collected ?? 0, signers = item.approvers ?? [];
     const mine = signers.includes(state.keyId);
@@ -169,6 +170,37 @@ async function refresh() {
   }
   for (const [id, card] of state.seen) if (!ids.has(id) && !card.dataset.done) { card.remove(); state.seen.delete(id); }
   $("status").textContent = `approving as ${state.keyId} \u00b7 ${pending.length} waiting`;
+}
+
+// A scoped grant: one card for a bounded plan. The approver signs the
+// plan's hash; each later matching call runs without a card of its own.
+function renderPlan(item, ids) {
+  const plan = item.plan, id = plan.approval_request_id; ids.add(id);
+  if (state.seen.has(id)) return;
+  const card = document.createElement("article"); card.className = "hold"; card.dataset.id = id;
+  const expires = new Date(plan.not_after);
+  const steps = plan.steps.map((s, i) => `<li><code>${esc(s.tool)}</code> ${s.match ? Object.entries(s.match).map(([k, v]) => esc(k) + " = " + esc(v)).join(", ") : "exact arguments " + esc(String(s.args_sha256).slice(0, 12)) + "&hellip;"}</li>`).join("");
+  card.innerHTML = `
+    <h2>Plan: ${esc(plan.note || "(no note)")} <span class="badge">${plan.steps.length} step(s)</span></h2>
+    <dl class="meta">
+      <dt>requested by</dt><dd>${esc(plan.principal)}</dd>
+      <dt>target</dt><dd>${esc(plan.target_url)}</dd>
+      <dt>policy</dt><dd>${esc(plan.policy.policy_id)} <span class="badge">${esc(plan.policy.policy_sha256.slice(0, 12))}</span></dd>
+      <dt>expires</dt><dd>${expires.toLocaleTimeString()}</dd>
+      ${(item.required || 1) > 1 ? `<dt>approvals</dt><dd>${item.collected} of ${item.required}</dd>` : ""}
+    </dl>
+    <div class="note">Approving this plan releases every later call that matches an unused step, without a card for each; you will not see their contents.</div>
+    <ol>${steps}</ol>
+    <div class="actions">
+      <button class="approve">Approve plan</button>
+      <button class="decline">Decline</button>
+      <span class="result"></span>
+    </div>`;
+  card.querySelector(".approve").addEventListener("click", () => approve(card, { decision_sha256: plan.plan_sha256, approval_request_id: id }));
+  card.querySelector(".decline").addEventListener("click", () => decline(card, id));
+  $("holds").querySelector(".empty")?.remove();
+  $("holds").prepend(card);
+  state.seen.set(id, card);
 }
 
 async function approve(card, env) {

@@ -26,7 +26,9 @@ value matching the glob. Actions: "allow" (free),
 "hold" (allowed, needs a human's grant), "deny" (refused; `reason` names
 why, default RULE_DENIED). A hold may say how many distinct approvers must
 sign (`approvals`, default 1) and which approver key ids count
-(`approvers`); both go into the receipt. `default` is "deny" unless the
+(`approvers`); both go into the receipt. `"plan": false` on a hold keeps
+that tool out of scoped grants (gargoyle.plans): every call is approved
+on its own card. `default` is "deny" unless the
 file says "allow" or "hold".
 
 The pin is the SHA-256 of the file's bytes under policy_id
@@ -90,6 +92,8 @@ def validate_rules(doc: Any) -> Optional[str]:
             return "rule %d: approvers must list at least `approvals` distinct approver key ids" % i
         if ("approvals" in rule or "approvers" in rule) and rule["action"] != "hold":
             return "rule %d: approvals and approvers belong to a hold" % i
+        if "plan" in rule and (not isinstance(rule["plan"], bool) or rule["action"] != "hold"):
+            return "rule %d: plan must be true or false, on a hold" % i
     return None
 
 
@@ -136,7 +140,7 @@ def decide_rules(doc: Dict[str, Any], interaction: Mapping[str, Any]) -> Decisio
             return refuse(rule.get("reason", RULE_DENIED))
         if action == "hold":
             return Decision(ELIGIBLE, None, True, rule.get("approvals", 1),
-                            tuple(rule["approvers"]) if "approvers" in rule else None)
+                            tuple(rule["approvers"]) if "approvers" in rule else None, rule.get("plan", True))
         return Decision(ELIGIBLE)
     default = doc.get("default", "deny")
     if default == "deny":

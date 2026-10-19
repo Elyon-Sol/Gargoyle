@@ -55,6 +55,7 @@ class Decision:
     requires_approval: bool = False
     approvals_required: int = 1
     approvers: Optional[Tuple[str, ...]] = None
+    plannable: bool = True      # False: this call must be approved individually, never inside a plan (gargoyle.plans)
 
     @property
     def approval(self) -> Optional[Dict[str, Any]]:

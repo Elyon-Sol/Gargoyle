@@ -218,10 +218,17 @@ def verify_chain(
         return {"accepted": False, "reason": provenance["reason"], "steps": steps}
 
     if envelope["requires_approval"]:
-        if not as_grant_list(grant):
+        from gargoyle.plans import is_plan_release, verify_plan_release
+        if is_plan_release(grant):
+            # Released by a scoped grant: the plan, its grants and the step,
+            # re-matched against the arguments the release recorded.
+            g = verify_plan_release(grant, envelope, {}, issuer_public_keys=issuer_public_keys,
+                                    approver_public_keys=approver_public_keys or {}, now=executed_at)
+        elif not as_grant_list(grant):
             steps.append(("approval", REF_EXEC_GRANT_MISSING))
             return {"accepted": False, "reason": REF_EXEC_GRANT_MISSING, "steps": steps}
-        g = verify_grants(grant, envelope=envelope, approver_public_keys=approver_public_keys or {}, now=executed_at)
+        else:
+            g = verify_grants(grant, envelope=envelope, approver_public_keys=approver_public_keys or {}, now=executed_at)
         steps.append(("approval", g["reason"]))
         if not g["accepted"]:
             return {"accepted": False, "reason": g["reason"], "steps": steps}

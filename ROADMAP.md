@@ -92,6 +92,16 @@ verifying itself for no external user; that is the failure mode to avoid.
   hold and the receipt, with a link to /approve from GARGOYLE_APPROVE_URL); posted in
   a thread, failures logged and ignored, the grant still only from the approver's
   key. 80 lines. All six roadmap steps are done.
+- Scoped grants (2026-10-19): gargoyle/plans.py. A signed plan (steps as tool plus exact
+  args or argument globs, note, expiry, policy pin, approval terms) issued by POST /plans
+  after judging every step; `"plan": false` on a hold rule keeps a tool individual; the
+  console shows one card listing the steps and says plainly that contents will not be
+  seen; the approver's grant covers plan_sha256; the middleware's `gargoyle_plan` tool
+  obtains and holds the plan, then releases matching flagged receipts step by step, each
+  step claimed once in the replay cache; the issuer opens no hold for a plan-covered call;
+  the evidence records the plan, step and arguments and `gargoyle audit` prints "(plan
+  xxxx step n)". The test runs three held writes under one card, then a fourth that
+  gets its own. SPEC section 17. 0.12.0.dev0.
 - Graph adapter (2026-10-19): gargoyle/adapters.py. The probe, the card text and the undo
   are now an adapter's job; FilesystemAdapter is the old behaviour, GraphAdapter fronts a
   Microsoft Graph MCP server by a JSON spec (gargoyle/specs/graph-reference.json: mail

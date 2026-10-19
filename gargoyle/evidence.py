@@ -192,7 +192,7 @@ def verify_log(
             rc = rc if isinstance(rc, dict) else {}
             report.append({"seq": None, "kind": None, "tool": rc.get("tool"), "principal": rc.get("principal"),
                            "accepted": False, "reason": REF_EVIDENCE_UNCHAINED if legacy else REF_EVIDENCE_MALFORMED,
-                           "verdict": None, "released_by": [], "state": None, "client": None})
+                           "verdict": None, "released_by": [], "state": None, "client": None, "plan": None})
             all_ok = False
             continue
         e = raw
@@ -218,14 +218,19 @@ def verify_log(
                                       now=_parse_at(e["at"]), historical=True)
                 ok, reason = p["accepted"], (ACCEPT_ENTRY_VERIFIED if p["accepted"] else p["reason"])
         counts[e["kind"]] += 1
-        released_by = [g.get("approver_key_id") for g in (e["grant"] if isinstance(e["grant"], list) else [e["grant"]])
-                       if isinstance(g, dict)] if e["grant"] is not None else []
+        plan_ref = None
+        grant_set = e["grant"]
+        if isinstance(grant_set, dict) and "plan" in grant_set and "step" in grant_set:
+            plan_ref = {"plan_id": (grant_set["plan"] or {}).get("plan_id"), "step": grant_set["step"]}
+            grant_set = grant_set.get("grants")
+        released_by = [g.get("approver_key_id") for g in (grant_set if isinstance(grant_set, list) else [grant_set])
+                       if isinstance(g, dict)] if grant_set is not None else []
         ex = e["execution"] if isinstance(e["execution"], dict) else {}
         state = ({"pre": ex.get("pre_state_sha256"), "post": ex.get("post_state_sha256")}
                  if ex.get("pre_state_sha256") or ex.get("post_state_sha256") else None)
         report.append({"seq": e["seq"], "kind": e["kind"], "tool": e["tool"], "principal": e["principal"],
                        "accepted": ok, "reason": reason, "verdict": e["reason"], "released_by": released_by,
-                       "state": state, "client": e.get("client")})
+                       "state": state, "client": e.get("client"), "plan": plan_ref})
         all_ok = all_ok and ok
         # The chain continues from what the file says, so one bad entry is
         # reported once rather than cascading into every later one.

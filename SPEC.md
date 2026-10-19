@@ -827,3 +827,64 @@ implementation that needs those should layer them above this
 specification: a grant's `approver_signature` may be produced by a
 WebAuthn authenticator, and the evidence log's entries may be committed to
 a transparency log, without changing any byte defined here.
+
+## 17. Scoped grants (plans)
+
+A card per held call is right for a mailbox rule and wrong for the
+twentieth step of a reconciliation. A plan lets a human approve a bounded
+scope once while every call inside it stays bound and single-use.
+
+```
+plan = {
+  "plan_version":        "gargoyle-plan/1",
+  "plan_id":             <unique per plan>,
+  "approval_request_id": <the hold a grant must name>,
+  "target_url":          <section 3>,
+  "principal":           <the caller the plan is for>,
+  "policy":              <the pin the steps were judged under>,
+  "steps":               [{"tool": <name>, "args_sha256": <section 4 hash>}
+                          | {"tool": <name>, "match": {<argument>: <glob>}} ...],
+  "approval":            {"required": n, "approvers": [...]}?   (section 3),
+  "note":                <the caller's stated purpose, shown to the approver>,
+  "not_after":           <expiry>,
+  "plan_sha256":         sha256(canonical_json(plan minus plan_sha256, issuer_key_id, issuer_signature)),
+  "issuer_key_id":       ..., "issuer_signature": ed25519 over canonical_json(plan minus issuer_signature)
+}
+```
+
+**Issuing.** The issuer judges every step under the policy as a call
+(a step with exact arguments on those arguments; a pattern step with its
+patterns as the argument values, so a broad pattern fails a narrow
+rule). Any step refused refuses the plan (`REF_PLAN_STEP_REFUSED`); a
+step whose decision is not plannable refuses it
+(`REF_PLAN_STEP_NOT_PLANNABLE`; the reference rules file says `"plan":
+false` on a hold to keep a tool individual, and sends should be). The
+plan is held when any step would be; its approval terms are the strictest
+over the steps. A grant for a plan is a section 8 grant whose
+`decision_sha256` is `plan_sha256` and whose `approval_request_id` is the
+plan's.
+
+**Release.** A flagged receipt may be released, instead of by grants of
+its own, by a release record `{"plan", "grants", "step", "args"}`. The
+verifier (`verify_plan_release`) checks: the plan verifies (structure,
+issuer signature, hash, expiry: `REF_PLAN_MALFORMED`, `REF_PLAN_KEY_UNKNOWN`,
+`REF_PLAN_SIGNATURE_INVALID`, `REF_PLAN_EXPIRED`); the plan names the
+receipt's principal, target and policy pin (`REF_PLAN_BINDING_MISMATCH`);
+the named step exists and matches the call's tool and arguments, and the
+arguments hash to the receipt's `args_sha256` (`REF_PLAN_NO_MATCHING_STEP`);
+the grants release the plan under its terms (a grant's own refusal, or
+`REF_PLAN_GRANTS`). The consumer then claims `plan_id:step` in the replay
+store (`REF_PLAN_STEP_CONSUMED` on reuse) and the receipt's `decision_id`
+as always. The record carries the arguments so an auditor can re-run the
+match offline; `verify_chain` accepts a release record in place of grants.
+
+**What a plan trades.** The approver sees scope, not content: tools,
+patterns, count, expiry, the note. State binding still runs at the
+executor (section 6.1) but the human did not see the state. That is the
+reason plans are a policy choice per tool, and why the evidence names the
+plan and step behind every released call. The reference issuing service
+opens no per-call hold for a call the executor reports as covered by an
+approved plan; a false report costs nothing, since the executor refuses
+without a valid release. The TypeScript port verifies per-call chains and
+does not yet verify plan releases.
+

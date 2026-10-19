@@ -40,7 +40,7 @@ it again when the call runs. The pending set is in memory: one instance.
 
 import json
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
@@ -53,6 +53,8 @@ from gargoyle.approval import (REF_APPROVAL_APPROVER_NOT_ELIGIBLE, REF_APPROVAL_
                                verify_grant)
 from gargoyle.envelope import approval_terms
 from gargoyle.state import state_sha256, valid_description
+from gargoyle.plans import (REF_PLAN_MALFORMED, REF_PLAN_STEP_NOT_PLANNABLE, REF_PLAN_STEP_REFUSED, build_plan,
+                            sign_plan, valid_step)
 from gargoyle.notify import notifier_from_env
 from gargoyle.approvers import (DEFAULT_APPROVER_ROLE, ENV_APPROVER_GROUPS, ENV_APPROVER_ROLE, ENV_APPROVERS_PATH,
                                 ApproverRegistry, may_enroll, valid_public_key_hex)
@@ -108,6 +110,7 @@ def build_issuer_app(
     app.state.pending_state: Dict[str, Any] = {}          # approval_request_id -> the target's state when held
     app.state.grants: Dict[str, Dict[str, Any]] = {}      # approval_request_id -> grant
     app.state.declined: set = set()                       # approval_request_ids a human refused
+    app.state.pending_plans: Dict[str, Dict[str, Any]] = {}   # approval_request_id -> signed plan (gargoyle.plans)
     registry = approver_registry if approver_registry is not None else ApproverRegistry(None)
     static_approvers = dict(approver_public_keys or {})
 
@@ -164,7 +167,20 @@ def build_issuer_app(
                        ttl_seconds=ttl_seconds, now=now())
         if result.envelope is None:
             return {"issued": False, "reason": result.decision.reason}
-        if result.envelope["requires_approval"]:
+        covered = False
+        plan_id = body.get("plan_id")
+        if result.envelope["requires_approval"] and isinstance(plan_id, str):
+            # The executor says an approved plan covers this call. No card then:
+            # the executor enforces the plan (step single use, grants, expiry)
+            # and the console should not show a hold nobody needs to act on.
+            # A false claim costs nothing here: without a valid release the
+            # executor refuses the call.
+            from gargoyle.plans import match_step
+            for arid_p, plan in app.state.pending_plans.items():
+                if plan["plan_id"] == plan_id and _complete(arid_p) and match_step(plan, body["tool"], body["args"]) is not None:
+                    covered = True
+                    break
+        if result.envelope["requires_approval"] and not covered:
             arid = result.envelope["approval_request_id"]
             app.state.pending[arid] = result.envelope
             app.state.pending_args[arid] = body["args"]
@@ -178,11 +194,75 @@ def build_issuer_app(
                     sys.stderr.write("gargoyle: on_hold failed: %s\n" % exc)
         return {"issued": True, "envelope": result.envelope}
 
+    @app.post("/plans")
+    async def post_plan(request: Request, authorization: Optional[str] = Header(default=None)):
+        """A scoped grant request: every step judged by the policy; the plan
+        signed and held when any step would be. Steps with exact arguments
+        are judged on them; a pattern step is judged with its patterns as the
+        argument values, so a broad pattern fails a narrow rule."""
+        who = authenticate(authorization)
+        try:
+            body = await request.json()
+        except Exception:
+            raise _refuse(400, REF_ISSUER_BAD_REQUEST)
+        steps = body.get("steps") if isinstance(body, dict) else None
+        if (not isinstance(body, dict) or not isinstance(body.get("target_url"), str) or not isinstance(steps, list)
+                or not steps or len(steps) > 200 or not all(valid_step(s) or ("args" in s and isinstance(s.get("tool"), str)) for s in steps)
+                or not isinstance(body.get("note", ""), str)):
+            raise _refuse(400, REF_ISSUER_BAD_REQUEST)
+        from gargoyle.envelope import args_sha256
+        norm, held, required, approvers = [], False, 1, set()
+        for s in steps:
+            if "args" in s:
+                judged_args, step = s["args"], {"tool": s["tool"], "args_sha256": args_sha256(s["args"])}
+            elif "args_sha256" in s:
+                return {"issued": False, "reason": REF_PLAN_MALFORMED}        # a hash alone cannot be judged
+            else:
+                judged_args, step = dict(s["match"]), {"tool": s["tool"], "match": dict(s["match"])}
+            interaction = {"tool": s["tool"], "args": judged_args, "principal": who["principal"],
+                           "groups": who.get("groups", []), "roles": who.get("roles", [])}
+            try:
+                d = policy.decide(body["target_url"], interaction)
+            except Exception:
+                return {"issued": False, "reason": REF_PLAN_STEP_REFUSED}
+            if not d.eligible:
+                return {"issued": False, "reason": REF_PLAN_STEP_REFUSED, "step": len(norm)}
+            if d.requires_approval:
+                if not d.plannable:
+                    return {"issued": False, "reason": REF_PLAN_STEP_NOT_PLANNABLE, "step": len(norm)}
+                held = True
+                required = max(required, d.approvals_required)
+                if d.approvers:
+                    approvers.update(d.approvers)
+            norm.append(step)
+        import uuid
+        approval = None
+        if required > 1 or approvers:
+            approval = {"required": required, **({"approvers": sorted(approvers)} if approvers else {})}
+        plan = sign_plan(build_plan(plan_id=str(uuid.uuid4()), approval_request_id=str(uuid.uuid4()), target_url=body["target_url"],
+                                    principal=who["principal"], policy_pin=policy.pin(), steps=norm,
+                                    not_after=now() + timedelta(seconds=min(ttl_seconds * 6, 3600)), note=body.get("note", ""),
+                                    approval=approval), signing_key, key_id)
+        if held:
+            app.state.pending_plans[plan["approval_request_id"]] = plan
+        return {"issued": True, "plan": plan, "held": held}
+
+    def _plan_terms(plan):
+        return approval_terms({"approval": plan["approval"]} if "approval" in plan else {})
+
     @app.get("/pending")
     async def pending(authorization: Optional[str] = Header(default=None)):
         authenticate(authorization)
         current = now()
         live = {}
+        for arid, plan in list(app.state.pending_plans.items()):
+            if datetime.fromisoformat(plan["not_after"]) <= current:
+                del app.state.pending_plans[arid]
+                app.state.grants.pop(arid, None)
+            elif len(app.state.grants.get(arid, [])) < _plan_terms(plan)["required"]:
+                have = app.state.grants.get(arid, [])
+                live[arid] = {"plan": plan, "collected": len(have), "required": _plan_terms(plan)["required"],
+                              "approvers": [g["approver_key_id"] for g in have]}
         for arid, env in list(app.state.pending.items()):
             if datetime.fromisoformat(env["not_after"]) <= current:
                 del app.state.pending[arid]           # an expired hold can never be released
@@ -199,7 +279,10 @@ def build_issuer_app(
 
     def _complete(arid: str) -> bool:
         env = app.state.pending.get(arid)
-        return env is not None and len(app.state.grants.get(arid, [])) >= approval_terms(env)["required"]
+        if env is None:
+            plan = app.state.pending_plans.get(arid)
+            return plan is not None and len(app.state.grants.get(arid, [])) >= _plan_terms(plan)["required"]
+        return len(app.state.grants.get(arid, [])) >= approval_terms(env)["required"]
 
     @app.post("/grants")
     async def post_grant(request: Request, authorization: Optional[str] = Header(default=None)):
@@ -210,18 +293,19 @@ def build_issuer_app(
             raise _refuse(400, REF_ISSUER_BAD_REQUEST)
         arid = grant.get("approval_request_id") if isinstance(grant, dict) else None
         env = app.state.pending.get(arid) if isinstance(arid, str) else None
-        if env is None:
+        plan = app.state.pending_plans.get(arid) if isinstance(arid, str) else None
+        if env is None and plan is None:
             return {"accepted": False, "reason": REF_ISSUER_UNKNOWN_HOLD}
         trusted = approver_keys()
         if not trusted:
             return {"accepted": False, "reason": REF_ISSUER_NO_APPROVER_TRUST}
-        g = verify_grant(grant, expected_decision_sha256=env["decision_sha256"],
+        g = verify_grant(grant, expected_decision_sha256=env["decision_sha256"] if env else plan["plan_sha256"],
                          expected_approval_request_id=arid, approver_public_keys=trusted,
                          gate_key_id=key_id, now=now())
         if not g["accepted"]:
             return {"accepted": False, "reason": g["reason"]}
-        # The receipt's own terms: distinct approvers, from the named set if any.
-        terms = approval_terms(env)
+        # The receipt's (or plan's) own terms: distinct approvers, from the named set if any.
+        terms = approval_terms(env) if env else _plan_terms(plan)
         have = app.state.grants.setdefault(arid, [])
         if any(h["approver_key_id"] == grant["approver_key_id"] for h in have):
             return {"accepted": False, "reason": REF_APPROVAL_DUPLICATE_APPROVER}
@@ -241,9 +325,10 @@ def build_issuer_app(
         except Exception:
             raise _refuse(400, REF_ISSUER_BAD_REQUEST)
         arid = body.get("approval_request_id") if isinstance(body, dict) else None
-        if not isinstance(arid, str) or arid not in app.state.pending:
+        if not isinstance(arid, str) or (arid not in app.state.pending and arid not in app.state.pending_plans):
             return {"declined": False, "reason": REF_ISSUER_UNKNOWN_HOLD}
-        del app.state.pending[arid]
+        app.state.pending_plans.pop(arid, None)
+        app.state.pending.pop(arid, None)
         app.state.pending_args.pop(arid, None)
         app.state.pending_state.pop(arid, None)
         app.state.grants.pop(arid, None)
@@ -253,13 +338,13 @@ def build_issuer_app(
     @app.get("/grants/{approval_request_id}")
     async def get_grant(approval_request_id: str, authorization: Optional[str] = Header(default=None)):
         authenticate(authorization)
-        env = app.state.pending.get(approval_request_id)
+        env = app.state.pending.get(approval_request_id) or app.state.pending_plans.get(approval_request_id)
         have = app.state.grants.get(approval_request_id, [])
         complete = _complete(approval_request_id)
         return {"pending": env is not None,
                 "grant": have[0] if complete and len(have) == 1 else None,
                 "grants": list(have) if complete else [],
-                "collected": len(have), "required": approval_terms(env)["required"] if env else None,
+                "collected": len(have), "required": (_plan_terms(env) if env and "plan_version" in env else approval_terms(env))["required"] if env else None,
                 "declined": approval_request_id in app.state.declined}
 
     @app.get("/approvers")

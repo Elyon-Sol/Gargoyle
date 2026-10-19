@@ -311,6 +311,8 @@ def cmd_audit(args) -> int:
             why = (" (%s)" % r["verdict"]) if r["kind"] == "refused" and r["verdict"] else ""
             if r.get("released_by"):
                 why += " released by " + ", ".join(r["released_by"])
+            if r.get("plan"):
+                why += " (plan %s step %d)" % (str(r["plan"].get("plan_id") or "?")[:8], r["plan"].get("step", -1) + 1)
             if r.get("state"):
                 # A state-bound call: the target as it was approved, and as the run left it.
                 pre, post = (r["state"].get("pre") or "")[:8], (r["state"].get("post") or "")[:8]

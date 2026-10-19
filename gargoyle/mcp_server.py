@@ -138,7 +138,8 @@ class IssuerClient:
     def _get(self, path: str) -> Any:
         return self._http.get(self.url + path, headers=self._headers(), timeout=self.request_timeout)
 
-    def issue(self, target_url: str, tool: str, args: Any, state: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    def issue(self, target_url: str, tool: str, args: Any, state: Optional[Dict[str, Any]] = None,
+              plan_id: Optional[str] = None) -> Dict[str, Any]:
         """{"envelope": ...} or {"envelope": None, "reason": ...}. The cause of
         an unavailable issuer (TLS, DNS, a refused connection) goes to stderr,
         where an MCP client's server log shows it; the refusal code stays
@@ -147,6 +148,8 @@ class IssuerClient:
             body_out: Dict[str, Any] = {"target_url": target_url, "tool": tool, "args": args}
             if state is not None:
                 body_out["state"] = state
+            if plan_id is not None:
+                body_out["plan_id"] = plan_id
             r = self._post("/issue", body_out)
         except Exception as exc:
             if type(exc).__name__ == "LoginRequired":
@@ -166,6 +169,19 @@ class IssuerClient:
         if not body.get("issued"):
             return {"envelope": None, "reason": body.get("reason") or REF_TARGET_ISSUER_UNAVAILABLE}
         return {"envelope": body.get("envelope"), "reason": None}
+
+    def plan(self, target_url: str, steps: List[Dict[str, Any]], note: str) -> Dict[str, Any]:
+        """Ask for a scoped grant: {"plan": signed plan, "held": bool} or
+        {"plan": None, "reason": ...}."""
+        try:
+            r = self._post("/plans", {"target_url": target_url, "steps": steps, "note": note})
+            body = r.json() if r.status_code == 200 else {}
+        except Exception as exc:
+            sys.stderr.write("gargoyle: issuer unreachable for a plan: %s\n" % exc)
+            return {"plan": None, "reason": REF_TARGET_ISSUER_UNAVAILABLE}
+        if not body.get("issued"):
+            return {"plan": None, "reason": body.get("reason") or REF_TARGET_ISSUER_UNAVAILABLE}
+        return {"plan": body["plan"], "held": bool(body.get("held")), "reason": None}
 
     def approver_keys(self) -> Dict[str, Any]:
         """The issuer's enrolled approvers as {upn: public key}; {} when the
@@ -331,6 +347,7 @@ class ServerState:
                 executor_key_id=config.get("executor_key_id"),
             )
         self.executed: List[Dict[str, Any]] = []
+        self.plans: List[Dict[str, Any]] = []     # approved scoped grants: {"plan", "grants", "consumed": set()}
         self.initialized = False
         self.client: Optional[str] = None     # "name version" from the MCP initialize handshake
 
@@ -368,15 +385,24 @@ def _gate(state: ServerState, params: Dict[str, Any]) -> Dict[str, Any]:
         # target's current state goes with the request (gargoyle.state), so
         # a hold is approved against it and bound to it.
         probed = state.adapter.probe(name, args) if state.adapter is not None else None
-        res = state.issuer_client.issue(state.config["target_id"], name, args, state=probed[0] if probed else None)
+        # An approved plan may already cover this call; say so, and the
+        # issuer opens no hold for it.
+        release = _plan_release_for(state, name, args)
+        res = state.issuer_client.issue(state.config["target_id"], name, args, state=probed[0] if probed else None,
+                                        plan_id=release["plan"]["plan_id"] if release else None)
         if res["envelope"] is None:
             return refused(res["reason"])
         envelope, self_issued = res["envelope"], True
         if isinstance(envelope, dict) and envelope.get("requires_approval") is True and grant is None:
-            waited = state.issuer_client.wait_for_grant(str(envelope.get("approval_request_id")))
-            if waited["grant"] is None:
-                return refused(waited["reason"], envelope)
-            grant = waited["grant"]
+            # A scoped grant the human already signed may cover this call;
+            # otherwise wait for a card of its own.
+            if release is None:
+                waited = state.issuer_client.wait_for_grant(str(envelope.get("approval_request_id")))
+                if waited["grant"] is None:
+                    return refused(waited["reason"], envelope)
+                grant = waited["grant"]
+            else:
+                grant = release
 
     # A state-bound receipt is checked against the state as it is now, after
     # any wait for approval: if the target moved, the call does not run.
@@ -386,10 +412,19 @@ def _gate(state: ServerState, params: Dict[str, Any]) -> Dict[str, Any]:
         from gargoyle.state import state_sha256 as _state_hash
         now_probe = state.adapter.probe(name, args)
         live_state = _state_hash(now_probe[0]) if now_probe is not None else None
-    verdict = state.consumer.check(envelope, call_for(name, args, state.config["principal"], live_state),
-                                   grant=grant)
+    from gargoyle.plans import is_plan_release
+    if is_plan_release(grant):
+        verdict = state.consumer.check(envelope, call_for(name, args, state.config["principal"], live_state),
+                                       plan_release=grant)
+    else:
+        verdict = state.consumer.check(envelope, call_for(name, args, state.config["principal"], live_state),
+                                       grant=grant)
     if not verdict.honored:
         return refused(verdict.reason, envelope)
+    if is_plan_release(grant):
+        for active in state.plans:
+            if active["plan"]["plan_id"] == grant["plan"]["plan_id"]:
+                active["consumed"].add(grant["step"])
 
     # Undo material: for a held, state-bound call, keep the target as it is
     # right now (the state the receipt bound and the check just confirmed).
@@ -403,6 +438,61 @@ def _gate(state: ServerState, params: Dict[str, Any]) -> Dict[str, Any]:
     state.executed.append({"tool": name, "args": args})  # THE side effect
     return {"executed": True, "reason": verdict.reason, "envelope": envelope, "grant": grant,
             "self_issued": self_issued}
+
+
+def _plan_release_for(state: ServerState, tool: str, args: Any) -> Optional[Dict[str, Any]]:
+    """The release record for the first active plan with an unconsumed step
+    matching this call, or None."""
+    from datetime import datetime, timezone
+    from gargoyle.plans import match_step
+    now = datetime.now(timezone.utc)
+    for active in state.plans:
+        plan = active["plan"]
+        try:
+            if datetime.fromisoformat(plan["not_after"]) <= now:
+                continue
+        except (ValueError, TypeError):
+            continue
+        i = match_step(plan, tool, args, active["consumed"])
+        if i is not None:
+            return {"plan": plan, "grants": active["grants"], "step": i, "args": args}
+    return None
+
+
+PLAN_TOOL = "gargoyle_plan"
+PLAN_TOOL_DEF = {
+    "name": PLAN_TOOL,
+    "description": ("Ask the approver for one approval covering a bounded plan of changes instead of one card per "
+                    "change. steps: a list of {tool, args} (exact) or {tool, match: {argument: glob}}; note: what the "
+                    "plan is for, shown to the approver. Each later call matching an unused step runs without its "
+                    "own card, until the plan expires. Tools the policy keeps individual are refused here."),
+    "inputSchema": {"type": "object", "required": ["steps"],
+                    "properties": {"steps": {"type": "array"}, "note": {"type": "string"}}},
+}
+
+
+def _handle_plan(state: ServerState, params: Dict[str, Any]) -> Dict[str, Any]:
+    """gargoyle_plan: obtain the signed plan, wait for the human's grant,
+    then keep it active for matching calls."""
+    if state.issuer_client is None or state.consumer is None:
+        return {"content": [{"type": "text", "text": "refused: plans need self-issue mode"}], "isError": True,
+                "_meta": {EXECUTED_META_KEY: False, REASON_META_KEY: REF_TARGET_NOT_CONFIGURED}}
+    args = params.get("arguments") or {}
+    res = state.issuer_client.plan(state.config["target_id"], args.get("steps") or [], str(args.get("note") or ""))
+    if res["plan"] is None:
+        return {"content": [{"type": "text", "text": "refused: " + str(res["reason"])}], "isError": True,
+                "_meta": {EXECUTED_META_KEY: False, REASON_META_KEY: res["reason"]}}
+    plan, grants = res["plan"], []
+    if res["held"]:
+        waited = state.issuer_client.wait_for_grant(plan["approval_request_id"])
+        if waited["grant"] is None:
+            return {"content": [{"type": "text", "text": "refused: " + str(waited["reason"])}], "isError": True,
+                    "_meta": {EXECUTED_META_KEY: False, REASON_META_KEY: waited["reason"]}}
+        grants = waited["grant"] if isinstance(waited["grant"], list) else [waited["grant"]]
+    state.plans.append({"plan": plan, "grants": grants, "consumed": set()})
+    text = "plan %s approved: %d step(s) until %s" % (plan["plan_id"][:8], len(plan["steps"]), plan["not_after"])
+    return {"content": [{"type": "text", "text": text}], "isError": False,
+            "_meta": {EXECUTED_META_KEY: False, REASON_META_KEY: "PLAN_APPROVED", "gargoyle/plan": plan}}
 
 
 def _audit_meta(state: ServerState, gate: Dict[str, Any], outputs: Any, params: Dict[str, Any]) -> Dict[str, Any]:
@@ -484,6 +574,9 @@ def handle_message(state: ServerState, msg: Dict[str, Any]) -> Optional[Dict[str
                 and isinstance(reply.get("result"), dict) and isinstance(reply["result"].get("tools"), list):
             from gargoyle.revert import REVERT_TOOL_DEF
             reply["result"]["tools"] = list(reply["result"]["tools"]) + [REVERT_TOOL_DEF]
+        if method == "tools/list" and state.issuer_client is not None and isinstance(reply, dict) \
+                and isinstance(reply.get("result"), dict) and isinstance(reply["result"].get("tools"), list):
+            reply["result"]["tools"] = list(reply["result"]["tools"]) + [PLAN_TOOL_DEF]
         return reply
 
     if method == "initialize":
@@ -524,10 +617,13 @@ def handle_message(state: ServerState, msg: Dict[str, Any]) -> Optional[Dict[str
 
     if method == "tools/list":
         from gargoyle.revert import REVERT_TOOL_DEF
-        return _success(msg_id, {"tools": ADVERTISED_TOOLS + ([REVERT_TOOL_DEF] if state.snapshots is not None else [])})
+        return _success(msg_id, {"tools": ADVERTISED_TOOLS + ([REVERT_TOOL_DEF] if state.snapshots is not None else [])
+                                 + ([PLAN_TOOL_DEF] if state.issuer_client is not None else [])})
 
     if method == "tools/call":
         from gargoyle.revert import REVERT_TOOL, plan_revert
+        if params.get("name") == PLAN_TOOL:
+            return _success(msg_id, _handle_plan(state, params))
         if params.get("name") == REVERT_TOOL:
             # An undo is a write the middleware composes from its snapshot; it
             # then goes through the gate exactly as the assistant's own writes.

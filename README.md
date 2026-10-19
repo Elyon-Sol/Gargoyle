@@ -21,7 +21,7 @@ your MCP server and lets through only what both agreed to.
 
 [![PyPI](https://img.shields.io/pypi/v/gargoyle-receipts)](https://pypi.org/project/gargoyle-receipts/)
 
-Status: pre-release (`0.11.0.dev0`, on PyPI as `gargoyle-receipts`). The wire format is `gargoyle/3` and may
+Status: pre-release (`0.12.0.dev0`, on PyPI as `gargoyle-receipts`). The wire format is `gargoyle/3` and may
 still change before the first release; it is specified in [SPEC.md](SPEC.md).
 
 ## What a receipt gives you
@@ -253,6 +253,19 @@ and `gargoyle audit` verifies them later offline.
 [examples/filesystem-agent](examples/filesystem-agent/) walks through it,
 and through the alternative with OPA in Docker for sites that run a policy
 engine.
+
+## Scoped grants
+
+One card per held call is right for a mailbox rule and wrong for a long
+task. The assistant can ask for a plan (`gargoyle_plan`): a list of steps,
+each a tool with exact arguments or argument patterns, and a note saying
+why. The issuer judges every step under the policy, signs the plan, and
+holds it as one card; the approver signs once; each later call matching
+an unused step runs without a card of its own until the plan expires.
+Every step is still bound, claimed once, and recorded with the plan and
+step that released it. The rules file decides what may be planned
+(`"plan": false` keeps a tool individual; sends should be), because a
+plan approves scope rather than content.
 
 ## Microsoft 365 and other targets: adapters
 
