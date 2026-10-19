@@ -97,7 +97,9 @@ verifying itself for no external user; that is the failure mode to avoid.
   card. The issuer log shows the plan hold's polls, one POST /grants, then two POST /issue
   each followed only by the middleware fetching approver keys to verify the plan's grant:
   no per-call hold, as designed. The assistant read both files first (free) and composed
-  the writes itself.
+  the writes itself. Audit rows 41 and 42: "(plan c04e683b step 1)" and "(step 2)", each
+  with its state transition, each "via claude-ai 0.1.0" (Claude Desktop's own name for
+  itself in the MCP handshake). 42 entries, 0 failed.
 - Scoped grants (2026-10-19): gargoyle/plans.py. A signed plan (steps as tool plus exact
   args or argument globs, note, expiry, policy pin, approval terms) issued by POST /plans
   after judging every step; `"plan": false` on a hold rule keeps a tool individual; the
