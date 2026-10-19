@@ -92,6 +92,10 @@ verifying itself for no external user; that is the failure mode to avoid.
   hold and the receipt, with a link to /approve from GARGOYLE_APPROVE_URL); posted in
   a thread, failures logged and ignored, the grant still only from the approver's
   key. 80 lines. All six roadmap steps are done.
+- State-bound approval live (2026-10-19): a held write from Claude Desktop carried the
+  file's state; the card showed the diff; the approver released it; the audit row reads
+  "released by <approver> state b43c9319 -> 4de7ea40", the file as approved and as left.
+  First evidence in this deployment of what a write changed, not only that it ran.
 - State-bound approval (2026-10-19): gargoyle/state.py. A held call carries the target's
   state description (file bytes hash, size, or absence; text beside it for the card); the
   issuer binds state_sha256 into the signed request_context; the console shows a line diff
