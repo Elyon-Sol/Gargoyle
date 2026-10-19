@@ -92,6 +92,12 @@ verifying itself for no external user; that is the failure mode to avoid.
   hold and the receipt, with a link to /approve from GARGOYLE_APPROVE_URL); posted in
   a thread, failures logged and ignored, the grant still only from the approver's
   key. 80 lines. All six roadmap steps are done.
+- Undo, first live run (2026-10-19): the revert was held, released and state-bound (its
+  pre-state equalled the original's post-state) but the audit declined to mark it a
+  revert: the restored bytes hashed differently. Cause: gargoyle.fs_server wrote text
+  through Python text mode, which on Windows turns every LF into CRLF, so the restored
+  snapshot doubled its line endings. Fixed to read and write bytes exactly (0.8.1). The
+  evidence caught a real bug by refusing to assert what the hashes did not prove.
 - Undo (2026-10-19): gargoyle/revert.py. Before a held, state-bound write runs, the
   middleware snapshots the target (bytes by state hash, sidecar by decision id, post-state
   recorded after the run). `gargoyle_revert` is added to the upstream's tool list; it

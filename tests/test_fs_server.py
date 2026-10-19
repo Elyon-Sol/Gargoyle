@@ -52,3 +52,14 @@ def test_behind_the_gate_over_stdio(tmp_path):
         assert bare["result"]["isError"] is True            # no receipt, no read
     finally:
         up.close()
+
+
+def test_write_and_read_are_byte_exact_whatever_the_platform_newline(tmp_path):
+    """A restored snapshot must hash to what it hashed before: no newline
+    translation on write (Windows would double every line ending) or read."""
+    from gargoyle.fs_server import Root
+    root = Root(str(tmp_path))
+    content = "a\r\nb\nc"
+    root.call("write_file", {"path": str(tmp_path / "x.md"), "content": content})
+    assert (tmp_path / "x.md").read_bytes() == content.encode("utf-8")
+    assert root.call("read_file", {"path": str(tmp_path / "x.md")}) == content

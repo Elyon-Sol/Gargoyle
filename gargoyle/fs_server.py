@@ -57,11 +57,16 @@ class Root:
             d = self.inside(args["path"])
             return "\n".join(("[DIR]  " if e.is_dir() else "[FILE] ") + e.name for e in sorted(d.iterdir())) or "(empty)"
         if name == "read_file":
-            return self.inside(args["path"]).read_text(encoding="utf-8")
+            # Bytes as they are: no newline translation, so what the assistant
+            # reads is what the state probe hashes.
+            return self.inside(args["path"]).read_bytes().decode("utf-8")
         if name == "write_file":
+            # Bytes as given: on Windows, text mode would turn every "\n" into
+            # "\r\n", and a restored snapshot would no longer match its hash.
             p = self.inside(args["path"]); p.parent.mkdir(parents=True, exist_ok=True)
-            p.write_text(args["content"], encoding="utf-8")
-            return "wrote %d bytes to %s" % (len(args["content"].encode("utf-8")), p)
+            data = args["content"].encode("utf-8")
+            p.write_bytes(data)
+            return "wrote %d bytes to %s" % (len(data), p)
         if name == "create_directory":
             p = self.inside(args["path"]); p.mkdir(parents=True, exist_ok=True)
             return "created %s" % p
