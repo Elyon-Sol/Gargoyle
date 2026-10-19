@@ -427,7 +427,7 @@ gargoyle audit --log C:\gargoyle\audit.jsonl --out C:\gargoyle
 
 ```
    1 ok    honored  list_directory           spiffe://gargoyle.local/agents/assistant CHAIN_VERIFIED
-   2 ok    honored  write_file               spiffe://gargoyle.local/agents/assistant CHAIN_VERIFIED
+   2 ok    honored  write_file               spiffe://gargoyle.local/agents/assistant CHAIN_VERIFIED released by approver-1
    3 ok    refused  delete_file              spiffe://gargoyle.local/agents/assistant ENTRY_VERIFIED (DESTRUCTIVE_TOOL)
 3 entries (2 honored, 1 refused), 0 failed; chain EVIDENCE_VERIFIED; tail 7c1e0a93b2d44f10
 ```

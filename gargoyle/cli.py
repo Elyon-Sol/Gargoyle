@@ -244,6 +244,8 @@ def cmd_audit(args) -> int:
         for r in v["entries"]:
             # A refused row shows why the executor refused, beside the check outcome.
             why = (" (%s)" % r["verdict"]) if r["kind"] == "refused" and r["verdict"] else ""
+            if r.get("released_by"):
+                why += " released by " + ", ".join(r["released_by"])
             print("%4s %-5s %-8s %-24s %-28s %s%s" % (r["seq"] if r["seq"] is not None else "?",
                                                       "ok" if r["accepted"] else "FAIL", r["kind"] or "?",
                                                       (r["tool"] or "?")[:24], (r["principal"] or "?")[:28], r["reason"], why))

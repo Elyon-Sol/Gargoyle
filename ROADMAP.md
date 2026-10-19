@@ -92,6 +92,15 @@ verifying itself for no external user; that is the failure mode to avoid.
   hold and the receipt, with a link to /approve from GARGOYLE_APPROVE_URL); posted in
   a thread, failures logged and ignored, the grant still only from the approver's
   key. 80 lines. All six roadmap steps are done.
+- Entra approver login live (2026-10-19): the approver account (a real tenant user) signed in to the console
+  with Microsoft, enrolled a browser-held key, and released a write requested by
+  the workstation account (a real tenant user); the client audit shows the chain verified (18 entries, 0 failed)
+  with the enrolled key read from approvers.json. The one refusal on the way was correct:
+  the client still ran 0.5.3 and refused the unknown approver key (REF_APPROVAL_KEY_UNKNOWN,
+  recorded as evidence) until it was upgraded. Audit rows now print "released by <key id>".
+  Entra friction worth knowing: the redirect URI must be registered under the
+  Single-page application platform (AADSTS9002326 otherwise), and the Approver role
+  reaches tokens only after assignment under Enterprise applications.
 - Entra approver login (2026-10-18, night): gargoyle/approvers.py (ApproverRegistry,
   approvers.json), issuer endpoints /approvers (public map), /approvers/enroll (token with
   the Approver app role or a configured group; UPN from the token), /me, /approve-config.
