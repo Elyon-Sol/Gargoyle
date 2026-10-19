@@ -92,6 +92,10 @@ verifying itself for no external user; that is the failure mode to avoid.
   hold and the receipt, with a link to /approve from GARGOYLE_APPROVE_URL); posted in
   a thread, failures logged and ignored, the grant still only from the approver's
   key. 80 lines. All six roadmap steps are done.
+- Undo proven live (2026-10-19, after 0.8.1): audit rows 36 and 37 form an exact round
+  trip, "state 0c8a2f3d -> ae799707" then "state ae799707 -> 0c8a2f3d reverts #36", both
+  released by the enrolled approver; the revert link is derived from the hashes, not
+  asserted by anyone.
 - Undo, first live run (2026-10-19): the revert was held, released and state-bound (its
   pre-state equalled the original's post-state) but the audit declined to mark it a
   revert: the restored bytes hashed differently. Cause: gargoyle.fs_server wrote text
