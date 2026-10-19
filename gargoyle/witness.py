@@ -63,6 +63,11 @@ class WitnessLog:
                     e = json.loads(line)
                     self.entries.append(e)
                     self._seq, self._tail = int(e["seq"]), e["entry_sha256"]
+        elif self.path is not None:
+            # Exists from the first start, so an operator can copy it before
+            # the first decision and a monitor can see it is in place.
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            self.path.touch()
 
     def record(self, event: str, **fields: Any) -> Dict[str, Any]:
         with self._lock:

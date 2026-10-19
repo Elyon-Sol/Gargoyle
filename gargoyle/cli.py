@@ -361,6 +361,12 @@ def cmd_audit(args) -> int:
               % (v["count"], v["honored"], v["refused"], failed, v["reason"], v["tail_sha256"][:16]))
         rc = 0 if v["accepted"] else 1
         entries = read_log(args.log)
+        if args.witness and not Path(args.witness).exists():
+            print("witness file not found: %s (copy the issuer's witness.jsonl here first)" % args.witness, file=sys.stderr)
+            return 2
+        if args.check_tree and not Path(args.check_tree).is_dir():
+            print("not a directory: %s" % args.check_tree, file=sys.stderr)
+            return 2
         if args.witness:
             # The issuer's signed record: the client's evidence must agree with it.
             from gargoyle.reconcile import reconcile

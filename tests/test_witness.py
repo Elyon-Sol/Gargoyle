@@ -149,3 +149,17 @@ def test_audit_command_reports_reconciliation_and_tree(tmp_path, capsys):
     (root / "n.md").write_text("tampered", encoding="utf-8")
     assert main(["audit", "--log", str(tmp_path / "audit.jsonl"), "--out", str(out), "--check-tree", str(root)]) == 1
     assert "CHANGED_OUTSIDE_GATE" in capsys.readouterr().out
+
+
+def test_audit_names_a_missing_witness_or_folder_plainly(tmp_path, capsys):
+    from gargoyle.cli import main
+    log = tmp_path / "audit.jsonl"; log.write_text("")
+    out = tmp_path / "deploy"; out.mkdir()
+    (out / "public-keys.json").write_text(json.dumps({"issuer": {}, "executor": {}, "approver": {}}))
+    assert main(["audit", "--log", str(log), "--out", str(out), "--witness", str(tmp_path / "nope.jsonl")]) == 2
+    assert "witness file not found" in capsys.readouterr().err
+    assert main(["audit", "--log", str(log), "--out", str(out), "--check-tree", str(tmp_path / "nodir")]) == 2
+    assert "not a directory" in capsys.readouterr().err
+    # The issuer creates the witness file at start, before any decision.
+    w = WitnessLog(str(tmp_path / "fresh" / "witness.jsonl"), issuer, "issuer-1")
+    assert (tmp_path / "fresh" / "witness.jsonl").exists() and w.entries == []
