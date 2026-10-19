@@ -101,6 +101,7 @@ def test_remote_gate_over_stdio_upstream(tmp_path):
         assert r["result"]["_meta"]["gargoyle/receipt"]["request_context"]["principal"] == "bob@contoso.com"
         lines = [json.loads(l) for l in (tmp_path / "audit.jsonl").read_text(encoding="utf-8").splitlines()]
         assert [e["principal"] for e in lines] == ["alice@contoso.com"] * 3 + ["bob@contoso.com"] and [e["seq"] for e in lines] == [1, 2, 3, 4]
+        assert [e["client"] for e in lines] == ["t 0"] * 3 + [None]          # alice's client named itself; bob's did not
         # No session: told to initialize; DELETE ends one.
         assert rpc(c, alice, {"jsonrpc": "2.0", "id": 9, "method": "tools/list", "params": {}}, "stale").status_code == 404
         assert c.delete("/mcp/" + alice, headers={SESSION_HEADER: sid}).status_code == 200

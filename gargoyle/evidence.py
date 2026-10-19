@@ -48,8 +48,9 @@ from gargoyle.envelope import args_sha256, canonical_json, canonical_json_legacy
 from gargoyle.execution import verify_chain
 from gargoyle.verifier import verify_provenance
 
-EVIDENCE_VERSION = "gargoyle-evidence/2"          # entry hashes over RFC 8785 canonical JSON
-EVIDENCE_VERSIONS = {"gargoyle-evidence/1": canonical_json_legacy, EVIDENCE_VERSION: canonical_json}
+EVIDENCE_VERSION = "gargoyle-evidence/3"          # version 3 adds `client`; hashes over RFC 8785 canonical JSON
+EVIDENCE_VERSIONS = {"gargoyle-evidence/1": canonical_json_legacy, "gargoyle-evidence/2": canonical_json,
+                     EVIDENCE_VERSION: canonical_json}
 GENESIS = "0" * 64
 
 HONORED = "honored"
@@ -65,6 +66,11 @@ REF_EVIDENCE_UNCHAINED = "REF_EVIDENCE_UNCHAINED"       # a pre-chain {receipt, 
 
 _FIELDS = ("evidence_version", "seq", "prev_sha256", "at", "kind", "tool", "args_sha256",
            "principal", "reason", "receipt", "grant", "execution", "entry_sha256")
+# Version 3 names the MCP client that made the call ("Claude Desktop 1.2", "ChatGPT"),
+# from the initialize handshake; null when the client did not say. The
+# receipt stays model-agnostic: this is evidence about the session, not a
+# bound field of the decision.
+_FIELDS_V3 = _FIELDS + ("client",)
 
 
 def entry_sha256(entry: Dict[str, Any]) -> str:
@@ -78,9 +84,11 @@ def entry_sha256(entry: Dict[str, Any]) -> str:
 
 def build_entry(*, seq: int, prev_sha256: str, kind: str, tool: str, args: Any, principal: str,
                 reason: str, receipt: Any = None, grant: Any = None, execution: Any = None,
-                at: Optional[datetime] = None) -> Dict[str, Any]:
+                at: Optional[datetime] = None, client: Optional[str] = None) -> Dict[str, Any]:
     if kind not in (HONORED, REFUSED):
         raise ValueError("kind must be honored or refused")
+    if client is not None and not isinstance(client, str):
+        raise ValueError("client must be a string or None")
     entry = {
         "evidence_version": EVIDENCE_VERSION,
         "seq": seq,
@@ -94,6 +102,7 @@ def build_entry(*, seq: int, prev_sha256: str, kind: str, tool: str, args: Any, 
         "receipt": receipt,
         "grant": grant,
         "execution": execution,
+        "client": client,
     }
     entry["entry_sha256"] = entry_sha256(entry)
     return entry
@@ -121,13 +130,15 @@ class EvidenceLog:
                     self._seq, self._tail = int(last["seq"]), str(last["entry_sha256"])
 
     def append(self, kind: str, tool: str, args: Any, principal: str, reason: str, *,
-               receipt: Any = None, grant: Any = None, execution: Any = None) -> Dict[str, Any]:
+               receipt: Any = None, grant: Any = None, execution: Any = None,
+               client: Optional[str] = None) -> Dict[str, Any]:
         """Write one entry and return it. Raises OSError if the file cannot
         be written; the caller decides whether that stops the call."""
         if self._seq is None:
             self._load_tail()
         entry = build_entry(seq=self._seq + 1, prev_sha256=self._tail, kind=kind, tool=tool, args=args,
-                            principal=principal, reason=reason, receipt=receipt, grant=grant, execution=execution)
+                            principal=principal, reason=reason, receipt=receipt, grant=grant, execution=execution,
+                            client=client)
         with open(self.path, "a", encoding="utf-8") as f:
             f.write(json.dumps(entry, sort_keys=True) + "\n")
         self._seq, self._tail = entry["seq"], entry["entry_sha256"]
@@ -135,8 +146,10 @@ class EvidenceLog:
 
 
 def _well_formed(entry: Any) -> bool:
-    return (isinstance(entry, dict) and set(entry) == set(_FIELDS)
+    expected = _FIELDS_V3 if isinstance(entry, dict) and entry.get("evidence_version") == EVIDENCE_VERSION else _FIELDS
+    return (isinstance(entry, dict) and set(entry) == set(expected)
             and entry["evidence_version"] in EVIDENCE_VERSIONS
+            and (entry.get("client") is None or isinstance(entry.get("client"), str))
             and isinstance(entry["seq"], int) and entry["seq"] >= 1
             and isinstance(entry["prev_sha256"], str) and len(entry["prev_sha256"]) == 64
             and isinstance(entry["at"], str) and entry["kind"] in (HONORED, REFUSED)
@@ -179,7 +192,7 @@ def verify_log(
             rc = rc if isinstance(rc, dict) else {}
             report.append({"seq": None, "kind": None, "tool": rc.get("tool"), "principal": rc.get("principal"),
                            "accepted": False, "reason": REF_EVIDENCE_UNCHAINED if legacy else REF_EVIDENCE_MALFORMED,
-                           "verdict": None, "released_by": [], "state": None})
+                           "verdict": None, "released_by": [], "state": None, "client": None})
             all_ok = False
             continue
         e = raw
@@ -212,7 +225,7 @@ def verify_log(
                  if ex.get("pre_state_sha256") or ex.get("post_state_sha256") else None)
         report.append({"seq": e["seq"], "kind": e["kind"], "tool": e["tool"], "principal": e["principal"],
                        "accepted": ok, "reason": reason, "verdict": e["reason"], "released_by": released_by,
-                       "state": state})
+                       "state": state, "client": e.get("client")})
         all_ok = all_ok and ok
         # The chain continues from what the file says, so one bad entry is
         # reported once rather than cascading into every later one.

@@ -92,6 +92,12 @@ verifying itself for no external user; that is the failure mode to avoid.
   hold and the receipt, with a link to /approve from GARGOYLE_APPROVE_URL); posted in
   a thread, failures logged and ignored, the grant still only from the approver's
   key. 80 lines. All six roadmap steps are done.
+- Model-agnostic by record (2026-10-19): evidence entries (gargoyle-evidence/3) carry the
+  MCP client's name and version from the initialize handshake; `gargoyle audit` prints
+  "via Claude Desktop 1.4". The receipt stays model-agnostic by design. Guide Part 8:
+  the per-client side-door checklist (Claude Code, Desktop, claude.ai, ChatGPT, Copilot,
+  Cursor, custom apps). Versions 1 and 2 of the evidence format still verify as written.
+  0.10.0.dev0.
 - Remote middleware mode (2026-10-19): gargoyle/remote.py. The gate as a Streamable HTTP
   MCP server (POST /mcp/{token}, sessions by Mcp-Session-Id, JSON or SSE answers from the
   upstream, DELETE ends a session) fronting a stdio command or a remote MCP server

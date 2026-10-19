@@ -725,7 +725,7 @@ hashed over the one before:
 
 ```
 entry = {
-  "evidence_version": "gargoyle-evidence/2",
+  "evidence_version": "gargoyle-evidence/3",
   "seq":          <1, 2, 3 ...; dense>,
   "prev_sha256":  <entry_sha256 of seq-1; 64 "0" for seq 1>,
   "at":           <ISO 8601 UTC, when the executor decided>,
@@ -737,6 +737,8 @@ entry = {
   "receipt":      <section 3 receipt, or null>,
   "grant":        <section 8 grant, or null>,
   "execution":    <section 13 execution receipt, or null>,
+  "client":       <the MCP client that made the call, "name version" from
+                   its initialize handshake, or null; version 3 and later>,
   "entry_sha256": sha256(canonical_json(entry without entry_sha256))
 }
 ```
@@ -772,6 +774,7 @@ than failing every later one. The result names each entry's outcome, the
 count of honored and refused entries, and the last `entry_sha256` (the
 tail). The whole file is `EVIDENCE_VERIFIED` when every entry is.
 
+`gargoyle-evidence/2` entries have no `client` member;
 `gargoyle-evidence/1` entries hashed under the `gargoyle/2` canonical form;
 a verifier recomputes each entry's hash under its own `evidence_version`,
 so one log may span the change and still verify end to end.

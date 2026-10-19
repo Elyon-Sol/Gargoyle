@@ -316,6 +316,8 @@ def cmd_audit(args) -> int:
                 why += " state %s -> %s" % (pre or "?", post or "?") if post else " state %s" % pre
             if r.get("reverts"):
                 why += " reverts #%d" % r["reverts"]
+            if r.get("client"):
+                why += " via " + r["client"]
             print("%4s %-5s %-8s %-24s %-28s %s%s" % (r["seq"] if r["seq"] is not None else "?",
                                                       "ok" if r["accepted"] else "FAIL", r["kind"] or "?",
                                                       (r["tool"] or "?")[:24], (r["principal"] or "?")[:28], r["reason"], why))

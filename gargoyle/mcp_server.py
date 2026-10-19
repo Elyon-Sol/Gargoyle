@@ -267,6 +267,15 @@ def _without_gargoyle_meta(params: Dict[str, Any]) -> Dict[str, Any]:
     return forwarded
 
 
+def client_label(params: Any) -> Optional[str]:
+    """"name version" from an initialize request's clientInfo, or None."""
+    info = params.get("clientInfo") if isinstance(params, dict) else None
+    if not isinstance(info, dict) or not isinstance(info.get("name"), str) or not info["name"]:
+        return None
+    version = info.get("version")
+    return info["name"] + (" " + version if isinstance(version, str) and version else "")
+
+
 def call_for(tool: str, args: Any, principal: str, state_sha256: Optional[str] = None) -> Dict[str, Any]:
     """The call a receipt must bind to execute `tool` with `args` through a
     server serving `principal`: the same three fields the issuer bound, plus
@@ -319,6 +328,7 @@ class ServerState:
             )
         self.executed: List[Dict[str, Any]] = []
         self.initialized = False
+        self.client: Optional[str] = None     # "name version" from the MCP initialize handshake
 
 
 def gate_tool_call(state: ServerState, params: Dict[str, Any]) -> (bool, str):
@@ -422,7 +432,8 @@ def _record(state: ServerState, kind: str, gate: Dict[str, Any], params: Dict[st
     principal = (state.config or {}).get("principal") or ""
     try:
         state.evidence.append(kind, str(params.get("name")), params.get("arguments", {}), principal,
-                              gate["reason"], receipt=gate["envelope"], grant=gate["grant"], execution=execution)
+                              gate["reason"], receipt=gate["envelope"], grant=gate["grant"], execution=execution,
+                              client=state.client)
     except (OSError, ValueError) as exc:
         sys.stderr.write("gargoyle: evidence log unwritable: %s\n" % exc)
 
@@ -464,6 +475,8 @@ def handle_message(state: ServerState, msg: Dict[str, Any]) -> Optional[Dict[str
     params = msg.get("params") or {}
 
     if state.upstream is not None and method in ("initialize", "tools/list"):
+        if method == "initialize":
+            state.client = client_label(params)
         reply = _relay(state, msg)
         if method == "tools/list" and state.snapshots is not None and isinstance(reply, dict) \
                 and isinstance(reply.get("result"), dict) and isinstance(reply["result"].get("tools"), list):
@@ -472,6 +485,7 @@ def handle_message(state: ServerState, msg: Dict[str, Any]) -> Optional[Dict[str
         return reply
 
     if method == "initialize":
+        state.client = client_label(params)
         # The handshake completes when the client sends notifications/initialized;
         # tools are served only after that.
         return _success(

@@ -194,6 +194,8 @@ def build_remote_app(
     def handle_one(st: ServerState, msg: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         method = msg.get("method")
         if method == "initialize":
+            from gargoyle.mcp_server import client_label
+            st.client = client_label(msg.get("params"))
             return {"jsonrpc": "2.0", "id": msg.get("id"), "result": st.upstream_init}   # type: ignore[attr-defined]
         if method == "notifications/initialized":
             st.initialized = True

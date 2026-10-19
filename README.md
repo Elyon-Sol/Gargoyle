@@ -21,7 +21,7 @@ your MCP server and lets through only what both agreed to.
 
 [![PyPI](https://img.shields.io/pypi/v/gargoyle-receipts)](https://pypi.org/project/gargoyle-receipts/)
 
-Status: pre-release (`0.9.0.dev0`, on PyPI as `gargoyle-receipts`). The wire format is `gargoyle/3` and may
+Status: pre-release (`0.10.0.dev0`, on PyPI as `gargoyle-receipts`). The wire format is `gargoyle/3` and may
 still change before the first release; it is specified in [SPEC.md](SPEC.md).
 
 ## What a receipt gives you
@@ -197,7 +197,10 @@ undone the same way: the middleware keeps what a held write replaced and
 offers `gargoyle_revert`, which composes the restoring write and sends it
 through the gate, held, shown as a diff, bound to the current state, and
 refused if anything changed since. The audit marks a revert from the
-state hashes alone.
+state hashes alone. Every entry also names the MCP client that asked, from
+its initialize handshake, so a fleet with Claude on some desks and ChatGPT
+on others still has one trail that says who, through what, did what. The
+receipt itself stays model-agnostic.
 
 The MCP middleware also keeps an evidence log: one hash-chained line per
 decision, refusals and declined holds included, so the trail answers "what

@@ -206,7 +206,8 @@ def test_every_decision_lands_in_the_evidence_log(tmp_path):
     state = middleware(client, sleep=human_declines, approval_timeout=60, attest=True)
     from gargoyle.evidence import EvidenceLog
     state.evidence = EvidenceLog(str(tmp_path / "e.jsonl"))
-    handle_message(state, {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}})
+    handle_message(state, {"jsonrpc": "2.0", "id": 1, "method": "initialize",
+                           "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "ChatGPT", "version": "2.1"}}})
     handle_message(state, {"jsonrpc": "2.0", "method": "notifications/initialized"})
     ok = handle_message(state, {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": call("read_file", {"path": "a"})})
     no = handle_message(state, {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": call("delete_file", {"path": "a"})})
@@ -218,6 +219,7 @@ def test_every_decision_lands_in_the_evidence_log(tmp_path):
 
     entries = read_log(str(tmp_path / "e.jsonl"))
     assert [e["kind"] for e in entries] == [HONORED, REFUSED, REFUSED]
+    assert {e["client"] for e in entries} == {"ChatGPT 2.1"}               # which assistant asked, every entry
     assert [e["seq"] for e in entries] == [1, 2, 3] and entries[2]["prev_sha256"] == entries[1]["entry_sha256"]
     assert entries[1]["receipt"] is None                               # policy said no: nothing was issued
     assert entries[2]["receipt"]["requires_approval"] is True          # the human said no: the hold is on record

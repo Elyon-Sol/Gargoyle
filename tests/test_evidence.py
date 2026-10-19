@@ -186,3 +186,22 @@ def test_an_honored_held_call_reports_who_released_it(tmp_path):
     with contextlib.redirect_stdout(buf):
         assert main(["audit", "--log", str(log.path), "--out", str(out)]) == 0
     assert "CHAIN_VERIFIED released by sysops@contoso.com" in buf.getvalue()
+
+
+def test_entries_name_the_client_and_older_versions_still_verify(tmp_path):
+    from gargoyle.evidence import EVIDENCE_VERSION, _well_formed
+    log = EvidenceLog(str(tmp_path / "e.jsonl"))
+    e = log.append(REFUSED, "delete_file", {}, PRINCIPAL, "DESTRUCTIVE_TOOL", client="Claude Desktop 1.4")
+    assert e["evidence_version"] == EVIDENCE_VERSION and e["client"] == "Claude Desktop 1.4"
+    anon = log.append(REFUSED, "delete_file", {}, PRINCIPAL, "DESTRUCTIVE_TOOL")
+    assert anon["client"] is None
+    v = verify_log(read_log(str(log.path)), **TRUST)
+    assert v["accepted"] and [r["client"] for r in v["entries"]] == ["Claude Desktop 1.4", None]
+    # A version-2 entry (no client member) is still well-formed; a version-3 entry without it is not.
+    v2 = {k: val for k, val in anon.items() if k != "client"}; v2["evidence_version"] = "gargoyle-evidence/2"
+    v2["entry_sha256"] = entry_sha256(v2)
+    assert _well_formed(v2)
+    v3_missing = {k: val for k, val in anon.items() if k != "client"}
+    assert not _well_formed(v3_missing)
+    with pytest.raises(ValueError):
+        build_entry(seq=1, prev_sha256=GENESIS, kind=REFUSED, tool="t", args={}, principal=PRINCIPAL, reason="x", client=7)
