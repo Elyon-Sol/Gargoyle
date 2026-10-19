@@ -92,6 +92,12 @@ verifying itself for no external user; that is the failure mode to avoid.
   hold and the receipt, with a link to /approve from GARGOYLE_APPROVE_URL); posted in
   a thread, failures logged and ignored, the grant still only from the approver's
   key. 80 lines. All six roadmap steps are done.
+- Witness and change detection live (2026-10-19): on the Windows client, the three
+  decisions made after the witness began reconciled with 0 findings, the 39 earlier rows
+  were noted as predating the witness, and both gated files verified as the gate left
+  them. Then notes.md was edited in Notepad: the next run reported
+  "FINDING CHANGED_OUTSIDE_GATE C:\gargoyle-poc\project\notes.md", with chain and
+  witness unchanged. The side door is detected, not prevented, as the spec says.
 - Witness and change detection (2026-10-19): gargoyle/witness.py, an issuer-signed
   hash-chained record of every issued receipt, grant, decline and plan, served at
   GET /witness and written beside the keys; gargoyle/reconcile.py compares a client's
