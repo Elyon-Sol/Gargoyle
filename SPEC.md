@@ -805,7 +805,7 @@ with the issuer key, so a client can neither forge nor edit it.
 entry = {
   "witness_version": "gargoyle-witness/1",
   "seq": n, "prev_sha256": ..., "at": ...,
-  "event": "issued" | "refused" | "granted" | "declined" | "plan" | "plan_granted",
+  "event": "started" | "issued" | "refused" | "granted" | "declined" | "plan" | "plan_granted",
   ... (issued: principal, tool, decision_id, decision_sha256, approval_request_id,
        args_sha256, held, covered; granted: approval_request_id, approver,
        collected, required, hold_kind; declined: approval_request_id, by;
@@ -818,6 +818,9 @@ entry = {
 Reconciliation (`gargoyle audit --witness`) verifies both chains and
 compares them by `decision_id`. Findings, never resolved silently:
 
+- `PREDATES_WITNESS`: the entry is older than the witness's first `started`
+  entry, so the witness can vouch for it neither way; reported as
+  information, not a failure;
 - `UNWITNESSED_RECEIPT`: evidence honors a decision the issuer never issued,
   or one whose hash or principal differs (a forged or foreign receipt);
 - `UNWITNESSED_RELEASE`: a held call was honored but the issuer saw no grant

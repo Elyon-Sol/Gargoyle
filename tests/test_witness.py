@@ -46,12 +46,13 @@ def test_witness_entries_are_signed_and_chained(tmp_path):
     again.record("declined", approval_request_id="r-2")
     entries = read_witness(str(tmp_path / "w.jsonl"))
     v = verify_witness(entries, issuer_public_keys=ISSUER_KEYS)
-    assert v["accepted"] and v["count"] == 3 and [e["seq"] for e in entries] == [1, 2, 3]
-    forged = dict(entries[1], approver="mallory")
-    assert verify_witness([entries[0], forged, entries[2]], issuer_public_keys=ISSUER_KEYS)["entries"][1]["reason"] == REF_WITNESS_HASH_MISMATCH
+    assert v["accepted"] and v["count"] == 5 and [e["event"] for e in entries] == ["started", "issued", "granted", "started", "declined"]
+    assert entries[3]["resumed"] is True and entries[0]["resumed"] is False
+    forged = dict(entries[2], approver="mallory")
+    assert verify_witness(entries[:2] + [forged] + entries[3:], issuer_public_keys=ISSUER_KEYS)["entries"][2]["reason"] == REF_WITNESS_HASH_MISMATCH
     from gargoyle.witness import entry_sha256
     forged["entry_sha256"] = entry_sha256(forged)              # rehashed, but the issuer did not sign it
-    assert verify_witness([entries[0], forged], issuer_public_keys=ISSUER_KEYS)["entries"][1]["reason"] == REF_WITNESS_SIGNATURE_INVALID
+    assert verify_witness(entries[:2] + [forged], issuer_public_keys=ISSUER_KEYS)["entries"][2]["reason"] == REF_WITNESS_SIGNATURE_INVALID
     assert not verify_witness(entries, issuer_public_keys={"other": executor.public_key()})["accepted"]
 
 
@@ -95,14 +96,18 @@ def test_honest_evidence_reconciles_and_tampering_is_found(tmp_path):
     finally:
         up.close()
     evidence = read_log(str(tmp_path / "audit.jsonl")); witness = read_witness(str(tmp_path / "witness.jsonl"))
-    assert [e["event"] for e in witness] == ["issued", "issued", "granted"]
+    assert [e["event"] for e in witness] == ["started", "issued", "issued", "granted"]
     assert evidence[1]["ref"] == str(root / "n.md") and evidence[1]["evidence_version"] == "gargoyle-evidence/4"
     assert verify_log(evidence, issuer_public_keys=ISSUER_KEYS, executor_public_keys={"executor-1": executor.public_key()},
                       approver_public_keys={"approver-1": approver.public_key()})["accepted"]
     r = reconcile(evidence, witness, principal=PRINCIPAL)
     assert r["accepted"] and r["issued"] == 2 and r["evidence_with_receipt"] == 2
     # The witness is served to an authenticated caller too.
-    assert len(c.get("/witness", headers=h).json()["entries"]) == 3
+    assert len(c.get("/witness", headers=h).json()["entries"]) == 4
+    # Evidence from before the witness began is information, not a finding.
+    old = dict(evidence[0], at="2026-01-01T00:00:00+00:00", receipt=dict(evidence[0]["receipt"], decision_id="before-the-witness"))
+    r = reconcile(evidence + [old], witness, principal=PRINCIPAL)      # beside the real rows, not in place of one
+    assert r["accepted"] and [f["finding"] for f in r["findings"]] == ["PREDATES_WITNESS"] and r["horizon"]
 
     # 1. A forged honored entry for a decision the issuer never issued: the user holds the executor key, so it verifies alone.
     now = datetime.now(timezone.utc)
@@ -145,7 +150,7 @@ def test_audit_command_reports_reconciliation_and_tree(tmp_path, capsys):
     assert main(["audit", "--log", str(tmp_path / "audit.jsonl"), "--out", str(out), "--witness", str(tmp_path / "witness.jsonl"),
                  "--check-tree", str(root)]) == 0
     text = capsys.readouterr().out
-    assert "witness: 2 entries, WITNESS_VERIFIED" in text and "0 finding(s)" in text and "1 gated file(s) checked" in text
+    assert "witness: 3 entries, WITNESS_VERIFIED" in text and "0 finding(s)" in text and "1 gated file(s) checked" in text
     (root / "n.md").write_text("tampered", encoding="utf-8")
     assert main(["audit", "--log", str(tmp_path / "audit.jsonl"), "--out", str(out), "--check-tree", str(root)]) == 1
     assert "CHANGED_OUTSIDE_GATE" in capsys.readouterr().out
@@ -162,4 +167,4 @@ def test_audit_names_a_missing_witness_or_folder_plainly(tmp_path, capsys):
     assert "not a directory" in capsys.readouterr().err
     # The issuer creates the witness file at start, before any decision.
     w = WitnessLog(str(tmp_path / "fresh" / "witness.jsonl"), issuer, "issuer-1")
-    assert (tmp_path / "fresh" / "witness.jsonl").exists() and w.entries == []
+    assert (tmp_path / "fresh" / "witness.jsonl").exists() and [e["event"] for e in w.entries] == ["started"]

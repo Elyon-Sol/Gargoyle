@@ -2,6 +2,7 @@
 the gated folder against the evidence.
 
 Findings, never silently fixed:
+  PREDATES_WITNESS      evidence from before the witness began; it can be vouched for neither way (information)
   UNWITNESSED_RECEIPT   evidence honors a decision the issuer never issued (forged or foreign)
   UNWITNESSED_RELEASE   a held call was honored but the issuer saw no grant for its hold (or plan)
   MISSING_EVIDENCE      the issuer issued a receipt to this principal and the client recorded nothing
@@ -33,9 +34,12 @@ def reconcile(evidence: Iterable[Any], witness: Iterable[Any], *, principal: Opt
     issued: Dict[str, Dict[str, Any]] = {}
     granted: Dict[str, List[Dict[str, Any]]] = {}
     plan_granted: Dict[str, List[Dict[str, Any]]] = {}
+    horizon: Optional[datetime] = None
     for w in witness:
         if not isinstance(w, dict):
             continue
+        if horizon is None:
+            horizon = _parse(w.get("at"))
         if w.get("event") == "issued" and isinstance(w.get("decision_id"), str):
             issued[w["decision_id"]] = w
         elif w.get("event") == "granted" and isinstance(w.get("approval_request_id"), str):
@@ -54,7 +58,11 @@ def reconcile(evidence: Iterable[Any], witness: Iterable[Any], *, principal: Opt
         w = issued.get(did)
         if e.get("kind") == "honored":
             if w is None:
-                findings.append({"finding": "UNWITNESSED_RECEIPT", "seq": e.get("seq"), "decision_id": did, "tool": e.get("tool")})
+                at_e = _parse(e.get("at"))
+                if horizon is not None and at_e is not None and at_e < horizon:
+                    findings.append({"finding": "PREDATES_WITNESS", "seq": e.get("seq"), "decision_id": did, "tool": e.get("tool")})
+                else:
+                    findings.append({"finding": "UNWITNESSED_RECEIPT", "seq": e.get("seq"), "decision_id": did, "tool": e.get("tool")})
                 continue
             if w.get("decision_sha256") != receipt.get("decision_sha256") or w.get("principal") != receipt.get("request_context", {}).get("principal"):
                 findings.append({"finding": "UNWITNESSED_RECEIPT", "seq": e.get("seq"), "decision_id": did, "tool": e.get("tool")})
@@ -78,7 +86,8 @@ def reconcile(evidence: Iterable[Any], witness: Iterable[Any], *, principal: Opt
             continue
         findings.append({"finding": "MISSING_EVIDENCE", "decision_id": did, "tool": w.get("tool"), "principal": w.get("principal"),
                          "held": bool(w.get("held")), "at": w.get("at")})
-    return {"accepted": not findings, "findings": findings,
+    hard = [f for f in findings if f["finding"] != "PREDATES_WITNESS"]
+    return {"accepted": not hard, "findings": findings, "horizon": horizon.isoformat() if horizon else None,
             "issued": len(issued), "evidence_with_receipt": len(seen_decisions)}
 
 
