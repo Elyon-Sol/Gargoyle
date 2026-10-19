@@ -78,11 +78,14 @@ def build_execution_receipt(
     envelope: Dict[str, Any],
     outputs: Any,
     executed_at: Optional[datetime] = None,
+    post_state_sha256: Optional[str] = None,
 ) -> Dict[str, Any]:
     """The unsigned execution receipt for a call the executor has just run
     under `envelope` (a receipt it honored, so decision_id is present) with
     `outputs` (any JSON value; only its hash is recorded). `executed_at`
-    must be timezone-aware; it defaults to now."""
+    must be timezone-aware; it defaults to now. When the receipt bound the
+    target's state, `pre_state_sha256` is copied from it and
+    `post_state_sha256` (gargoyle.state) records the state after the run."""
     if not isinstance(envelope, dict):
         raise TypeError("envelope must be the honored authorization receipt")
     for key in _BOUND_FROM_RECEIPT:
@@ -94,7 +97,9 @@ def build_execution_receipt(
         executed_at = datetime.now(timezone.utc)
     if executed_at.tzinfo is None:
         raise ValueError("executed_at must be timezone-aware (UTC)")
-    return {
+    if post_state_sha256 is not None and not (isinstance(post_state_sha256, str) and len(post_state_sha256) == 64):
+        raise ValueError("post_state_sha256 must be 64 hex characters")
+    out = {
         "execution_version": EXECUTION_VERSION,
         "decision_id": envelope["decision_id"],
         "decision_sha256": envelope["decision_sha256"],
@@ -104,6 +109,12 @@ def build_execution_receipt(
         "outputs_sha256": args_sha256(outputs),
         "executed_at": executed_at.isoformat(),
     }
+    pre = envelope["request_context"].get("state_sha256")
+    if pre is not None:
+        out["pre_state_sha256"] = pre
+    if post_state_sha256 is not None:
+        out["post_state_sha256"] = post_state_sha256
+    return out
 
 
 def sign_execution_receipt(execution: Dict[str, Any], signing_key: Any, key_id: str) -> Dict[str, Any]:
@@ -156,6 +167,13 @@ def verify_execution_receipt(
     for key in _BOUND_FROM_RECEIPT:
         if key not in envelope or serialize(execution[key]) != serialize(envelope[key]):
             return _reject(REF_EXEC_BINDING_MISMATCH)
+    # A state-bound receipt's execution receipt names the same pre-state.
+    pre = envelope["request_context"].get("state_sha256") if isinstance(envelope.get("request_context"), dict) else None
+    if (pre is not None or "pre_state_sha256" in execution) and execution.get("pre_state_sha256") != pre:
+        return _reject(REF_EXEC_BINDING_MISMATCH)
+    post = execution.get("post_state_sha256")
+    if post is not None and not (isinstance(post, str) and len(post) == 64):
+        return _reject(REF_EXEC_MALFORMED)
     if check_outputs:
         try:
             if args_sha256(outputs) != execution["outputs_sha256"]:

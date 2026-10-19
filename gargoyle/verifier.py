@@ -70,6 +70,7 @@ REF_VERIFY_VERSION_UNSUPPORTED = "REF_VERIFY_VERSION_UNSUPPORTED"
 REF_VERIFY_REASSERT_INVALIDATED = "REF_VERIFY_REASSERT_INVALIDATED"
 REF_VERIFY_REASSERT_RE_EVALUATE_REQUIRED = "REF_VERIFY_REASSERT_RE_EVALUATE_REQUIRED"
 REF_VERIFY_BINDING_MISMATCH = "REF_VERIFY_BINDING_MISMATCH"
+REF_VERIFY_STATE_MISMATCH = "REF_VERIFY_STATE_MISMATCH"      # the target's state moved since the receipt bound it
 # The receipt names a different principal than the one the target
 # authenticated, or the target authenticated none.
 REF_VERIFY_PRINCIPAL_MISMATCH = "REF_VERIFY_PRINCIPAL_MISMATCH"
@@ -133,7 +134,7 @@ _REQUEST_CONTEXT_KEYS = (
 
 # The live call's keys: exactly these, plus optionally on_behalf_of.
 _CALL_KEYS = ("tool", "args", "principal")
-_OPTIONAL_CALL_KEYS = ("on_behalf_of",)
+_OPTIONAL_CALL_KEYS = ("on_behalf_of", "state_sha256")
 
 
 def _reject(reason: str) -> Dict[str, Any]:
@@ -210,6 +211,8 @@ def verify_provenance(
         if key not in rc:
             return _reject(REF_VERIFY_ENVELOPE_ABSENT)
     if "on_behalf_of" in rc and not valid_principal(rc["on_behalf_of"]):
+        return _reject(REF_VERIFY_ENVELOPE_ABSENT)
+    if "state_sha256" in rc and not (isinstance(rc["state_sha256"], str) and len(rc["state_sha256"]) == 64):
         return _reject(REF_VERIFY_ENVELOPE_ABSENT)
     # A flagged receipt names the hold a grant must release; a receipt that
     # says so without naming it is unusable.
@@ -404,5 +407,12 @@ def verify_envelope(
         return _reject(REF_VERIFY_BINDING_MISMATCH)
     if rc["args_sha256"] != live_args_hash:
         return _reject(REF_VERIFY_BINDING_MISMATCH)
+
+    # state: a receipt that binds the target's state (gargoyle.state) is
+    # honored only in that state. The executor supplies the hash it sees
+    # now; absent or different is a refusal. A live hash the receipt does
+    # not bind is ignored: it was not part of the decision.
+    if "state_sha256" in rc and call.get("state_sha256") != rc["state_sha256"]:
+        return _reject(REF_VERIFY_STATE_MISMATCH)
 
     return _accept()

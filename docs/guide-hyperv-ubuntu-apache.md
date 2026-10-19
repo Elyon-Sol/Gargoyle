@@ -414,6 +414,16 @@ exported, and is enrolled under their account; the card they approve is
 released by their UPN, which is what the audit then shows. Threshold rules
 can name those UPNs. No approver file changes hands.
 
+**5.4 What you are approving.** A card for a file write shows the file's
+current state when the assistant asked (size and a hash, or "does not
+exist yet") and the proposed content as a diff against it: removed lines
+struck through, added lines in green. That state is bound into the
+receipt you release. If the file changes between your approval and the
+run, the write is refused and the refusal is in the audit; nobody can
+redirect an approval by editing the file underneath it. The execution
+receipt records the file's state before and after, so the audit shows
+what each approved write changed.
+
 ## Part 6: the audit trail
 
 Every decision appended one line to `C:\gargoyle\audit.jsonl`, honored or

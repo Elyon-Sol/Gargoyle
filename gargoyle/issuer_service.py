@@ -52,6 +52,7 @@ STATIC = Path(__file__).resolve().parent / "static"
 from gargoyle.approval import (REF_APPROVAL_APPROVER_NOT_ELIGIBLE, REF_APPROVAL_DUPLICATE_APPROVER,
                                verify_grant)
 from gargoyle.envelope import approval_terms
+from gargoyle.state import state_sha256, valid_description
 from gargoyle.notify import notifier_from_env
 from gargoyle.approvers import (DEFAULT_APPROVER_ROLE, ENV_APPROVER_GROUPS, ENV_APPROVER_ROLE, ENV_APPROVERS_PATH,
                                 ApproverRegistry, may_enroll, valid_public_key_hex)
@@ -104,6 +105,7 @@ def build_issuer_app(
     app = FastAPI(title="Gargoyle issuing service")
     app.state.pending: Dict[str, Dict[str, Any]] = {}     # approval_request_id -> envelope
     app.state.pending_args: Dict[str, Any] = {}           # approval_request_id -> the call's arguments
+    app.state.pending_state: Dict[str, Any] = {}          # approval_request_id -> the target's state when held
     app.state.grants: Dict[str, Dict[str, Any]] = {}      # approval_request_id -> grant
     app.state.declined: set = set()                       # approval_request_ids a human refused
     registry = approver_registry if approver_registry is not None else ApproverRegistry(None)
@@ -147,6 +149,15 @@ def build_issuer_app(
         interaction = {**body.get("claims", {}), "tool": body["tool"], "args": body["args"],
                        "principal": who["principal"], "groups": who.get("groups", []),
                        "roles": who.get("roles", [])}
+        state = body.get("state")
+        if state is not None:
+            # The executor's description of the target before the call: its
+            # hash is bound into the receipt; the description is shown to
+            # the approver and seen by the policy.
+            if not valid_description(state):
+                raise _refuse(400, REF_ISSUER_BAD_REQUEST)
+            interaction["state_sha256"] = state_sha256(state)
+            interaction["state"] = {k: v for k, v in state.items() if k != "text"}
         if who["on_behalf_of"]:
             interaction["on_behalf_of"] = who["on_behalf_of"]
         result = issue(policy, body["target_url"], interaction, signing_key=signing_key, key_id=key_id,
@@ -157,6 +168,8 @@ def build_issuer_app(
             arid = result.envelope["approval_request_id"]
             app.state.pending[arid] = result.envelope
             app.state.pending_args[arid] = body["args"]
+            if state is not None:
+                app.state.pending_state[arid] = state
             if on_hold is not None:
                 try:
                     on_hold(result.envelope, body["args"])
@@ -174,10 +187,12 @@ def build_issuer_app(
             if datetime.fromisoformat(env["not_after"]) <= current:
                 del app.state.pending[arid]           # an expired hold can never be released
                 app.state.pending_args.pop(arid, None)
+                app.state.pending_state.pop(arid, None)
                 app.state.grants.pop(arid, None)
             elif not _complete(arid):
                 have = app.state.grants.get(arid, [])
                 live[arid] = {"envelope": env, "args": app.state.pending_args.get(arid),
+                              "state": app.state.pending_state.get(arid),
                               "collected": len(have), "required": approval_terms(env)["required"],
                               "approvers": [g["approver_key_id"] for g in have]}
         return {"pending": list(live.values())}
@@ -230,6 +245,7 @@ def build_issuer_app(
             return {"declined": False, "reason": REF_ISSUER_UNKNOWN_HOLD}
         del app.state.pending[arid]
         app.state.pending_args.pop(arid, None)
+        app.state.pending_state.pop(arid, None)
         app.state.grants.pop(arid, None)
         app.state.declined.add(arid)
         return {"declined": True, "reason": None}

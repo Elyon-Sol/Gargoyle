@@ -9,6 +9,7 @@ export const REF_VERIFY_VERSION_UNSUPPORTED = "REF_VERIFY_VERSION_UNSUPPORTED";
 export const REF_VERIFY_REASSERT_INVALIDATED = "REF_VERIFY_REASSERT_INVALIDATED";
 export const REF_VERIFY_REASSERT_RE_EVALUATE_REQUIRED = "REF_VERIFY_REASSERT_RE_EVALUATE_REQUIRED";
 export const REF_VERIFY_BINDING_MISMATCH = "REF_VERIFY_BINDING_MISMATCH";
+export const REF_VERIFY_STATE_MISMATCH = "REF_VERIFY_STATE_MISMATCH";
 export const REF_VERIFY_PRINCIPAL_MISMATCH = "REF_VERIFY_PRINCIPAL_MISMATCH";
 export const REF_VERIFY_SIGNATURE_INVALID = "REF_VERIFY_SIGNATURE_INVALID";
 export const REF_VERIFY_SIGNATURE_UNKNOWN_KEY = "REF_VERIFY_SIGNATURE_UNKNOWN_KEY";
@@ -30,7 +31,7 @@ export type KeyRecordView = Record<string, KeyRecordEntry>;
 const REQUIRED_ENVELOPE_KEYS = ["policy", "request_context", "decision_sha256", "target_url", "requires_approval"];
 const REQUEST_CONTEXT_KEYS = ["tool", "args_sha256", "principal"];
 const CALL_KEYS = ["tool", "args", "principal"];
-const OPTIONAL_CALL_KEYS = ["on_behalf_of"];
+const OPTIONAL_CALL_KEYS = ["on_behalf_of", "state_sha256"];
 
 const reject = (reason: string): Verdict => ({ accepted: false, reason });
 
@@ -68,6 +69,7 @@ export function verifyProvenance(envelope: unknown, opts: ProvenanceOptions): Ve
   if (typeof rc !== "object" || rc === null || Array.isArray(rc)) return reject(REF_VERIFY_ENVELOPE_ABSENT);
   for (const k of REQUEST_CONTEXT_KEYS) if (!(k in rc)) return reject(REF_VERIFY_ENVELOPE_ABSENT);
   if ("on_behalf_of" in rc && !validPrincipal(rc.on_behalf_of)) return reject(REF_VERIFY_ENVELOPE_ABSENT);
+  if ("state_sha256" in rc && (typeof rc.state_sha256 !== "string" || rc.state_sha256.length !== 64)) return reject(REF_VERIFY_ENVELOPE_ABSENT);
   if (typeof env.requires_approval !== "boolean") return reject(REF_VERIFY_ENVELOPE_ABSENT);
   if (env.requires_approval && !validPrincipal(env.approval_request_id)) return reject(REF_VERIFY_ENVELOPE_ABSENT);
   if ("approval" in env && (!env.requires_approval || !validApproval(env.approval))) return reject(REF_VERIFY_ENVELOPE_ABSENT);
@@ -123,6 +125,8 @@ export function verifyEnvelope(envelope: unknown, call: unknown, targetUrl: stri
   let liveHash: string;
   try { liveHash = argsSha256(c.args as Json); } catch { return reject(REF_VERIFY_BINDING_MISMATCH); }
   if (rc.args_sha256 !== liveHash) return reject(REF_VERIFY_BINDING_MISMATCH);
+  // A state-bound receipt runs only in the state it bound; a live hash the receipt does not bind is ignored.
+  if ("state_sha256" in rc && c.state_sha256 !== rc.state_sha256) return reject(REF_VERIFY_STATE_MISMATCH);
   return { accepted: true, reason: ACCEPT_REASSERTED_AND_BOUND };
 }
 

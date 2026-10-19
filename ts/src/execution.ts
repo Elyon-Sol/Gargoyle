@@ -21,12 +21,13 @@ const BOUND = ["decision_id", "decision_sha256", "policy", "target_url", "reques
 const REQUIRED = ["execution_version", ...BOUND, "outputs_sha256", "executed_at", "executor_key_id", "executor_signature"];
 const reject = (reason: string): Verdict => ({ accepted: false, reason });
 
-export function buildExecutionReceipt(opts: { envelope: Envelope; outputs: Json; executedAt?: string }): ExecutionReceipt {
+export function buildExecutionReceipt(opts: { envelope: Envelope; outputs: Json; executedAt?: string; postStateSha256?: string }): ExecutionReceipt {
+  if (opts.postStateSha256 !== undefined && (typeof opts.postStateSha256 !== "string" || opts.postStateSha256.length !== 64)) throw new Error("post_state_sha256 must be 64 hex characters");
   for (const k of BOUND) if (!(k in opts.envelope)) throw new Error("honored receipt lacks " + k);
   if (typeof opts.envelope.decision_id !== "string" || !opts.envelope.decision_id) throw new Error("the honored receipt must carry a decision_id");
   const executedAt = opts.executedAt ?? new Date().toISOString().replace("Z", "+00:00");
   if (parseAware(executedAt) === null) throw new Error("executed_at must carry an offset");
-  return {
+  const base: ExecutionReceipt = {
     execution_version: EXECUTION_VERSION,
     decision_id: opts.envelope.decision_id,
     decision_sha256: opts.envelope.decision_sha256,
@@ -36,6 +37,11 @@ export function buildExecutionReceipt(opts: { envelope: Envelope; outputs: Json;
     outputs_sha256: argsSha256(opts.outputs),
     executed_at: executedAt,
   };
+  const pre = (opts.envelope.request_context as Record<string, Json>).state_sha256;
+  const out: ExecutionReceipt = { ...base };
+  if (pre !== undefined) out.pre_state_sha256 = pre;
+  if (opts.postStateSha256 !== undefined) out.post_state_sha256 = opts.postStateSha256;
+  return out;
 }
 
 export function signExecutionReceipt(execution: ExecutionReceipt, signingKey: KeyObject, keyId: string): ExecutionReceipt {
@@ -62,6 +68,9 @@ export function verifyExecutionReceipt(execution: unknown, envelope: unknown, ex
   if (!key) return reject(REF_EXEC_KEY_UNKNOWN);
   if (!verifyHex(key, canonicalJson(signedRegion(ex)), sig)) return reject(REF_EXEC_SIGNATURE_INVALID);
   for (const k of BOUND) if (!(k in env) || canonicalJson(ex[k]) !== canonicalJson(env[k])) return reject(REF_EXEC_BINDING_MISMATCH);
+  const preBound = (env.request_context as Record<string, Json>).state_sha256;
+  if ((preBound !== undefined || "pre_state_sha256" in ex) && ex.pre_state_sha256 !== preBound) return reject(REF_EXEC_BINDING_MISMATCH);
+  if (ex.post_state_sha256 !== undefined && (typeof ex.post_state_sha256 !== "string" || ex.post_state_sha256.length !== 64)) return reject(REF_EXEC_MALFORMED);
   if (opts.checkOutputs) {
     try { if (argsSha256(opts.outputs as Json) !== ex.outputs_sha256) return reject(REF_EXEC_OUTPUTS_MISMATCH); }
     catch { return reject(REF_EXEC_OUTPUTS_MISMATCH); }

@@ -92,6 +92,15 @@ verifying itself for no external user; that is the failure mode to avoid.
   hold and the receipt, with a link to /approve from GARGOYLE_APPROVE_URL); posted in
   a thread, failures logged and ignored, the grant still only from the approver's
   key. 80 lines. All six roadmap steps are done.
+- State-bound approval (2026-10-19): gargoyle/state.py. A held call carries the target's
+  state description (file bytes hash, size, or absence; text beside it for the card); the
+  issuer binds state_sha256 into the signed request_context; the console shows a line diff
+  of the proposed content against the state the executor saw; the middleware re-probes
+  before running and refuses REF_VERIFY_STATE_MISMATCH if the target moved; the execution
+  receipt carries pre_state_sha256 and post_state_sha256, verified in the chain. Closes the
+  part of the EP draft's "presentation attack" limit that cryptography can close: the
+  approver's signature covers the state they were shown, and the run happens only in it.
+  TypeScript port verifies the binding. GARGOYLE_MCP_STATE_PROBE=none disables. 0.7.0.dev0.
 - Friction measurement (2026-10-19): a crafted week-close task in Claude Desktop (read
   three files, render a status review in chat, write a report file and a reconciled
   todo.md, read both back) produced 9 gated calls: 7 free reads/lists that the user never

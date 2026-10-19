@@ -93,6 +93,7 @@ signature region (section 5).
 | `request_context.args_sha256` | 64 hex | yes | yes | `sha256(canonical_json(args))` |
 | `request_context.principal` | string | yes | yes | the authenticated caller; non-empty |
 | `request_context.on_behalf_of` | string | yes | yes | optional: the party the caller acts for; non-empty when present |
+| `request_context.state_sha256` | 64 hex | yes | yes | optional: the hash of the executor's description of the target's state before the call (section 6.1); the receipt is honored only in that state |
 | `approval.required` | integer | yes | yes | optional, flagged receipts only: how many distinct approvers must sign (absent: 1) |
 | `approval.approvers` | array of string | yes | yes | optional, with `approval.required`: the approver key ids that count, sorted, unique, at least `required` of them (absent: any trusted approver) |
 | `timestamp_utc` | timestamp | no | no | when the receipt was built; informational only |
@@ -198,8 +199,8 @@ only check a hash anyone can compute, so it is not offered.
      decided again.
 4. **Binding.**
    - `call` is an object whose keys are `tool`, `args`, `principal` and
-     optionally `on_behalf_of`; else `REF_VERIFY_BINDING_MISMATCH`. Any
-     other member is unbound data.
+     optionally `on_behalf_of` and `state_sha256`; else
+     `REF_VERIFY_BINDING_MISMATCH`. Any other member is unbound data.
    - Both principals are non-empty strings and equal, else
      `REF_VERIFY_PRINCIPAL_MISMATCH`. An unauthenticated caller never
      matches, whatever the receipt names. This runs before the tool and
@@ -211,7 +212,36 @@ only check a hash anyone can compute, so it is not offered.
    - `target_url` equal as strings; `request_context.tool` equal to
      `call.tool` as strings; `request_context.args_sha256` equal to
      `sha256(canonical_json(call.args))`. Else `REF_VERIFY_BINDING_MISMATCH`.
+   - If the receipt carries `request_context.state_sha256`, `call.state_sha256`
+     is present and equal, else `REF_VERIFY_STATE_MISMATCH`: the executor
+     describes the target's state again at execution and the call runs only
+     in the state the receipt bound. A live `state_sha256` the receipt does
+     not carry is ignored; it was not part of the decision.
 
+### 6.1 State binding
+
+An executor may describe the state of the target a call will change before
+it asks for a receipt, so that the decision, and a human's release of it,
+apply to that state alone. The description is the executor's own statement
+(as the execution receipt is):
+
+```
+{"ref": <what was examined, e.g. a file path>,
+ "sha256": <hex of the target's bytes> | null when it does not exist,
+ "size": <byte count> | null}
+state_sha256 = sha256(canonical_json(description))
+```
+
+The issuer records `state_sha256` in the receipt's `request_context`,
+hashed and signed, when the request carries a description; the reference
+issuing service accepts it as `state` beside `args` and shows it to the
+approver, with the proposed content rendered as a change against it. At
+execution the executor recomputes the hash and refuses on any difference
+(step 4 above); after execution it records the state again in the
+execution receipt (section 13). What this proves: the human approved a
+change to exactly the state they were shown, and the change ran in that
+state. What it does not prove: that the executor described the state
+truthfully, which rests on the executor as everything it reports does.
 On success the result is `REASSERTED_AND_BOUND`. The verifier is pure; the
 replay claim (section 7) and, for a flagged receipt, the grant check
 (section 8) are the executing party's next steps.
@@ -593,8 +623,10 @@ the authorization receipt it honored.
 | `decision_sha256` | 64 hex | yes | copied; the decision this run fulfilled |
 | `policy` | object | yes | copied; which policy version allowed this run |
 | `target_url` | string | yes | copied |
-| `request_context` | object | yes | copied: tool, args_sha256, principal |
+| `request_context` | object | yes | copied: tool, args_sha256, principal, and on_behalf_of / state_sha256 when present |
 | `outputs_sha256` | 64 hex | yes | `sha256(canonical_json(outputs))` |
+| `pre_state_sha256` | 64 hex | yes | present iff the receipt carried `request_context.state_sha256`, and equal to it (section 6.1) |
+| `post_state_sha256` | 64 hex | yes | optional: the executor's description of the target's state after the run, hashed as in section 6.1 |
 | `executed_at` | timestamp | yes | when it ran; evidence, so inside the signature |
 | `executor_key_id` | string | yes | names the executor key |
 | `executor_signature` | 128 hex | - | `ed25519_sign(executor_key, canonical_json(receipt minus executor_signature))` |

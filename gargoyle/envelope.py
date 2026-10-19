@@ -289,6 +289,9 @@ def build_envelope(
     on_behalf_of = call.get("on_behalf_of")
     if on_behalf_of is not None and not valid_principal(on_behalf_of):
         raise ValueError("call['on_behalf_of'], when present, must be a non-empty string")
+    state_hash = call.get("state_sha256")
+    if state_hash is not None and not (isinstance(state_hash, str) and len(state_hash) == 64):
+        raise ValueError("call['state_sha256'], when present, must be 64 hex characters")
     args_hash = args_sha256(call["args"])
     if timestamp_utc is None:
         timestamp_utc = datetime.now(timezone.utc).isoformat()
@@ -311,6 +314,8 @@ def build_envelope(
     }
     if on_behalf_of is not None:
         envelope["request_context"]["on_behalf_of"] = on_behalf_of
+    if state_hash is not None:
+        envelope["request_context"]["state_sha256"] = state_hash
     if approval is not None:
         envelope["approval"] = {"required": approval["required"]}
         if "approvers" in approval:

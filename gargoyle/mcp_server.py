@@ -97,6 +97,7 @@ ENV_CLIENT_TOKEN = "GARGOYLE_MCP_CLIENT_TOKEN"
 ENV_APPROVAL_TIMEOUT = "GARGOYLE_MCP_APPROVAL_TIMEOUT_SECONDS"
 ENV_POLL_SECONDS = "GARGOYLE_MCP_POLL_SECONDS"
 ENV_AUDIT_LOG = "GARGOYLE_MCP_AUDIT_LOG"
+ENV_STATE_PROBE = "GARGOYLE_MCP_STATE_PROBE"   # "filesystem" (default): bind held calls to the target file's state; "none" to disable
 REF_TARGET_LOGIN_REQUIRED = "REF_TARGET_LOGIN_REQUIRED"   # Entra login mode and no usable token: run `gargoyle login`   # the evidence log: one hash-chained JSON line per decision, honored or refused
 
 # Self-issue refusals.
@@ -134,13 +135,16 @@ class IssuerClient:
     def _get(self, path: str) -> Any:
         return self._http.get(self.url + path, headers=self._headers(), timeout=self.request_timeout)
 
-    def issue(self, target_url: str, tool: str, args: Any) -> Dict[str, Any]:
+    def issue(self, target_url: str, tool: str, args: Any, state: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """{"envelope": ...} or {"envelope": None, "reason": ...}. The cause of
         an unavailable issuer (TLS, DNS, a refused connection) goes to stderr,
         where an MCP client's server log shows it; the refusal code stays
         generic."""
         try:
-            r = self._post("/issue", {"target_url": target_url, "tool": tool, "args": args})
+            body_out: Dict[str, Any] = {"target_url": target_url, "tool": tool, "args": args}
+            if state is not None:
+                body_out["state"] = state
+            r = self._post("/issue", body_out)
         except Exception as exc:
             if type(exc).__name__ == "LoginRequired":
                 sys.stderr.write("gargoyle: %s\n" % exc)
@@ -261,10 +265,14 @@ def _without_gargoyle_meta(params: Dict[str, Any]) -> Dict[str, Any]:
     return forwarded
 
 
-def call_for(tool: str, args: Any, principal: str) -> Dict[str, Any]:
+def call_for(tool: str, args: Any, principal: str, state_sha256: Optional[str] = None) -> Dict[str, Any]:
     """The call a receipt must bind to execute `tool` with `args` through a
-    server serving `principal`: the same three fields the issuer bound."""
-    return {"tool": tool, "args": args, "principal": principal}
+    server serving `principal`: the same three fields the issuer bound, plus
+    the target's current state hash when the receipt bound one."""
+    call = {"tool": tool, "args": args, "principal": principal}
+    if state_sha256 is not None:
+        call["state_sha256"] = state_sha256
+    return call
 
 
 class ServerState:
@@ -281,8 +289,11 @@ class ServerState:
         upstream: Optional[StdioUpstream] = None,
         issuer_client: Optional[IssuerClient] = None,
         audit_log: Optional[str] = None,
+        state_probe: Any = "filesystem",
     ) -> None:
+        from gargoyle.state import probe_from_name
         self.config = config
+        self.probe = state_probe if callable(state_probe) else probe_from_name(state_probe)
         self.upstream = upstream
         self.issuer_client = issuer_client
         self.evidence: Optional[EvidenceLog] = EvidenceLog(audit_log) if audit_log else None
@@ -331,8 +342,11 @@ def _gate(state: ServerState, params: Dict[str, Any]) -> Dict[str, Any]:
     if envelope is None and state.issuer_client is not None:
         # Self-issue: ask the issuing service, and wait for the human if it
         # flagged the call. Nothing below trusts the answer: the receipt is
-        # verified against the pinned issuer key like any other.
-        res = state.issuer_client.issue(state.config["target_id"], name, args)
+        # verified against the pinned issuer key like any other. The
+        # target's current state goes with the request (gargoyle.state), so
+        # a hold is approved against it and bound to it.
+        pre_state = state.probe(name, args) if state.probe is not None else None
+        res = state.issuer_client.issue(state.config["target_id"], name, args, state=pre_state)
         if res["envelope"] is None:
             return refused(res["reason"])
         envelope, self_issued = res["envelope"], True
@@ -342,7 +356,15 @@ def _gate(state: ServerState, params: Dict[str, Any]) -> Dict[str, Any]:
                 return refused(waited["reason"], envelope)
             grant = waited["grant"]
 
-    verdict = state.consumer.check(envelope, call_for(name, args, state.config["principal"]),
+    # A state-bound receipt is checked against the state as it is now, after
+    # any wait for approval: if the target moved, the call does not run.
+    live_state = None
+    if isinstance(envelope, dict) and isinstance(envelope.get("request_context"), dict) \
+            and "state_sha256" in envelope["request_context"] and state.probe is not None:
+        from gargoyle.state import state_sha256 as _state_hash
+        now_desc = state.probe(name, args)
+        live_state = _state_hash(now_desc) if now_desc is not None else None
+    verdict = state.consumer.check(envelope, call_for(name, args, state.config["principal"], live_state),
                                    grant=grant)
     if not verdict.honored:
         return refused(verdict.reason, envelope)
@@ -359,7 +381,7 @@ def _audit_meta(state: ServerState, gate: Dict[str, Any], outputs: Any, params: 
     goes into the evidence log when one is configured, so a client that
     discards _meta still leaves evidence."""
     meta: Dict[str, Any] = {}
-    execution = _attest(state, gate["envelope"], outputs)
+    execution = _attest(state, gate["envelope"], outputs, params)
     if execution is not None:
         meta[EXECUTION_META_KEY] = execution
     if gate["self_issued"]:
@@ -385,12 +407,19 @@ def _record(state: ServerState, kind: str, gate: Dict[str, Any], params: Dict[st
         sys.stderr.write("gargoyle: evidence log unwritable: %s\n" % exc)
 
 
-def _attest(state: ServerState, envelope: Optional[Dict[str, Any]], outputs: Any) -> Optional[Dict[str, Any]]:
+def _attest(state: ServerState, envelope: Optional[Dict[str, Any]], outputs: Any,
+            params: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
     """The signed execution receipt for an honored call, or None when this
-    server has no executor key."""
+    server has no executor key. For a state-bound call the target is
+    probed again after the run, so the receipt says what it changed."""
     if state.consumer is None or not state.consumer.attests or envelope is None:
         return None
-    return state.consumer.attest(envelope, outputs)
+    post = None
+    if params is not None and state.probe is not None and "state_sha256" in (envelope.get("request_context") or {}):
+        from gargoyle.state import state_sha256 as _state_hash
+        desc = state.probe(str(params.get("name")), params.get("arguments", {}))
+        post = _state_hash(desc) if desc is not None else None
+    return state.consumer.attest(envelope, outputs, post_state_sha256=post)
 
 
 def _success(msg_id: Any, result: Dict[str, Any]) -> Dict[str, Any]:
@@ -631,7 +660,8 @@ if __name__ == "__main__":
     _upstream = upstream_from_argv(sys.argv[1:])
     try:
         serve_stdio(ServerState(config_from_env(), upstream=_upstream, issuer_client=issuer_client_from_env(),
-                                audit_log=_os.environ.get(ENV_AUDIT_LOG) or None))
+                                audit_log=_os.environ.get(ENV_AUDIT_LOG) or None,
+                                state_probe=_os.environ.get(ENV_STATE_PROBE) or "filesystem"))
     finally:
         if _upstream is not None:
             _upstream.close()

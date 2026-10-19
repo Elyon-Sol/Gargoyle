@@ -17,6 +17,7 @@ import {
   privateKeyFromSeed, publicKeyFromRaw, publicKeyRawHex, signEnvelope, signExecutionReceipt, signGrant,
   verifyChain, verifyEnvelope, encodeReceipt, decodeReceipt, REF_JWS_PAYLOAD_MISMATCH, REF_JWS_ALG_UNSUPPORTED, encode,
   REF_APPROVAL_INSUFFICIENT, REF_APPROVAL_APPROVER_NOT_ELIGIBLE, REF_VERIFY_ENVELOPE_ABSENT, verifyGrants,
+  REF_VERIFY_STATE_MISMATCH, REF_EXEC_BINDING_MISMATCH, verifyExecutionReceipt,
 } from "../src/index.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -159,4 +160,30 @@ test("threshold vector: terms in the hash region, two grants needed", () => {
   assert.equal(verifyEnvelope({ ...signed, approval: { required: 1, approvers: T.approval.approvers } }, V.call, signed.target_url as string, opts).reason, REF_VERIFY_SIGNATURE_INVALID);
   assert.equal(verifyEnvelope({ ...signed, approval: { required: 0 } }, V.call, signed.target_url as string, opts).reason, REF_VERIFY_ENVELOPE_ABSENT);
   assert.equal(verifyEnvelope({ ...V.signed, requires_approval: false, approval: { required: 1 } }, V.call, V.signed.target_url, opts).reason, REF_VERIFY_ENVELOPE_ABSENT);
+});
+
+test("state binding: the receipt runs only in the state it bound, and the execution receipt carries it", () => {
+  const issuer = keyFor(V.issuer_seed_label), executor = keyFor(V.executor_seed_label);
+  const pre = createHash("sha256").update('{"ref":"p","sha256":"' + "a".repeat(64) + '","size":4}').digest("hex");
+  const post = createHash("sha256").update('{"ref":"p","sha256":"' + "b".repeat(64) + '","size":5}').digest("hex");
+  const call = { tool: "write_file", args: { path: "p", content: "two" }, principal: "agent-7", state_sha256: pre };
+  const env = signEnvelope(buildEnvelope({ decision: "ELIGIBLE", targetUrl: "mcp://fs", call, policyPin: V.unsigned.policy,
+                                           timestampUtc: V.unsigned.timestamp_utc }), issuer, "issuer-2026-10",
+                           { notAfter: V.signed.not_after, decisionId: "d-state-1" });
+  assert.equal((env.request_context as Record<string, string>).state_sha256, pre);
+  const issuerKeys = { "issuer-2026-10": publicKeyFromRaw(V.issuer_public_key_hex) };
+  const now = new Date("2026-10-16T12:01:00+00:00");
+  const opts = { recordSource: V.unsigned.policy, pinnedPublicKeys: issuerKeys, now };
+  const live = { tool: "write_file", args: { path: "p", content: "two" }, principal: "agent-7" };
+  assert.equal(verifyEnvelope(env, { ...live, state_sha256: pre }, "mcp://fs", opts).accepted, true);
+  assert.equal(verifyEnvelope(env, live, "mcp://fs", opts).reason, REF_VERIFY_STATE_MISMATCH);
+  assert.equal(verifyEnvelope(env, { ...live, state_sha256: post }, "mcp://fs", opts).reason, REF_VERIFY_STATE_MISMATCH);
+  assert.equal(verifyEnvelope({ ...env, request_context: { ...(env.request_context as object), state_sha256: "zz" } } as never, live, "mcp://fs", opts).reason, REF_VERIFY_ENVELOPE_ABSENT);
+  const ex = signExecutionReceipt(buildExecutionReceipt({ envelope: env, outputs: { ok: 1 }, executedAt: V.execution.executed_at, postStateSha256: post }), executor, "executor-2026-10");
+  assert.equal(ex.pre_state_sha256, pre); assert.equal(ex.post_state_sha256, post);
+  const execKeys = { "executor-2026-10": publicKeyFromRaw(V.executor_public_key_hex) };
+  assert.equal(verifyExecutionReceipt(ex, env, execKeys).accepted, true);
+  const { pre_state_sha256, executor_signature, executor_key_id, ...dropped } = ex;
+  assert.equal(verifyExecutionReceipt(signExecutionReceipt(dropped as never, executor, "executor-2026-10"), env, execKeys).reason, REF_EXEC_BINDING_MISMATCH);
+  void pre_state_sha256; void executor_signature; void executor_key_id;
 });

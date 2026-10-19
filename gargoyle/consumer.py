@@ -241,13 +241,14 @@ class Consumer:
         return self._executor_signing_key is not None
 
     def attest(self, envelope: Dict[str, Any], outputs: Any,
-               executed_at: Optional[datetime] = None) -> Dict[str, Any]:
+               executed_at: Optional[datetime] = None, post_state_sha256: Optional[str] = None) -> Dict[str, Any]:
         """The signed execution receipt for a call this consumer honored and
         the caller has just run with `outputs`. Raises when no executor key
         is configured: an unsigned statement of execution is not evidence."""
         if not self.attests:
             raise ValueError("this consumer has no executor signing key; cannot attest")
-        execution = build_execution_receipt(envelope=envelope, outputs=outputs, executed_at=executed_at)
+        execution = build_execution_receipt(envelope=envelope, outputs=outputs, executed_at=executed_at,
+                                            post_state_sha256=post_state_sha256)
         return sign_execution_receipt(execution, self._executor_signing_key, self.executor_key_id)
 
     def _approver_keys(self, key_record_view, gate_key_id, now) -> Dict[str, Any]:

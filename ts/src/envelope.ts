@@ -15,7 +15,7 @@ export const HASH_EXCLUDED_KEYS = [
 export const SIGNATURE_EXCLUDED_KEYS = ["issuer_signature", "timestamp_utc"] as const;
 
 export interface PolicyPin { policy_id: string; policy_sha256: string }
-export interface Call { tool: string; args: Json; principal: string; on_behalf_of?: string }
+export interface Call { tool: string; args: Json; principal: string; on_behalf_of?: string; state_sha256?: string }
 export type Envelope = Record<string, Json>;
 
 export function argsSha256(args: Json): string {
@@ -89,6 +89,11 @@ export function buildEnvelope(opts: {
     timestamp_utc: opts.timestampUtc ?? new Date().toISOString().replace("Z", "+00:00"),
   };
   if (obo !== undefined) (envelope.request_context as Record<string, Json>).on_behalf_of = obo;
+  const st = opts.call.state_sha256;
+  if (st !== undefined) {
+    if (typeof st !== "string" || st.length !== 64) throw new Error("call.state_sha256, when present, must be 64 hex characters");
+    (envelope.request_context as Record<string, Json>).state_sha256 = st;
+  }
   if (opts.approval !== undefined) {
     const approval: Record<string, Json> = { required: opts.approval.required };
     if (opts.approval.approvers) approval.approvers = [...opts.approval.approvers].sort();
