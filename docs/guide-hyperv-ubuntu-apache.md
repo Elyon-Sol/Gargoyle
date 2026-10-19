@@ -457,6 +457,30 @@ the file that lost its end still verifies on its own, and only the tail
 tells you it is shorter. Copy the file off the client on whatever schedule
 your retention needs; nothing in it is secret.
 
+## Part 7: the gate for hosted connectors (remote mode)
+
+Claude.ai in the browser and Claude Desktop's custom connectors reach an
+MCP server from Anthropic's side over HTTPS; the stdio middleware on the
+workstation never sees those calls. Run the gate on the VM instead:
+
+```bash
+cd /opt/gargoyle/deploy
+gargoyle remote-token --out . --principal dana@yourclient.com --url https://gargoyle.lan:8444
+gargoyle remote --out . --host 0.0.0.0 --port 8444 --ssl-certfile /etc/gargoyle/tls/server.crt --ssl-keyfile /etc/gargoyle/tls/server.key -- /opt/gargoyle/venv/bin/python -m gargoyle.fs_server /srv/shared
+```
+
+Give each person their printed URL and treat it as a password: it names
+them on every receipt. In Claude Desktop, Settings, Connectors, Add custom
+connector, paste the URL. Reads, holds, cards, refusals, undo and the
+audit work as in Parts 4 to 6, now for every client that connector is
+used from. To front a Microsoft 365 MCP server instead, pass
+`--upstream-url https://.../mcp --upstream-token ...` in place of the
+command; state binding then needs that server's adapter (not yet built),
+so start it with `--state-probe none`. Put Apache in front as in Part 3
+and publish the gate only to the networks that need it; a hosted
+connector must reach it from the internet, so this is the one Gargoyle
+port that faces outward.
+
 ## Operations
 
 | Task | How |

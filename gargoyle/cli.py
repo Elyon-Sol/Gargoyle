@@ -11,6 +11,9 @@ policy engine, a container runtime, or any client changes.
     gargoyle approve [--out DIR] [--watch SECONDS]       sit and approve held calls
     gargoyle login --tenant T --client-id C --scope S   sign this workstation's user in with
                                                         Entra ID; the middleware then acts as them
+    gargoyle remote --out DIR [--upstream-url URL | -- <command>]   the gate as an HTTPS MCP
+                                                        server, for hosted connectors
+    gargoyle remote-token --out DIR --principal UPN     a capability URL for one person
     gargoyle audit <receipt.json> <execution.json> [grant.json]
     gargoyle audit --log audit.jsonl            verify the middleware's evidence log
 
@@ -110,7 +113,7 @@ def cmd_init(args) -> int:
         _write(rules, json.dumps(DEFAULT_RULES, indent=2) + "\n")
     _write(out / "issuer.env", _env_lines({
         "GARGOYLE_ISSUER_KEY_ID": "issuer-1", "GARGOYLE_ISSUER_KEY_HEX": issuer_hex,
-        "GARGOYLE_IDP_KEY_ID": "idp-1", "GARGOYLE_IDP_PUBLIC_KEY_HEX": idp_pub,
+        "GARGOYLE_IDP_KEY_ID": "idp-1", "GARGOYLE_IDP_PUBLIC_KEY_HEX": idp_pub, "GARGOYLE_IDP_KEY_HEX": idp_hex,
         "GARGOYLE_ISSUER_AUDIENCE": "gargoyle-issuer",
         "GARGOYLE_APPROVER_KEY_ID": approver_ids, "GARGOYLE_APPROVER_PUBLIC_KEY_HEX": approver_pubs,
         "GARGOYLE_RULES_PATH": str(rules), "GARGOYLE_RECEIPT_TTL_SECONDS": "600",
@@ -185,6 +188,67 @@ def cmd_login(args) -> int:
                                                             ENV_ENTRA_TOKEN_CACHE, "GARGOYLE_MCP_PRINCIPAL")})
         _write(mcp, json.dumps(doc, indent=2) + "\n", private=True)
     print("signed in as %s; the middleware now acts as that user (restart the MCP client)" % principal)
+    return 0
+
+
+def cmd_remote_token(args) -> int:
+    """Mint one person's capability token for the remote gate: an identity
+    token the issuer trusts for that principal (signed by the pinned IdP key
+    from init), mapped to a random URL segment in remote-tokens.json."""
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    from gargoyle.remote import TokenMap, mint_identity_token
+    out = Path(args.out).resolve()
+    ienv = _read_env(out / "issuer.env")
+    idp = Ed25519PrivateKey.from_private_bytes(bytes.fromhex(ienv["GARGOYLE_IDP_KEY_HEX"])) if "GARGOYLE_IDP_KEY_HEX" in ienv else None
+    if idp is None:
+        # init keeps the IdP private key only in the approver/client tokens' lineage; derive from the stored seed if present
+        raise SystemExit("issuer.env has no GARGOYLE_IDP_KEY_HEX; run `gargoyle init` from this version first")
+    audience = (ienv.get("GARGOYLE_ISSUER_AUDIENCE") or "gargoyle-issuer").split(",")[0].strip()
+    token = mint_identity_token(args.principal, idp, ienv.get("GARGOYLE_IDP_KEY_ID", "idp-1"), audience, days=args.days)
+    tokens = TokenMap(str(out / "remote-tokens.json"))
+    cap = tokens.mint(args.principal, token)
+    base = args.url or _read_env(out / "middleware.env").get("GARGOYLE_MCP_ISSUER_URL", "https://<gate host>")
+    print("remote-tokens.json updated for %s" % args.principal)
+    print("connector URL (treat as a credential): %s/mcp/%s" % (base.rstrip("/"), cap))
+    return 0
+
+
+def cmd_remote(args) -> int:
+    """Run the gate as a Streamable HTTP MCP server on the deployment's
+    middleware settings, fronting a stdio command or a remote MCP server."""
+    import uvicorn
+    from gargoyle.mcp_server import config_from_env, upstream_from_argv
+    from gargoyle.remote import HttpUpstream, TokenMap, build_remote_app
+    out = Path(args.out).resolve()
+    env = _read_env(out / "middleware.env")
+    env.setdefault("GARGOYLE_MCP_PRINCIPAL", "remote")        # each token supplies the real one
+    env.setdefault("GARGOYLE_MCP_RECORD_PATH", str(out / "record.json"))
+    os.environ.update(env)
+    config = config_from_env()
+    if config is None:
+        raise SystemExit("middleware.env in %s is incomplete" % out)
+    config.pop("principal", None)
+    if args.upstream_url:
+        upstream = HttpUpstream(args.upstream_url, args.upstream_token or os.environ.get("GARGOYLE_MCP_UPSTREAM_TOKEN"))
+    else:
+        upstream = upstream_from_argv(args.rest)
+        if upstream is None:
+            raise SystemExit("give --upstream-url URL or `-- <command>` for the server to front")
+    tokens = TokenMap(str(out / "remote-tokens.json"))
+    app = build_remote_app(config, tokens, upstream=upstream, issuer_url=env.get("GARGOYLE_MCP_ISSUER_URL"),
+                           audit_log=env.get("GARGOYLE_MCP_AUDIT_LOG") or str(out / "remote-audit.jsonl"),
+                           state_probe=args.state_probe, snapshot_dir=env.get("GARGOYLE_MCP_SNAPSHOT_DIR"),
+                           approval_timeout=float(env.get("GARGOYLE_MCP_APPROVAL_TIMEOUT_SECONDS", "300")))
+    tls = {}
+    if args.ssl_certfile or args.ssl_keyfile:
+        if not (args.ssl_certfile and args.ssl_keyfile):
+            raise SystemExit("--ssl-certfile and --ssl-keyfile go together")
+        tls = {"ssl_certfile": args.ssl_certfile, "ssl_keyfile": args.ssl_keyfile}
+    print("remote gate on %s://%s:%d/mcp/<token>" % ("https" if tls else "http", args.host, args.port), file=sys.stderr)
+    try:
+        uvicorn.run(app, host=args.host, port=args.port, log_level="info" if args.verbose else "warning", **tls)
+    finally:
+        upstream.close()
     return 0
 
 
@@ -303,6 +367,23 @@ def main(argv=None) -> int:
     p.add_argument("--out", default="gargoyle-deploy")
     p.add_argument("--watch", type=float, metavar="SECONDS"); p.add_argument("--yes", action="store_true")
     p.set_defaults(fn=cmd_approve)
+    p = sub.add_parser("remote", help="run the gate as an HTTPS MCP server for hosted connectors")
+    p.add_argument("--out", default="gargoyle-deploy")
+    p.add_argument("--host", default="127.0.0.1"); p.add_argument("--port", type=int, default=8444)
+    p.add_argument("--ssl-certfile"); p.add_argument("--ssl-keyfile")
+    p.add_argument("--upstream-url", help="front a remote MCP server (Streamable HTTP)")
+    p.add_argument("--upstream-token", help="bearer for that server (or GARGOYLE_MCP_UPSTREAM_TOKEN)")
+    p.add_argument("--state-probe", default="none", choices=["none", "filesystem"],
+                   help="filesystem only when the upstream is a local filesystem server on this host")
+    p.add_argument("--verbose", action="store_true")
+    p.add_argument("rest", nargs=argparse.REMAINDER, help="-- <command> for a stdio server to front")
+    p.set_defaults(fn=cmd_remote)
+    p = sub.add_parser("remote-token", help="mint one person's capability URL for the remote gate")
+    p.add_argument("--out", default="gargoyle-deploy")
+    p.add_argument("--principal", required=True, help="the UPN or principal the receipts will name")
+    p.add_argument("--days", type=int, default=365)
+    p.add_argument("--url", help="the gate's public base URL for the printed connector URL")
+    p.set_defaults(fn=cmd_remote_token)
     p = sub.add_parser("audit", help="verify a receipt chain offline, or a whole evidence log")
     p.add_argument("receipt", nargs="?"); p.add_argument("execution", nargs="?"); p.add_argument("grant", nargs="?")
     p.add_argument("--log", help="the middleware's audit.jsonl: verify every entry")

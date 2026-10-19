@@ -603,6 +603,16 @@ The complete objects are the `threshold` member of
   `gargoyle/1` is honored. The format is pre-release and may still change
   before the first release.
 
+**Remote transport.** The reference middleware also runs as a Streamable
+HTTP MCP server (`gargoyle remote`) in front of a local or remote MCP
+server. There the executor identifies the caller by a capability URL
+segment the operator minted for one person, mapped to an identity token
+the issuer trusts for that principal; the hosted MCP client cannot carry
+the person's own token. The operator thereby vouches for the mapping, as
+for an API key, and the receipt's `principal` is that person. All
+sessions of one gate process share one replay store (section 7), so a
+receipt is single-use across them.
+
 **Identity at the client.** A middleware may present a per-user token
 obtained from an identity provider (the reference `gargoyle login` uses
 Entra ID's device-code flow and refreshes from the provider's cache). The

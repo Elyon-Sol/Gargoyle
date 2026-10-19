@@ -92,6 +92,17 @@ verifying itself for no external user; that is the failure mode to avoid.
   hold and the receipt, with a link to /approve from GARGOYLE_APPROVE_URL); posted in
   a thread, failures logged and ignored, the grant still only from the approver's
   key. 80 lines. All six roadmap steps are done.
+- Remote middleware mode (2026-10-19): gargoyle/remote.py. The gate as a Streamable HTTP
+  MCP server (POST /mcp/{token}, sessions by Mcp-Session-Id, JSON or SSE answers from the
+  upstream, DELETE ends a session) fronting a stdio command or a remote MCP server
+  (HttpUpstream with optional bearer). One shared upstream initialized once; shared replay
+  cache, evidence log and snapshot store across sessions. Identity by capability URL:
+  `gargoyle remote-token` mints a person's token (an IdP-signed identity token for their
+  UPN, kept in remote-tokens.json; issuer.env now keeps the IdP private key for this).
+  Stated trade-off: the operator vouches for user-to-URL, as for an API key. This is the
+  transport Claude's hosted connectors and Microsoft 365 servers need. docs/ally-design.md
+  sets out the next steps with NOA, Microsoft AGT, the approval layers and the drafts.
+  0.9.0.dev0.
 - Undo proven live (2026-10-19, after 0.8.1): audit rows 36 and 37 form an exact round
   trip, "state 0c8a2f3d -> ae799707" then "state ae799707 -> 0c8a2f3d reverts #36", both
   released by the enrolled approver; the revert link is derived from the hashes, not

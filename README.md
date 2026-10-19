@@ -21,7 +21,7 @@ your MCP server and lets through only what both agreed to.
 
 [![PyPI](https://img.shields.io/pypi/v/gargoyle-receipts)](https://pypi.org/project/gargoyle-receipts/)
 
-Status: pre-release (`0.8.1.dev0`, on PyPI as `gargoyle-receipts`). The wire format is `gargoyle/3` and may
+Status: pre-release (`0.9.0.dev0`, on PyPI as `gargoyle-receipts`). The wire format is `gargoyle/3` and may
 still change before the first release; it is specified in [SPEC.md](SPEC.md).
 
 ## What a receipt gives you
@@ -251,6 +251,25 @@ and `gargoyle audit` verifies them later offline.
 and through the alternative with OPA in Docker for sites that run a policy
 engine.
 
+## Remote mode
+
+Claude's hosted connectors (claude.ai in the browser, Claude Desktop's
+custom connectors) and Microsoft 365 servers are reached over HTTPS, not
+through a local process. `gargoyle remote` runs the same gate as a
+Streamable HTTP MCP server in front of a stdio command or a remote MCP
+server (`--upstream-url`), so those paths go through it too:
+
+    gargoyle remote-token --out gargoyle-deploy --principal dana@contoso.com --url https://gargoyle.lan:8444
+    gargoyle remote --out gargoyle-deploy --port 8444 --ssl-certfile ... --ssl-keyfile ... -- python -m gargoyle.fs_server /srv/shared
+
+Each person gets a capability URL (`/mcp/<token>`) that names them on
+every receipt; the operator vouches for that mapping, as with an API key,
+because a hosted connector cannot carry the user's own Entra token.
+Treat the URL as a credential. All sessions share one upstream, one replay
+cache, one evidence log and one snapshot store, so single use and undo
+hold across users. Device-bound identity remains the stdio mode's
+property.
+
 ## The shipped consumer
 
 **MCP middleware** (`python -m gargoyle.mcp_server -- <upstream command>`):
@@ -281,6 +300,7 @@ cannot attach receipts work unchanged. Configuration is by environment:
 | issuer `GARGOYLE_APPROVERS_PATH`, `GARGOYLE_APPROVER_ROLE`, `GARGOYLE_APPROVER_GROUPS` | where enrolled approvers persist (default `approvers.json` beside the keys) and which Entra app role (default `Approver`) or groups may enroll |
 | `GARGOYLE_HOLD_WEBHOOK_URL`, `GARGOYLE_APPROVE_URL` | issuer: POST a notice of every new hold (Slack incoming-webhook shape, `text` plus the hold) with a link to the console; notice only, the grant still needs the approver's key |
 | `GARGOYLE_MCP_STATE_PROBE` | `filesystem` (default) binds a held file write to the file's current state: the approver sees the change as a diff, the call refuses if the file moved before the run (`REF_VERIFY_STATE_MISMATCH`), and the execution receipt records pre and post state; `none` disables |
+| `GARGOYLE_MCP_UPSTREAM_URL`, `GARGOYLE_MCP_UPSTREAM_TOKEN` | remote mode: the MCP server to front over Streamable HTTP, and its bearer |
 | `GARGOYLE_MCP_SNAPSHOT_DIR` | where the bytes a held, state-bound write replaces are kept (default `snapshots/` beside the audit log; `none` disables undo); the middleware then offers a `gargoyle_revert` tool that restores an approved change through the gate, held and state-bound like any write |
 | `GARGOYLE_MCP_AUDIT_LOG` | the evidence log: every decision, honored or refused, as one hash-chained JSON line with its receipt, grant and execution receipt; `gargoyle audit --log` verifies the file |
 
