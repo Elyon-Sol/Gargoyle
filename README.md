@@ -21,7 +21,7 @@ your MCP server and lets through only what both agreed to.
 
 [![PyPI](https://img.shields.io/pypi/v/gargoyle-receipts)](https://pypi.org/project/gargoyle-receipts/)
 
-Status: pre-release (`0.7.1.dev0`, on PyPI as `gargoyle-receipts`). The wire format is `gargoyle/3` and may
+Status: pre-release (`0.8.0.dev0`, on PyPI as `gargoyle-receipts`). The wire format is `gargoyle/3` and may
 still change before the first release; it is specified in [SPEC.md](SPEC.md).
 
 ## What a receipt gives you
@@ -192,7 +192,12 @@ shows the proposed content as a diff against that state; after the human
 signs, the middleware hashes the target again and refuses if it moved; and
 the execution receipt carries the state before and after. An approval
 cannot be redirected by changing the file under it, and an audit shows not
-only that a write ran but what it changed.
+only that a write ran but what it changed. An approved change can be
+undone the same way: the middleware keeps what a held write replaced and
+offers `gargoyle_revert`, which composes the restoring write and sends it
+through the gate, held, shown as a diff, bound to the current state, and
+refused if anything changed since. The audit marks a revert from the
+state hashes alone.
 
 The MCP middleware also keeps an evidence log: one hash-chained line per
 decision, refusals and declined holds included, so the trail answers "what
@@ -276,6 +281,7 @@ cannot attach receipts work unchanged. Configuration is by environment:
 | issuer `GARGOYLE_APPROVERS_PATH`, `GARGOYLE_APPROVER_ROLE`, `GARGOYLE_APPROVER_GROUPS` | where enrolled approvers persist (default `approvers.json` beside the keys) and which Entra app role (default `Approver`) or groups may enroll |
 | `GARGOYLE_HOLD_WEBHOOK_URL`, `GARGOYLE_APPROVE_URL` | issuer: POST a notice of every new hold (Slack incoming-webhook shape, `text` plus the hold) with a link to the console; notice only, the grant still needs the approver's key |
 | `GARGOYLE_MCP_STATE_PROBE` | `filesystem` (default) binds a held file write to the file's current state: the approver sees the change as a diff, the call refuses if the file moved before the run (`REF_VERIFY_STATE_MISMATCH`), and the execution receipt records pre and post state; `none` disables |
+| `GARGOYLE_MCP_SNAPSHOT_DIR` | where the bytes a held, state-bound write replaces are kept (default `snapshots/` beside the audit log; `none` disables undo); the middleware then offers a `gargoyle_revert` tool that restores an approved change through the gate, held and state-bound like any write |
 | `GARGOYLE_MCP_AUDIT_LOG` | the evidence log: every decision, honored or refused, as one hash-chained JSON line with its receipt, grant and execution receipt; `gargoyle audit --log` verifies the file |
 
 **Issuing service** (`gargoyle.issuer_service`, run with uvicorn from

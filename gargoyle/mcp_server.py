@@ -42,6 +42,7 @@ Run as a stdio MCP server:  python3 -m gargoyle.mcp_server
 import json
 import subprocess
 import sys
+from pathlib import Path
 import threading
 import time
 from typing import Any, Dict, List, Optional
@@ -97,7 +98,8 @@ ENV_CLIENT_TOKEN = "GARGOYLE_MCP_CLIENT_TOKEN"
 ENV_APPROVAL_TIMEOUT = "GARGOYLE_MCP_APPROVAL_TIMEOUT_SECONDS"
 ENV_POLL_SECONDS = "GARGOYLE_MCP_POLL_SECONDS"
 ENV_AUDIT_LOG = "GARGOYLE_MCP_AUDIT_LOG"
-ENV_STATE_PROBE = "GARGOYLE_MCP_STATE_PROBE"   # "filesystem" (default): bind held calls to the target file's state; "none" to disable
+ENV_STATE_PROBE = "GARGOYLE_MCP_STATE_PROBE"
+ENV_SNAPSHOT_DIR = "GARGOYLE_MCP_SNAPSHOT_DIR"   # where pre-change snapshots live (default: snapshots/ beside the audit log); "none" disables undo   # "filesystem" (default): bind held calls to the target file's state; "none" to disable
 REF_TARGET_LOGIN_REQUIRED = "REF_TARGET_LOGIN_REQUIRED"   # Entra login mode and no usable token: run `gargoyle login`   # the evidence log: one hash-chained JSON line per decision, honored or refused
 
 # Self-issue refusals.
@@ -290,10 +292,16 @@ class ServerState:
         issuer_client: Optional[IssuerClient] = None,
         audit_log: Optional[str] = None,
         state_probe: Any = "filesystem",
+        snapshot_dir: Optional[str] = None,
     ) -> None:
         from gargoyle.state import probe_from_name
+        from gargoyle.revert import SnapshotStore
         self.config = config
         self.probe = state_probe if callable(state_probe) else probe_from_name(state_probe)
+        if snapshot_dir is None and audit_log:
+            snapshot_dir = str(Path(audit_log).parent / "snapshots")
+        self.snapshots: Optional[SnapshotStore] = (SnapshotStore(snapshot_dir)
+                                                   if snapshot_dir and snapshot_dir != "none" and self.probe is not None else None)
         self.upstream = upstream
         self.issuer_client = issuer_client
         self.evidence: Optional[EvidenceLog] = EvidenceLog(audit_log) if audit_log else None
@@ -369,6 +377,18 @@ def _gate(state: ServerState, params: Dict[str, Any]) -> Dict[str, Any]:
     if not verdict.honored:
         return refused(verdict.reason, envelope)
 
+    # Undo material: for a held, state-bound call, keep the target as it is
+    # right now (the state the receipt bound and the check just confirmed).
+    if (state.snapshots is not None and isinstance(envelope, dict) and envelope.get("requires_approval")
+            and live_state is not None and isinstance(envelope.get("decision_id"), str)):
+        try:
+            desc = state.probe(name, args)
+            if desc is not None and state.config and state.config.get("principal"):
+                from gargoyle.state import read_target
+                state.snapshots.put(envelope["decision_id"], desc, read_target(desc), name)
+        except Exception as exc:
+            sys.stderr.write("gargoyle: snapshot failed: %s\n" % exc)
+
     state.executed.append({"tool": name, "args": args})  # THE side effect
     return {"executed": True, "reason": verdict.reason, "envelope": envelope, "grant": grant,
             "self_issued": self_issued}
@@ -419,6 +439,11 @@ def _attest(state: ServerState, envelope: Optional[Dict[str, Any]], outputs: Any
         from gargoyle.state import state_sha256 as _state_hash
         desc = state.probe(str(params.get("name")), params.get("arguments", {}))
         post = _state_hash(desc) if desc is not None else None
+    if post is not None and state.snapshots is not None and isinstance(envelope.get("decision_id"), str):
+        try:
+            state.snapshots.record_post(envelope["decision_id"], post)
+        except Exception:
+            pass
     return state.consumer.attest(envelope, outputs, post_state_sha256=post)
 
 
@@ -439,7 +464,12 @@ def handle_message(state: ServerState, msg: Dict[str, Any]) -> Optional[Dict[str
     params = msg.get("params") or {}
 
     if state.upstream is not None and method in ("initialize", "tools/list"):
-        return _relay(state, msg)
+        reply = _relay(state, msg)
+        if method == "tools/list" and state.snapshots is not None and isinstance(reply, dict) \
+                and isinstance(reply.get("result"), dict) and isinstance(reply["result"].get("tools"), list):
+            from gargoyle.revert import REVERT_TOOL_DEF
+            reply["result"]["tools"] = list(reply["result"]["tools"]) + [REVERT_TOOL_DEF]
+        return reply
 
     if method == "initialize":
         # The handshake completes when the client sends notifications/initialized;
@@ -477,9 +507,23 @@ def handle_message(state: ServerState, msg: Dict[str, Any]) -> Optional[Dict[str
         return _error(msg_id, JSONRPC_NOT_INITIALIZED, "server not initialized")
 
     if method == "tools/list":
-        return _success(msg_id, {"tools": ADVERTISED_TOOLS})
+        from gargoyle.revert import REVERT_TOOL_DEF
+        return _success(msg_id, {"tools": ADVERTISED_TOOLS + ([REVERT_TOOL_DEF] if state.snapshots is not None else [])})
 
     if method == "tools/call":
+        from gargoyle.revert import REVERT_TOOL, plan_revert
+        if params.get("name") == REVERT_TOOL:
+            # An undo is a write the middleware composes from its snapshot; it
+            # then goes through the gate exactly as the assistant's own writes.
+            if state.snapshots is None:
+                return _success(msg_id, {"content": [{"type": "text", "text": "refused: undo is not enabled"}], "isError": True,
+                                         "_meta": {EXECUTED_META_KEY: False, REASON_META_KEY: "REF_REVERT_UNKNOWN"}})
+            plan = plan_revert(state.snapshots, str((params.get("arguments") or {}).get("decision_id") or "last"), state.probe)
+            if "reason" in plan:
+                return _success(msg_id, {"content": [{"type": "text", "text": "refused: " + plan["reason"]}], "isError": True,
+                                         "_meta": {EXECUTED_META_KEY: False, REASON_META_KEY: plan["reason"]}})
+            params = plan["params"]
+            msg = dict(msg, params=params)
         gate = _gate(state, params)
         executed, reason = gate["executed"], gate["reason"]
         if executed and state.upstream is not None:

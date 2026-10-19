@@ -92,6 +92,15 @@ verifying itself for no external user; that is the failure mode to avoid.
   hold and the receipt, with a link to /approve from GARGOYLE_APPROVE_URL); posted in
   a thread, failures logged and ignored, the grant still only from the approver's
   key. 80 lines. All six roadmap steps are done.
+- Undo (2026-10-19): gargoyle/revert.py. Before a held, state-bound write runs, the
+  middleware snapshots the target (bytes by state hash, sidecar by decision id, post-state
+  recorded after the run). `gargoyle_revert` is added to the upstream's tool list; it
+  composes the write that restores the snapshot and sends it through the gate: held,
+  shown as a diff from the current content, bound to the current state (refused before any
+  card if the target changed since, REF_REVERT_STATE_CHANGED), signed, executed once,
+  recorded. `gargoyle audit` prints "reverts #N" by matching state hashes, no annotation
+  trusted. Text files only; a create cannot be undone by a write (REF_REVERT_NEEDS_DELETE).
+  0.8.0.dev0.
 - State-bound approval live (2026-10-19): a held write from Claude Desktop carried the
   file's state; the card showed the diff; the approver released it; the audit row reads
   "released by <approver> state b43c9319 -> 4de7ea40", the file as approved and as left.

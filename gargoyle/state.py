@@ -85,6 +85,17 @@ def filesystem_probe(tool: str, args: Any) -> Optional[Dict[str, Any]]:
     return describe(path, data)
 
 
+def read_target(description: Dict[str, Any]) -> Optional[bytes]:
+    """The bytes behind a filesystem state description, or None when absent."""
+    if description.get("sha256") is None:
+        return None
+    try:
+        with open(description["ref"], "rb") as f:
+            return f.read()
+    except OSError:
+        return None
+
+
 def probe_from_name(name: Optional[str]) -> Optional[Callable[[str, Any], Optional[Dict[str, Any]]]]:
     """GARGOYLE_MCP_STATE_PROBE: "filesystem" (default) or "none"."""
     if name in (None, "", "filesystem"):

@@ -424,6 +424,15 @@ redirect an approval by editing the file underneath it. The execution
 receipt records the file's state before and after, so the audit shows
 what each approved write changed.
 
+**5.5 Undoing an approved change.** The gate keeps what each approved
+write replaced, in `C:\gargoyle\snapshots`. To undo, the user asks the
+assistant: "Using filesystem-gargoyle, undo the last approved change" (the
+tool is `gargoyle_revert`; it also takes a decision id from the audit).
+The undo is a write like any other: a card shows the restore as a diff,
+you approve or decline, and it runs only if the file is still as the
+original change left it. The audit then shows the revert row with
+"reverts #N" pointing at the row it undid, proven by the state hashes.
+
 ## Part 6: the audit trail
 
 Every decision appended one line to `C:\gargoyle\audit.jsonl`, honored or

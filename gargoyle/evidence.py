@@ -218,6 +218,17 @@ def verify_log(
         # reported once rather than cascading into every later one.
         expect_seq, prev, tail = e["seq"] + 1, e["entry_sha256"], e["entry_sha256"]
 
+    # A revert is recognisable without any annotation: its pre-state is an
+    # earlier honored entry's post-state and its post-state that entry's pre-state.
+    for i, r in enumerate(report):
+        r["reverts"] = None
+        st = r.get("state")
+        if r["accepted"] and st and st.get("pre") and st.get("post"):
+            for prev in reversed(report[:i]):
+                ps = prev.get("state")
+                if prev["accepted"] and ps and ps.get("post") == st["pre"] and ps.get("pre") == st["post"]:
+                    r["reverts"] = prev["seq"]
+                    break
     return {"accepted": all_ok, "reason": ACCEPT_EVIDENCE_VERIFIED if all_ok else _first_failure(report),
             "tail_sha256": tail, "count": len(report), "honored": counts[HONORED], "refused": counts[REFUSED],
             "entries": report}
