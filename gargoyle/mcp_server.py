@@ -100,6 +100,7 @@ ENV_POLL_SECONDS = "GARGOYLE_MCP_POLL_SECONDS"
 ENV_AUDIT_LOG = "GARGOYLE_MCP_AUDIT_LOG"
 ENV_STATE_PROBE = "GARGOYLE_MCP_STATE_PROBE"
 ENV_ADAPTER_SPEC = "GARGOYLE_MCP_ADAPTER_SPEC"    # with GARGOYLE_MCP_STATE_PROBE=graph: the tool mapping JSON
+ENV_INSTRUCTIONS = "GARGOYLE_MCP_INSTRUCTIONS"   # override the standing instructions the gate gives the model (default: gate_instructions())
 ENV_SNAPSHOT_DIR = "GARGOYLE_MCP_SNAPSHOT_DIR"   # where pre-change snapshots live (default: snapshots/ beside the audit log); "none" disables undo   # "filesystem" (default): bind held calls to the target file's state; "none" to disable
 REF_TARGET_LOGIN_REQUIRED = "REF_TARGET_LOGIN_REQUIRED"   # Entra login mode and no usable token: run `gargoyle login`   # the evidence log: one hash-chained JSON line per decision, honored or refused
 
@@ -284,6 +285,26 @@ def _without_gargoyle_meta(params: Dict[str, Any]) -> Dict[str, Any]:
     return forwarded
 
 
+def gate_instructions(target_id: str, upstream_instructions: Optional[str] = None, override: Optional[str] = None) -> str:
+    """The standing instructions an MCP server may hand the model in its
+    initialize answer; clients place them in the model's context for the
+    session. This is how the gate is mandated rather than named by the
+    user each time: the model is told, by the server itself, that all work
+    on this target goes through these tools, that a refusal is final, and
+    that there is nothing to type. The upstream's own instructions, if
+    any, follow the gate's."""
+    text = override if override else (
+        "Every operation on %s goes through this server's tools; do not use any other tool, built-in "
+        "capability or workaround for that target. Reads run at once. A write may pause for a human "
+        "approval: wait for the result, it is normal. A refused call is a decision, not an error: report "
+        "the reason to the user and stop; do not retry or route around it. For a task with several "
+        "writes, gargoyle_plan may ask for one approval covering them; gargoyle_revert undoes an approved "
+        "change through the same approval. The user never needs to name this server." % target_id)
+    if upstream_instructions:
+        text += "\n\n" + upstream_instructions
+    return text
+
+
 def client_label(params: Any) -> Optional[str]:
     """"name version" from an initialize request's clientInfo, or None."""
     info = params.get("clientInfo") if isinstance(params, dict) else None
@@ -348,6 +369,8 @@ class ServerState:
             )
         self.executed: List[Dict[str, Any]] = []
         self.plans: List[Dict[str, Any]] = []     # approved scoped grants: {"plan", "grants", "consumed": set()}
+        import os as _os
+        self.instructions: Optional[str] = _os.environ.get(ENV_INSTRUCTIONS) or None
         self.initialized = False
         self.client: Optional[str] = None     # "name version" from the MCP initialize handshake
 
@@ -576,6 +599,9 @@ def handle_message(state: ServerState, msg: Dict[str, Any]) -> Optional[Dict[str
         if method == "initialize":
             state.client = client_label(params)
         reply = _relay(state, msg)
+        if method == "initialize" and isinstance(reply, dict) and isinstance(reply.get("result"), dict) and state.config:
+            reply["result"]["instructions"] = gate_instructions(state.config.get("target_id", "the gated target"),
+                                                                reply["result"].get("instructions"), state.instructions)
         if method == "tools/list" and state.snapshots is not None and isinstance(reply, dict) \
                 and isinstance(reply.get("result"), dict) and isinstance(reply["result"].get("tools"), list):
             from gargoyle.revert import REVERT_TOOL_DEF
@@ -595,6 +621,7 @@ def handle_message(state: ServerState, msg: Dict[str, Any]) -> Optional[Dict[str
                 "protocolVersion": PROTOCOL_VERSION,
                 "capabilities": {"tools": {"listChanged": False}},
                 "serverInfo": SERVER_INFO,
+                "instructions": gate_instructions((state.config or {}).get("target_id", "the gated target"), None, state.instructions),
             },
         )
 

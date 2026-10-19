@@ -290,6 +290,20 @@ project where the assistant can `echo > file` around the gate.
 the answer comes back at once. The first honored call appears as a line in
 `C:\gargoyle\audit.jsonl`.
 
+**4.4a Nobody has to name the server.** The gate hands the model standing
+instructions in the MCP handshake (the `instructions` field, which Claude
+Code, Claude Desktop and the hosted connectors place in the model's
+context for the whole session): all work on the gated target goes through
+these tools, a wait is normal, a refusal is final, plans and undo exist.
+"List the project folder" is enough once the side doors are closed (Part
+8); the earlier need to say "using filesystem-gargoyle" came from Desktop
+having other file tools to pick from. An operator can replace the text
+with `GARGOYLE_MCP_INSTRUCTIONS` in the MCP entry's env. For a fleet, put
+the MCP entry and the deny rules in Claude Code's managed settings file
+(`C:\ProgramData\ClaudeCode\managed-settings.json`), which the user
+cannot override, and the gate is mandated by the administrator rather
+than typed by anyone.
+
 **4.5 Claude Desktop instead of Claude Code.** The GUI app speaks MCP the
 same way. `gargoyle init` already writes the entry in Desktop's shape
 (`mcp-config.json`); use the full path to `python.exe` as the command,

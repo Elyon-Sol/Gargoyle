@@ -79,6 +79,7 @@ def test_remote_gate_over_stdio_upstream(tmp_path):
         assert r.status_code == 200 and r.headers[SESSION_HEADER]
         sid = r.headers[SESSION_HEADER]
         assert r.json()["result"]["serverInfo"]["name"].startswith("gargoyle+")
+        assert "do not use any other tool" in r.json()["result"]["instructions"]
         assert rpc(c, alice, {"jsonrpc": "2.0", "method": "notifications/initialized"}, sid).status_code == 202
         # Tools: the upstream's plus undo.
         tools = rpc(c, alice, {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}, sid).json()["result"]["tools"]

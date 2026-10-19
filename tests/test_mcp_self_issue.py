@@ -229,3 +229,27 @@ def test_every_decision_lands_in_the_evidence_log(tmp_path):
                    approver_public_keys={"approver-alice": approver.public_key()})
     assert v["accepted"] and (v["honored"], v["refused"]) == (1, 2)
     assert [r["reason"] for r in v["entries"]] == [ACCEPT_CHAIN_VERIFIED, ACCEPT_ENTRY_VERIFIED, ACCEPT_ENTRY_VERIFIED]
+
+
+def test_the_gate_hands_the_model_standing_instructions(monkeypatch):
+    """The initialize answer carries instructions in both modes, so the user
+    never has to name the server; an operator may override the text."""
+    from gargoyle.mcp_server import gate_instructions
+    client = TestClient(issuer_app())
+    state = middleware(client)
+    r = handle_message(state, {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}})
+    text = r["result"]["instructions"]
+    assert TARGET in text and "do not use any other tool" in text and "gargoyle_plan" in text and "never needs to name this server" in text
+    # Through a real upstream, the upstream's own instructions follow the gate's.
+    fixture = str(Path(__file__).parent / "fixtures" / "echo_mcp_server.py")
+    up = StdioUpstream([sys.executable, "-I", fixture])
+    try:
+        state = middleware(client); state.upstream = up
+        r = handle_message(state, {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}})
+        assert r["result"]["instructions"].startswith("Every operation on " + TARGET)
+    finally:
+        up.close()
+    monkeypatch.setenv("GARGOYLE_MCP_INSTRUCTIONS", "House rule: files only.")
+    state = middleware(client)
+    assert handle_message(state, {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}})["result"]["instructions"] == "House rule: files only."
+    assert gate_instructions("t", "Upstream says hi").endswith("Upstream says hi")

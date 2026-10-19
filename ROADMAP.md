@@ -92,6 +92,13 @@ verifying itself for no external user; that is the failure mode to avoid.
   hold and the receipt, with a link to /approve from GARGOYLE_APPROVE_URL); posted in
   a thread, failures logged and ignored, the grant still only from the approver's
   key. 80 lines. All six roadmap steps are done.
+- Mandated, not named (2026-10-19): the gate's initialize answer carries MCP
+  `instructions` in both modes (gate_instructions): every operation on the target goes
+  through these tools, a wait is normal, a refusal is final, plans and undo exist, the
+  user never needs to name the server. Clients place the text in the model's context for
+  the session. GARGOYLE_MCP_INSTRUCTIONS overrides. With the side doors closed (guide
+  Part 8) and, for a fleet, Claude Code's managed settings, the gate is mandated by the
+  administrator. 0.15.0.dev0.
 - Witness and change detection live (2026-10-19): on the Windows client, the three
   decisions made after the witness began reconciled with 0 findings, the 39 earlier rows
   were noted as predating the witness, and both gated files verified as the gate left

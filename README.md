@@ -21,7 +21,7 @@ your MCP server and lets through only what both agreed to.
 
 [![PyPI](https://img.shields.io/pypi/v/gargoyle-receipts)](https://pypi.org/project/gargoyle-receipts/)
 
-Status: pre-release (`0.14.2.dev0`, on PyPI as `gargoyle-receipts`). The wire format is `gargoyle/3` and may
+Status: pre-release (`0.15.0.dev0`, on PyPI as `gargoyle-receipts`). The wire format is `gargoyle/3` and may
 still change before the first release; it is specified in [SPEC.md](SPEC.md).
 
 ## What a receipt gives you
@@ -345,6 +345,7 @@ cannot attach receipts work unchanged. Configuration is by environment:
 | issuer `GARGOYLE_WITNESS_PATH` | the issuer's signed, hash-chained record of every decision (`gargoyle issuer` sets `witness.jsonl` beside the keys); `gargoyle audit --witness` reconciles a client's evidence against it, `--check-tree DIR` finds files changed outside the gate |
 | issuer `GARGOYLE_LOG_JSON` | one JSON line per decision on stderr: issued, refused, granted, declined, plan, enrolled |
 | `GARGOYLE_HOLD_WEBHOOK_URL`, `GARGOYLE_APPROVE_URL` | issuer: POST a notice of every new hold (Slack incoming-webhook shape, `text` plus the hold) with a link to the console; notice only, the grant still needs the approver's key |
+| `GARGOYLE_MCP_INSTRUCTIONS` | replaces the standing instructions the gate hands the model in the MCP handshake (default: all work on the target goes through these tools, a wait is normal, a refusal is final, plans and undo exist); the user never has to name the server |
 | `GARGOYLE_MCP_STATE_PROBE` | `filesystem` (default) binds a held file write to the file's current state: the approver sees the change as a diff, the call refuses if the file moved before the run (`REF_VERIFY_STATE_MISMATCH`), and the execution receipt records pre and post state; `none` disables |
 | `GARGOYLE_MCP_ADAPTER_SPEC` | with `GARGOYLE_MCP_STATE_PROBE=graph`: the tool-to-resource mapping JSON (default: the reference naming) |
 | `GARGOYLE_MCP_UPSTREAM_URL`, `GARGOYLE_MCP_UPSTREAM_TOKEN` | remote mode: the MCP server to front over Streamable HTTP, and its bearer |

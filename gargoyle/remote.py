@@ -168,6 +168,10 @@ def build_remote_app(
             upstream_init["serverInfo"] = {"name": "gargoyle+" + str(upstream_init.get("serverInfo", {}).get("name", "upstream")),
                                            "version": SERVER_INFO["version"]}
         upstream.send({"jsonrpc": "2.0", "method": "notifications/initialized"})
+    from gargoyle.mcp_server import gate_instructions
+    import os as _os
+    upstream_init["instructions"] = gate_instructions(config.get("target_id", "the gated target"), upstream_init.get("instructions"),
+                                                      _os.environ.get("GARGOYLE_MCP_INSTRUCTIONS") or None)
 
     def new_state(principal: str, issuer_token: str) -> ServerState:
         nonlocal shared_evidence, shared_snapshots
