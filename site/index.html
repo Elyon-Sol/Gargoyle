@@ -171,7 +171,7 @@
       <a href="#what">What it proves</a>
       <a href="#how">How it works</a>
       <a href="#get">Get it</a>
-      <a href="#diss">Dissertation</a>
+      <a href="#diss">Technical report</a>
       <a href="#archive">Elyon-Sol (archived)</a>
       <a href="https://github.com/Elyon-Sol/Gargoyle" target="_blank" rel="noopener">GitHub</a>
     </nav>
@@ -184,7 +184,7 @@
     <p class="tag">Gargoyle sits between an assistant and the tools it uses. Every call gets a signed, single-use receipt bound to its arguments and to a policy version. Calls that matter stop until a named person signs a release with a key no server holds. What ran is signed too, with the state it found and the state it left. The whole chain verifies offline, by anyone, in two languages.</p>
     <div class="formula">receipt <b>&rarr;</b> grant <b>&rarr;</b> execution <b>&rarr;</b> evidence <b>&rarr;</b> witness</div>
     <div class="btns">
-      <a class="btn primary" href="#diss">Read the dissertation &rarr;</a>
+      <a class="btn primary" href="#diss">Read the technical report &rarr;</a>
       <a class="btn ghost" href="https://github.com/Elyon-Sol/Gargoyle" target="_blank" rel="noopener">Source on GitHub</a>
       <a class="btn ghost" href="https://pypi.org/project/gargoyle-receipts/" target="_blank" rel="noopener">PyPI</a>
     </div>
@@ -263,7 +263,7 @@ gargoyle audit --log audit.jsonl --witness witness.jsonl --check-tree /the/folde
 
 <div id="diss"></div>
 <article class="paper">
-<div class="eyebrow">Dissertation</div>
+<div class="eyebrow">Technical report</div>
 <h1>Receipts and holds for agent tool calls</h1>
 <p class="strong">Verifiable authorization, human release, execution and evidence for the actions an AI assistant takes on a person's behalf</p>
 <div class="meta">Justin LaPorte &middot; Elyon-Sol &middot; October 2026 &middot; describes Gargoyle 0.15, wire format gargoyle/3, evidence format 4 &middot; Apache-2.0</div>
@@ -551,7 +551,7 @@ FINDING CHANGED_OUTSIDE_GATE C:\gargoyle-poc\project\notes.md
 
 <!-- RETIREMENT BANNER -->
 <div class="wrap" style="margin-top:16px">
-  <div class="supersede"><b>Superseded.</b> Elyon-Sol was retired on 2026-07-20 and succeeded by <a href="#top">Gargoyle</a>, which keeps what this project proved (fail-closed admission, signed single-use envelopes, a hash-pinned policy) and drops what nobody asked for (the canon, the ledger, the governance apparatus). The account of what was learned is in the <a href="#sec-2">dissertation, section 2</a>. This page is kept as the record of the predecessor, unchanged below.</div>
+  <div class="supersede"><b>Superseded.</b> Elyon-Sol was retired on 2026-07-20 and succeeded by <a href="#top">Gargoyle</a>, which keeps what this project proved (fail-closed admission, signed single-use envelopes, a hash-pinned policy) and drops what nobody asked for (the canon, the ledger, the governance apparatus). The account of what was learned is in the <a href="#sec-2">technical report, section 2</a>. This page is kept as the record of the predecessor, unchanged below.</div>
   <div class="note" style="margin-top:12px"><b>The public test nodes are offline (retired 2026-07-20).</b> This site is a reference and a self-serve guide: everything is open source (AGPL-3.0), and you can <a href="#es-tryit">spin up the entire surface yourself</a> in a couple of commands. The break-it challenge below is preserved as documentation &#8212; it is no longer a live, credited engagement.</div>
 </div>
 
@@ -1038,7 +1038,7 @@ curl -s -o /dev/null -D - -X POST $AUTHZ/authz -H "X-Elyon-Sol-Envelope: $FRESH"
       <div><a href="https://github.com/Elyon-Sol/Gargoyle" target="_blank" rel="noopener">Source on GitHub</a></div>
       <div><a href="https://pypi.org/project/gargoyle-receipts/" target="_blank" rel="noopener">gargoyle-receipts on PyPI</a></div>
       <div><a href="https://github.com/Elyon-Sol/Gargoyle/blob/main/SPEC.md" target="_blank" rel="noopener">Specification</a></div>
-      <div><a href="#diss">Dissertation</a></div>
+      <div><a href="#diss">Technical report</a></div>
     </div>
     <div>
       <div class="muted" style="margin-bottom:6px">Lineage</div>
