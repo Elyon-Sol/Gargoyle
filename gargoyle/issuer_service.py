@@ -55,6 +55,7 @@ from gargoyle.approval import (REF_APPROVAL_APPROVER_NOT_ELIGIBLE, REF_APPROVAL_
 from gargoyle.envelope import approval_terms
 from gargoyle.state import state_sha256, valid_description
 from gargoyle.holdstore import ENV_HOLDS_PATH, HoldStore
+from gargoyle.witness import WitnessLog
 from gargoyle.plans import (REF_PLAN_MALFORMED, REF_PLAN_STEP_NOT_PLANNABLE, REF_PLAN_STEP_REFUSED, build_plan,
                             sign_plan, valid_step)
 from gargoyle.notify import notifier_from_env
@@ -104,6 +105,7 @@ def build_issuer_app(
     console_entra: Optional[Dict[str, str]] = None,
     hold_store: Optional[HoldStore] = None,
     log_events: Optional[Callable[[Dict[str, Any]], None]] = None,
+    witness: Optional[WitnessLog] = None,
 ) -> FastAPI:
     """`on_hold(envelope, args)` is called once for every new hold (gargoyle.notify
     posts it to a webhook); it is notice, not admission, and its failure
@@ -123,12 +125,21 @@ def build_issuer_app(
 
     def event(kind: str, **fields: Any) -> None:
         """One structured line per decision the service makes, for the
-        operator's log; never the admission path."""
+        operator's log, and one signed entry in the witness log (gargoyle.witness),
+        the independent record the client's evidence is reconciled against.
+        Neither is the admission path."""
         if log_events is not None:
             try:
                 log_events({"event": kind, "at": now().isoformat(), **fields})
             except Exception:
                 pass
+        if witness is not None:
+            try:
+                witness.record(kind, **fields)
+            except Exception as exc:
+                import sys as _sys
+                _sys.stderr.write("gargoyle: witness log unwritable: %s\n" % exc)
+    app.state.witness = witness
     registry = approver_registry if approver_registry is not None else ApproverRegistry(None)
     static_approvers = dict(approver_public_keys or {})
 
@@ -200,7 +211,8 @@ def build_issuer_app(
                     covered = True
                     break
         event("issued", principal=who["principal"], tool=body["tool"], held=bool(result.envelope["requires_approval"]),
-              covered=covered, decision_id=result.envelope.get("decision_id"))
+              covered=covered, decision_id=result.envelope.get("decision_id"), decision_sha256=result.envelope["decision_sha256"],
+              approval_request_id=result.envelope.get("approval_request_id"), args_sha256=result.envelope["request_context"]["args_sha256"])
         if result.envelope["requires_approval"] and not covered:
             arid = result.envelope["approval_request_id"]
             app.state.pending[arid] = result.envelope
@@ -408,6 +420,12 @@ def build_issuer_app(
         return {"principal": upn, "may_approve": may_enroll(who, role=approver_role, groups=approver_groups) or upn in static_approvers,
                 "enrolled_public_key_hex": registry.public_hex().get(upn)}
 
+    @app.get("/witness")
+    async def witness_entries(authorization: Optional[str] = Header(default=None)):
+        """The issuer's signed witness log, for reconciliation with a client's evidence."""
+        authenticate(authorization)
+        return {"entries": list(witness.entries) if witness is not None else []}
+
     @app.get("/health")
     async def health():
         """Public, for a monitor: the service is up, which policy it runs,
@@ -492,6 +510,8 @@ def app_from_env() -> FastAPI:
         ttl_seconds=int(os.environ.get(ENV_RECEIPT_TTL, DEFAULT_TTL_SECONDS)),
         on_hold=notifier_from_env(os.environ),
         hold_store=HoldStore(os.environ.get(ENV_HOLDS_PATH) or None),
+        witness=(WitnessLog(os.environ["GARGOYLE_WITNESS_PATH"], Ed25519PrivateKey.from_private_bytes(bytes.fromhex(required[ENV_ISSUER_KEY_HEX])),
+                            required[ENV_ISSUER_KEY_ID]) if os.environ.get("GARGOYLE_WITNESS_PATH") else None),
         log_events=(lambda e: sys.stderr.write(json.dumps(e, sort_keys=True) + "\n")) if os.environ.get("GARGOYLE_LOG_JSON") else None,
         approver_registry=ApproverRegistry(os.environ.get(ENV_APPROVERS_PATH)),
         approver_role=os.environ.get(ENV_APPROVER_ROLE, DEFAULT_APPROVER_ROLE),

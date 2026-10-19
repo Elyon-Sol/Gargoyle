@@ -290,6 +290,7 @@ def cmd_issuer(args) -> int:
     os.environ.update(_read_env(out / "issuer.env"))
     os.environ.setdefault("GARGOYLE_APPROVERS_PATH", str(out / "approvers.json"))   # enrolled approvers live beside the keys
     os.environ.setdefault("GARGOYLE_HOLDS_PATH", str(out / "holds.sqlite"))          # holds, grants, declines, plans survive restarts
+    os.environ.setdefault("GARGOYLE_WITNESS_PATH", str(out / "witness.jsonl"))       # the issuer's signed record, for reconciliation
     os.environ.setdefault("GARGOYLE_LOG_JSON", "1")
     app = app_from_env()
     # The middleware reads the policy pin from a file; write it next to the
@@ -358,7 +359,29 @@ def cmd_audit(args) -> int:
         failed = sum(1 for r in v["entries"] if not r["accepted"])
         print("%d entries (%d honored, %d refused), %d failed; chain %s; tail %s"
               % (v["count"], v["honored"], v["refused"], failed, v["reason"], v["tail_sha256"][:16]))
-        return 0 if v["accepted"] else 1
+        rc = 0 if v["accepted"] else 1
+        entries = read_log(args.log)
+        if args.witness:
+            # The issuer's signed record: the client's evidence must agree with it.
+            from gargoyle.reconcile import reconcile
+            from gargoyle.witness import read_witness, verify_witness
+            w = verify_witness(read_witness(args.witness), issuer_public_keys=trust["issuer_public_keys"])
+            print("witness: %d entries, %s, tail %s" % (w["count"], w["reason"], w["tail_sha256"][:16]))
+            principal = next((e.get("principal") for e in entries if isinstance(e, dict) and e.get("principal")), None)
+            r = reconcile(entries, read_witness(args.witness), principal=principal)
+            for f in r["findings"]:
+                print("  FINDING %-22s %s" % (f["finding"], " ".join("%s=%s" % (k, str(v)[:40]) for k, v in f.items() if k != "finding")))
+            print("reconciled: %d issued by the issuer, %d in evidence, %d finding(s)" % (r["issued"], r["evidence_with_receipt"], len(r["findings"])))
+            rc = rc or (0 if (w["accepted"] and r["accepted"]) else 1)
+        if args.check_tree:
+            # Every file the gate wrote must still be as the gate left it.
+            from gargoyle.reconcile import check_tree
+            t = check_tree(entries, args.check_tree)
+            for f in t["findings"]:
+                print("  FINDING %-22s %s%s" % (f["finding"], f["path"], " (missing)" if f.get("missing") else ""))
+            print("tree: %d gated file(s) checked, %d untouched by the gate, %d changed outside it" % (t["checked"], t["untouched"], len(t["findings"])))
+            rc = rc or (0 if t["accepted"] else 1)
+        return rc
     receipt, execution = json.load(open(args.receipt)), json.load(open(args.execution))
     grant = json.load(open(args.grant)) if args.grant else None
     result = verify_chain(receipt, execution, grant=grant, **trust)
@@ -424,6 +447,8 @@ def main(argv=None) -> int:
     p = sub.add_parser("audit", help="verify a receipt chain offline, or a whole evidence log")
     p.add_argument("receipt", nargs="?"); p.add_argument("execution", nargs="?"); p.add_argument("grant", nargs="?")
     p.add_argument("--log", help="the middleware's audit.jsonl: verify every entry")
+    p.add_argument("--witness", help="the issuer's witness.jsonl: reconcile the evidence against it")
+    p.add_argument("--check-tree", metavar="DIR", help="verify every gated file under DIR is as the gate left it")
     p.add_argument("--out", default="gargoyle-deploy")
     p.set_defaults(fn=cmd_audit)
     args = parser.parse_args(argv)

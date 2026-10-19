@@ -92,6 +92,17 @@ verifying itself for no external user; that is the failure mode to avoid.
   hold and the receipt, with a link to /approve from GARGOYLE_APPROVE_URL); posted in
   a thread, failures logged and ignored, the grant still only from the approver's
   key. 80 lines. All six roadmap steps are done.
+- Witness and change detection (2026-10-19): gargoyle/witness.py, an issuer-signed
+  hash-chained record of every issued receipt, grant, decline and plan, served at
+  GET /witness and written beside the keys; gargoyle/reconcile.py compares a client's
+  evidence with it by decision id (UNWITNESSED_RECEIPT, UNWITNESSED_RELEASE,
+  MISSING_EVIDENCE, EVIDENCE_BEFORE_ISSUE) and checks a gated folder against the
+  evidence's recorded post-states (CHANGED_OUTSIDE_GATE, no plaintext needed).
+  Evidence version 4 adds `ref`. `gargoyle audit --witness FILE --check-tree DIR`.
+  Tests forge an entry with the executor key, remove the issuer's grant, drop a client
+  entry, edit a file in place and delete it; each is named. SPEC section 15.1 states the
+  trust position: on a user-administered workstation the gate constrains the assistant,
+  not the user, and these checks make circumvention visible. 0.14.0.dev0.
 - Beta hardening (2026-10-19): gargoyle/holdstore.py backs the issuer's holds, grants,
   declines and plans with SQLite (standard library; memory in tests), so a restart drops
   nothing a person is acting on; `GET /health`; one JSON event per decision on stderr;

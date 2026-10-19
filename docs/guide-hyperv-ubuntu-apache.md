@@ -467,7 +467,22 @@ gargoyle audit --log C:\gargoyle\audit.jsonl --out C:\gargoyle
 ```
 
 An edited, removed or inserted line prints `FAIL` with the reason at the
-point the chain breaks. Note the tail hash with each audit: a later copy of
+point the chain breaks. Two further checks close the gap between "what
+the workstation says" and "what happened". Copy the issuer's
+`witness.jsonl` from the VM beside the client's files and run:
+
+```powershell
+python -m gargoyle.cli audit --log C:\gargoyle\audit.jsonl --out C:\gargoyle --witness C:\gargoyle\witness.jsonl --check-tree C:\gargoyle-poc\project
+```
+
+The witness is the issuer's own signed record; any evidence row the
+issuer cannot vouch for is a FINDING line (a receipt it never issued, a
+held call it never saw a grant for, a receipt it issued that the client
+never recorded). The tree check hashes every file the gate has written
+and names any that is no longer as the gate left it: a change made in
+Notepad, by another tool, or by deleting the file. Neither check prevents
+those; both make them visible, which on a machine the user administers is
+the honest claim. Note the tail hash with each audit: a later copy of
 the file that lost its end still verifies on its own, and only the tail
 tells you it is shorter. Copy the file off the client on whatever schedule
 your retention needs; nothing in it is secret.

@@ -728,7 +728,7 @@ hashed over the one before:
 
 ```
 entry = {
-  "evidence_version": "gargoyle-evidence/3",
+  "evidence_version": "gargoyle-evidence/4",
   "seq":          <1, 2, 3 ...; dense>,
   "prev_sha256":  <entry_sha256 of seq-1; 64 "0" for seq 1>,
   "at":           <ISO 8601 UTC, when the executor decided>,
@@ -742,6 +742,8 @@ entry = {
   "execution":    <section 13 execution receipt, or null>,
   "client":       <the MCP client that made the call, "name version" from
                    its initialize handshake, or null; version 3 and later>,
+  "ref":          <what the adapter examined for a state-bound call (a file
+                   path, "mailRule:<id>"), or null; version 4 and later>,
   "entry_sha256": sha256(canonical_json(entry without entry_sha256))
 }
 ```
@@ -777,6 +779,7 @@ than failing every later one. The result names each entry's outcome, the
 count of honored and refused entries, and the last `entry_sha256` (the
 tail). The whole file is `EVIDENCE_VERIFIED` when every entry is.
 
+`gargoyle-evidence/3` entries have no `ref` member;
 `gargoyle-evidence/2` entries have no `client` member;
 `gargoyle-evidence/1` entries hashed under the `gargoyle/2` canonical form;
 a verifier recomputes each entry's hash under its own `evidence_version`,
@@ -789,6 +792,52 @@ shorter chain; an auditor who records the tail hash at each audit detects
 it at the next. There is no mechanism for amending the log, because it is
 not amended. The executor writes it (`GARGOYLE_MCP_AUDIT_LOG`) and
 `gargoyle audit --log` verifies it.
+
+### 15.1 The witness log and reconciliation
+
+The evidence log is the executor's own statement, and the executor is a
+workstation its user administers, holding the executor key. The reference
+issuing service therefore keeps a second record on the operator's server:
+one entry per decision it took, each hashed over the one before and signed
+with the issuer key, so a client can neither forge nor edit it.
+
+```
+entry = {
+  "witness_version": "gargoyle-witness/1",
+  "seq": n, "prev_sha256": ..., "at": ...,
+  "event": "issued" | "refused" | "granted" | "declined" | "plan" | "plan_granted",
+  ... (issued: principal, tool, decision_id, decision_sha256, approval_request_id,
+       args_sha256, held, covered; granted: approval_request_id, approver,
+       collected, required, hold_kind; declined: approval_request_id, by;
+       plan: principal, plan_id, steps, held),
+  "entry_sha256":    sha256(canonical_json(entry minus entry_sha256, issuer_key_id, issuer_signature)),
+  "issuer_key_id":   ..., "issuer_signature": ed25519 over canonical_json(entry minus issuer_signature)
+}
+```
+
+Reconciliation (`gargoyle audit --witness`) verifies both chains and
+compares them by `decision_id`. Findings, never resolved silently:
+
+- `UNWITNESSED_RECEIPT`: evidence honors a decision the issuer never issued,
+  or one whose hash or principal differs (a forged or foreign receipt);
+- `UNWITNESSED_RELEASE`: a held call was honored but the issuer saw no grant
+  for its hold, or for the plan the release names (a bypass of the
+  approval, or evidence signed around it);
+- `MISSING_EVIDENCE`: the issuer issued a receipt to this principal and the
+  client recorded nothing (dropped or suppressed evidence);
+- `EVIDENCE_BEFORE_ISSUE`: the client's entry predates the issuance.
+
+Tree check (`gargoyle audit --check-tree DIR`): every file under `DIR`
+that the evidence has a post-state for (the `ref` and the execution
+receipt's `post_state_sha256`) must hash to that state now, else
+`CHANGED_OUTSIDE_GATE`; a file the gate never touched is counted, not
+judged. No plaintext is needed: the hashes in the evidence suffice.
+
+What this establishes and what it does not. On a workstation its user
+administers, the gate constrains the assistant, not the user; a change
+made around the gate is not prevented. With the witness and the tree
+check it is detected: evidence that disagrees with the issuer, and files
+that disagree with the evidence, are findings a reviewer sees.
 
 ## 16. Relation to other receipt formats
 

@@ -197,11 +197,15 @@ def test_entries_name_the_client_and_older_versions_still_verify(tmp_path):
     assert anon["client"] is None
     v = verify_log(read_log(str(log.path)), **TRUST)
     assert v["accepted"] and [r["client"] for r in v["entries"]] == ["Claude Desktop 1.4", None]
-    # A version-2 entry (no client member) is still well-formed; a version-3 entry without it is not.
-    v2 = {k: val for k, val in anon.items() if k != "client"}; v2["evidence_version"] = "gargoyle-evidence/2"
+    # A version-2 entry (no client, no ref) is still well-formed; a version-3 entry has client but no ref;
+    # a version-4 entry without its ref member is not well-formed.
+    v2 = {k: val for k, val in anon.items() if k not in ("client", "ref")}; v2["evidence_version"] = "gargoyle-evidence/2"
     v2["entry_sha256"] = entry_sha256(v2)
     assert _well_formed(v2)
-    v3_missing = {k: val for k, val in anon.items() if k != "client"}
-    assert not _well_formed(v3_missing)
+    v3 = {k: val for k, val in anon.items() if k != "ref"}; v3["evidence_version"] = "gargoyle-evidence/3"
+    v3["entry_sha256"] = entry_sha256(v3)
+    assert _well_formed(v3)
+    v4_missing = {k: val for k, val in anon.items() if k != "ref"}
+    assert not _well_formed(v4_missing)
     with pytest.raises(ValueError):
         build_entry(seq=1, prev_sha256=GENESIS, kind=REFUSED, tool="t", args={}, principal=PRINCIPAL, reason="x", client=7)

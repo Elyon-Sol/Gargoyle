@@ -364,10 +364,12 @@ def _gate(state: ServerState, params: Dict[str, Any]) -> Dict[str, Any]:
     """{"executed", "reason", "envelope", "grant", "self_issued"}: the
     receipt and grant that were honored, whether the client brought them or
     this server obtained them."""
+    gate_ref: Dict[str, Any] = {"ref": None}
+
     def refused(reason, envelope=None):
         # A refusal keeps the receipt when there was one (a hold the human
         # declined or let lapse), so the evidence log can show what was asked.
-        return {"executed": False, "reason": reason, "envelope": envelope, "grant": None, "self_issued": False}
+        return {"executed": False, "reason": reason, "envelope": envelope, "grant": None, "self_issued": False, "ref": gate_ref["ref"]}
     if state.consumer is None:
         return refused(REF_TARGET_NOT_CONFIGURED)
 
@@ -385,6 +387,8 @@ def _gate(state: ServerState, params: Dict[str, Any]) -> Dict[str, Any]:
         # target's current state goes with the request (gargoyle.state), so
         # a hold is approved against it and bound to it.
         probed = state.adapter.probe(name, args) if state.adapter is not None else None
+        if probed is not None:
+            gate_ref["ref"] = probed[0].get("ref")
         # An approved plan may already cover this call; say so, and the
         # issuer opens no hold for it.
         release = _plan_release_for(state, name, args)
@@ -435,9 +439,11 @@ def _gate(state: ServerState, params: Dict[str, Any]) -> Dict[str, Any]:
         except Exception as exc:
             sys.stderr.write("gargoyle: snapshot failed: %s\n" % exc)
 
+    if now_probe is not None:
+        gate_ref["ref"] = now_probe[0].get("ref")
     state.executed.append({"tool": name, "args": args})  # THE side effect
     return {"executed": True, "reason": verdict.reason, "envelope": envelope, "grant": grant,
-            "self_issued": self_issued}
+            "self_issued": self_issued, "ref": gate_ref["ref"]}
 
 
 def _plan_release_for(state: ServerState, tool: str, args: Any) -> Optional[Dict[str, Any]]:
@@ -524,7 +530,7 @@ def _record(state: ServerState, kind: str, gate: Dict[str, Any], params: Dict[st
     try:
         state.evidence.append(kind, str(params.get("name")), params.get("arguments", {}), principal,
                               gate["reason"], receipt=gate["envelope"], grant=gate["grant"], execution=execution,
-                              client=state.client)
+                              client=state.client, ref=gate.get("ref"))
     except (OSError, ValueError) as exc:
         sys.stderr.write("gargoyle: evidence log unwritable: %s\n" % exc)
 
