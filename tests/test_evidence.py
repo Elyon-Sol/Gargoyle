@@ -151,3 +151,38 @@ def test_a_declined_hold_keeps_its_receipt_and_the_receipt_is_checked():
 def test_build_entry_rejects_unknown_kind():
     with pytest.raises(ValueError):
         build_entry(seq=1, prev_sha256=GENESIS, kind="maybe", tool="t", args={}, principal=PRINCIPAL, reason="x")
+
+
+def test_an_honored_held_call_reports_who_released_it(tmp_path):
+    """verify_log names the approver key ids behind an honored held call, so
+    the audit can print "released by <upn>"."""
+    from gargoyle.approval import build_grant, sign_grant
+    approver = Ed25519PrivateKey.generate()
+
+    class HoldAll:
+        def pin(self): return PIN
+        def decide(self, target_url, interaction): return Decision(ELIGIBLE, None, True)
+    env = _issue(HoldAll(), TARGET, {"tool": "write_file", "args": {"p": 1}, "principal": PRINCIPAL},
+                 signing_key=issuer, key_id="issuer-1", now=NOW).envelope
+    grant = sign_grant(build_grant(decision_sha256=env["decision_sha256"], approval_request_id=env["approval_request_id"],
+                                   grant_id="g-1", not_after=NOW + timedelta(minutes=10)), approver, "sysops@contoso.com")
+    ex = sign_execution_receipt(build_execution_receipt(envelope=env, outputs={"ok": True}, executed_at=RAN), executor, "executor-1")
+    log = EvidenceLog(str(tmp_path / "e.jsonl"))
+    log.append(HONORED, "write_file", {"p": 1}, PRINCIPAL, ACCEPT_CHAIN_VERIFIED, receipt=env, grant=grant, execution=ex)
+    log.append(REFUSED, "delete_file", {}, PRINCIPAL, "DESTRUCTIVE_TOOL")
+    v = verify_log(read_log(str(log.path)), approver_public_keys={"sysops@contoso.com": approver.public_key()}, **TRUST)
+    assert v["accepted"]
+    assert v["entries"][0]["released_by"] == ["sysops@contoso.com"] and v["entries"][1]["released_by"] == []
+    # And the CLI line carries it.
+    from gargoyle.cli import main
+    import json as _json
+    out = tmp_path / "deploy"; out.mkdir()
+    hexpub = lambda k: k.public_key().public_bytes(__import__("cryptography.hazmat.primitives.serialization", fromlist=["Encoding"]).Encoding.Raw,
+                                                   __import__("cryptography.hazmat.primitives.serialization", fromlist=["PublicFormat"]).PublicFormat.Raw).hex()
+    (out / "public-keys.json").write_text(_json.dumps({"issuer": {"issuer-1": hexpub(issuer)}, "executor": {"executor-1": hexpub(executor)},
+                                                        "approver": {"sysops@contoso.com": hexpub(approver)}}))
+    import io, contextlib
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        assert main(["audit", "--log", str(log.path), "--out", str(out)]) == 0
+    assert "CHAIN_VERIFIED released by sysops@contoso.com" in buf.getvalue()
