@@ -92,6 +92,14 @@ verifying itself for no external user; that is the failure mode to avoid.
   hold and the receipt, with a link to /approve from GARGOYLE_APPROVE_URL); posted in
   a thread, failures logged and ignored, the grant still only from the approver's
   key. 80 lines. All six roadmap steps are done.
+- Friction measurement (2026-10-19): a crafted week-close task in Claude Desktop (read
+  three files, render a status review in chat, write a report file and a reconciled
+  todo.md, read both back) produced 9 gated calls: 7 free reads/lists that the user never
+  noticed and 2 held writes, each released by the enrolled approver in about 8-12 seconds
+  (2-second poll). Audit rows 19-27, all CHAIN_VERIFIED, the two writes "released by" the
+  approver's UPN. The cost of supervision for the whole task was two cards and about
+  twenty seconds; the approver saw the full content of both files. Friction, where it
+  exists, is policy (what to hold), not mechanism.
 - Entra approver login live (2026-10-19): the approver account (a real tenant user) signed in to the console
   with Microsoft, enrolled a browser-held key, and released a write requested by
   the workstation account (a real tenant user); the client audit shows the chain verified (18 entries, 0 failed)
