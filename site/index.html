@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Gargoyle - receipts and holds for agent tool calls</title>
+<meta name="description" content="Gargoyle is a gate for AI assistants' tool calls: a signed, single-use receipt for every call, a human's keyed release for the ones that matter, an execution receipt for what ran, and an evidence trail anyone can verify offline. Open source, Apache-2.0, on PyPI as gargoyle-receipts." />
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="site">
+  <div class="wrap nav">
+    <div class="brand"><span class="dot"></span> Gargoyle</div>
+    <nav class="links">
+      <a href="#what">What it proves</a>
+      <a href="#how">How it works</a>
+      <a href="#evidence">Evidence</a>
+      <a href="#get">Get it</a>
+      <a href="dissertation.html">Dissertation</a>
+      <a href="https://github.com/Elyon-Sol/Gargoyle/blob/main/SPEC.md" target="_blank" rel="noopener">Spec</a>
+      <a href="elyon-sol.html">Elyon-Sol (archived)</a>
+    </nav>
+  </div>
+</header>
+
+<section class="hero" id="top">
+  <div class="wrap">
+    <div class="eyebrow">Receipts and holds for agent tool calls</div>
+    <h1>When an AI assistant acts on your behalf,<br>prove exactly what was allowed, who released it,<br>and what ran.</h1>
+    <p class="tag">Gargoyle sits between an assistant and the tools it uses. Every call gets a signed, single-use receipt bound to its arguments and to a policy version. Calls that matter stop until a named person signs a release with a key no server holds. What ran is signed too, with the state it found and the state it left. The whole chain verifies offline, by anyone, in two languages.</p>
+    <div class="formula">receipt <b>&rarr;</b> grant <b>&rarr;</b> execution <b>&rarr;</b> evidence <b>&rarr;</b> witness</div>
+    <div class="btns">
+      <a class="btn primary" href="dissertation.html">Read the dissertation &rarr;</a>
+      <a class="btn ghost" href="https://github.com/Elyon-Sol/Gargoyle" target="_blank" rel="noopener">Source on GitHub</a>
+      <a class="btn ghost" href="https://pypi.org/project/gargoyle-receipts/" target="_blank" rel="noopener">PyPI</a>
+    </div>
+    <div class="badges">
+      <span class="badge"><b>Apache-2.0</b> open source</span>
+      <span class="badge"><b>Ed25519</b> over RFC 8785 canonical JSON</span>
+      <span class="badge"><b>Python</b> and <b>TypeScript</b>, one conformance suite</span>
+      <span class="badge"><b>Pre-release</b> <span class="sub">0.15 series, format gargoyle/3</span></span>
+      <span class="badge">Successor to <a href="elyon-sol.html">Elyon-Sol</a></span>
+    </div>
+  </div>
+</section>
+
+<section id="what">
+  <div class="wrap">
+    <div class="eyebrow">What it proves</div>
+    <h2>One sentence, every clause signed by a different key</h2>
+    <p class="lead">A specific policy version authorized a specific call for a specific person; named approvers released it in the state they were shown; exactly that call ran once; here is what it changed; and if it was undone, the undo was exact. Nothing in the chain asserts what its hashes cannot prove.</p>
+    <div class="grid g3" style="margin-top:22px">
+      <div class="card"><h3><span class="ic">1</span>The receipt</h3><p>Issued by a policy decision, signed by the issuer, bound to the tool, the hash of its arguments, the caller, and the policy version. Single use. It stops being honored the moment the policy it was decided under changes.</p></div>
+      <div class="card"><h3><span class="ic">2</span>The grant</h3><p>A human's release, signed with a key generated in their browser and never exported. Verified at execution, not in a dashboard. Thresholds and named approvers live inside the receipt's signature, so a client cannot lower them.</p></div>
+      <div class="card"><h3><span class="ic">3</span>The execution receipt</h3><p>The executor's signed statement that this receipt's call ran, with the hash of its outputs and the target's state before and after. A write runs only if the target is still as the approver saw it.</p></div>
+      <div class="card"><h3><span class="ic">4</span>The evidence log</h3><p>One hash-chained entry per decision, refusals included, naming the person, the client and the target. Verifiable offline across every format version the project has had.</p></div>
+      <div class="card"><h3><span class="ic">5</span>The witness</h3><p>The issuer's own signed record of every decision, kept on a server the workstation does not control. Reconciled against the evidence by decision id, it names a forged entry, a bypassed approval or a suppressed record.</p></div>
+      <div class="card"><h3><span class="ic">6</span>The audit</h3><p>One command verifies the chain, reconciles it with the witness, and checks the gated folder for any file changed around the gate. It has refused to label a revert that was not byte-exact, and it caught a defect in its own author's code.</p></div>
+    </div>
+  </div>
+</section>
+
+<section id="how">
+  <div class="wrap">
+    <div class="eyebrow">How it works</div>
+    <h2>A small middleware in front of the tools the assistant already has</h2>
+    <p class="lead">The gate speaks the Model Context Protocol. It runs beside the client as a local process, or as an HTTPS server for hosted connectors, and fronts whatever tool server the assistant uses: a filesystem, a Microsoft 365 server, anything that speaks the protocol. The assistant is told, in the protocol handshake, that all work on the target goes through the gate; nobody types a server name.</p>
+    <div class="grid g2" style="margin-top:22px">
+      <div class="card"><h3>Free calls</h3><p>Reads and listings get a receipt and run at once. The user notices nothing.</p></div>
+      <div class="card"><h3>Held calls</h3><p>A write pauses. The approver's console shows the exact change as a diff against the file as it is, or an inbox rule in plain words with outside addresses called out. One click signs the grant.</p></div>
+      <div class="card"><h3>Refused calls</h3><p>A delete the policy forbids, a key the executor does not trust, a file that moved under the card: each is refused, and each refusal is evidence.</p></div>
+      <div class="card"><h3>Plans and undo</h3><p>A long task can ask for one approval covering a bounded plan, each step still bound and single-use. An approved change can be undone through the same approval, and the audit proves the undo was exact.</p></div>
+    </div>
+    <div class="figure" style="margin-top:22px">  41 ok  honored  write_file  &lt;workstation account&gt;  CHAIN_VERIFIED  released by &lt;approver&gt;  (plan c04e683b step 1)  state 0c8a2f3d -&gt; 97b2f1cc  via claude-ai 0.1.0
+  42 ok  honored  write_file  &lt;workstation account&gt;  CHAIN_VERIFIED  released by &lt;approver&gt;  (plan c04e683b step 2)  state f68e4696 -&gt; 5746e13f  via claude-ai 0.1.0
+<div class="cap">Two rows from a live audit: a named person's assistant, identified as Claude Desktop, made two changes under one plan a named approver signed, each bound to the file state it found, each transition recorded, every signature verified on the workstation.</div></div>
+  </div>
+</section>
+
+<section id="evidence">
+  <div class="wrap">
+    <div class="eyebrow">Evidence, not promises</div>
+    <h2>Proven on real machines, with real identities</h2>
+    <p class="lead">A Windows 11 workstation running Claude Desktop, an issuer on a separate host over TLS, Microsoft Entra ID identities for the person asking and the person approving, and 45 verified audit rows: free reads, held writes, three kinds of refusal, a state-bound write, an exact revert and one the audit would not call a revert, a scoped plan, a reconciliation against the issuer's witness, and a hand edit in Notepad caught by the tree check.</p>
+    <ul class="clean" style="margin-top:14px">
+      <li>The audit withheld the "reverts" label from a revert whose bytes differed, which exposed a newline bug in the project's own filesystem server. The next revert was exact.</li>
+      <li>A full work task cost two approval cards and about twenty seconds; everything else ran unnoticed. Where friction appears, the policy file is the lever, not the mechanism.</li>
+      <li>On a workstation its user administers, the gate constrains the assistant, not the user. A change made around the gate is detected, not prevented, and the specification says so.</li>
+    </ul>
+  </div>
+</section>
+
+<section id="get">
+  <div class="wrap">
+    <div class="eyebrow">Get it</div>
+    <h2>Three commands, no policy engine, no containers</h2>
+<pre class="code"><span class="c"># the issuer and an approver, on the server</span>
+pip install gargoyle-receipts
+gargoyle init /path/the/assistant/may/touch      <span class="c"># keys, config, a JSON rules file</span>
+gargoyle issuer                                  <span class="c"># the issuing service, with the browser console at /approve</span>
+
+<span class="c"># the workstation: paste the written MCP entry into Claude Code or Claude Desktop</span>
+gargoyle login --tenant ... --client-id ... --scope ...   <span class="c"># optional: the user's own Entra identity</span>
+gargoyle audit --log audit.jsonl --witness witness.jsonl --check-tree /the/folder</pre>
+    <p class="muted" style="margin-top:12px">The full single-instance build is in the repository's guide (Ubuntu on Hyper-V, Apache with TLS, a Windows 11 client). The specification is self-contained, with conformance vectors a second implementation reproduces byte for byte. Status: pre-release; one deployment; no outside review yet. The <a href="dissertation.html#sec-9">limits</a> are written down.</p>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap fgrid">
+    <div>
+      <div class="brand" style="margin-bottom:8px"><span class="dot"></span> Gargoyle</div>
+      <div class="muted" style="max-width:46ch;font-size:.85rem">Receipts and holds for agent tool calls. Apache-2.0 open source. The successor to Elyon-Sol.</div>
+    </div>
+    <div>
+      <div class="muted" style="margin-bottom:6px">Project</div>
+      <div><a href="https://github.com/Elyon-Sol/Gargoyle" target="_blank" rel="noopener">Source on GitHub</a></div>
+      <div><a href="https://pypi.org/project/gargoyle-receipts/" target="_blank" rel="noopener">gargoyle-receipts on PyPI</a></div>
+      <div><a href="https://github.com/Elyon-Sol/Gargoyle/blob/main/SPEC.md" target="_blank" rel="noopener">Specification</a></div>
+      <div><a href="dissertation.html">Dissertation</a></div>
+    </div>
+    <div>
+      <div class="muted" style="margin-bottom:6px">Lineage</div>
+      <div><a href="elyon-sol.html">Elyon-Sol (archived, retired 2026-07-20)</a></div>
+      <div><a href="https://doi.org/10.5281/zenodo.19367848" target="_blank" rel="noopener">Elyon-Sol Zenodo record</a></div>
+    </div>
+  </div>
+</footer>
+</body>
+</html>
