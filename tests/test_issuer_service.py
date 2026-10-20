@@ -196,3 +196,34 @@ def test_holds_grants_and_declines_survive_a_restart(tmp_path):
     assert c4.get("/grants/" + arid, headers=auth()).json()["declined"] is True
     assert [e["event"] for e in events] == ["issued", "granted", "declined"]
     assert events[1]["approver"] == "approver-alice" and events[1]["hold_kind"] == "receipt"
+
+
+def test_holds_are_visible_to_approvers_and_to_their_own_principal_only(client):
+    """Held arguments are often file contents. An approver sees every hold;
+    a requester sees only holds on their own calls; neither sees another
+    user's through this service."""
+    from gargoyle.issuer_service import REF_ISSUER_FORBIDDEN
+    alice, bob, approver_tok = token(sub="alice@contoso.com", aud="gargoyle-issuer"), token(sub="bob@contoso.com", aud="gargoyle-issuer"), token(sub="approver-alice", aud="gargoyle-issuer")
+    a = client.post("/issue", json={"target_url": TARGET, "tool": "write_file", "args": {"path": "alice.txt", "content": "A"}}, headers=auth(alice)).json()["envelope"]
+    b = client.post("/issue", json={"target_url": TARGET, "tool": "write_file", "args": {"path": "bob.txt", "content": "B"}}, headers=auth(bob)).json()["envelope"]
+    seen_by_alice = [h["envelope"]["approval_request_id"] for h in client.get("/pending", headers=auth(alice)).json()["pending"]]
+    assert seen_by_alice == [a["approval_request_id"]]
+    seen_by_approver = sorted(h["envelope"]["approval_request_id"] for h in client.get("/pending", headers=auth(approver_tok)).json()["pending"])
+    assert seen_by_approver == sorted([a["approval_request_id"], b["approval_request_id"]])
+    # Bob cannot cancel Alice's hold; Alice can cancel her own; an approver can cancel Bob's.
+    r = client.post("/decline", json={"approval_request_id": a["approval_request_id"]}, headers=auth(bob))
+    assert r.status_code == 403 and r.json()["detail"]["reason"] == REF_ISSUER_FORBIDDEN
+    assert client.post("/decline", json={"approval_request_id": a["approval_request_id"]}, headers=auth(alice)).json()["declined"] is True
+    assert client.post("/decline", json={"approval_request_id": b["approval_request_id"]}, headers=auth(approver_tok)).json()["declined"] is True
+    assert client.get("/pending", headers=auth(approver_tok)).json()["pending"] == []
+
+
+def test_the_approver_role_in_an_identity_token_also_sees_every_hold():
+    """An Entra approver who has not enrolled a key yet still reads the queue:
+    the role in the token is enough to see, not to release."""
+    app = build_issuer_app(policy=ToolPolicy(), signing_key=issuer, key_id="issuer-1", idp_public_keys={"idp-1": idp.public_key()},
+                           audience="gargoyle-issuer", now=lambda: NOW)
+    c = TestClient(app)
+    c.post("/issue", json={"target_url": TARGET, "tool": "write_file", "args": {"path": "x"}}, headers=auth(token(sub="carol@contoso.com", aud="gargoyle-issuer")))
+    assert c.get("/pending", headers=auth(token(sub="dana@contoso.com", aud="gargoyle-issuer", roles=["Approver"]))).json()["pending"][0]["args"] == {"path": "x"}
+    assert c.get("/pending", headers=auth(token(sub="erin@contoso.com", aud="gargoyle-issuer", roles=["Reader"]))).json()["pending"] == []

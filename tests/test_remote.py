@@ -40,7 +40,7 @@ def _issuer():
         def get(self, url, headers=None, timeout=None): return c.get(url.replace("http://i", ""), headers=headers)
 
     def human(seconds):
-        tok = mint_identity_token("approver", idp, "idp-1", "gargoyle-issuer")
+        tok = mint_identity_token("approver-1", idp, "idp-1", "gargoyle-issuer")       # the approver key id: an approver sees every hold
         h = {"Authorization": "Bearer " + tok}
         for hold in c.get("/pending", headers=h).json()["pending"]:
             env = hold["envelope"]

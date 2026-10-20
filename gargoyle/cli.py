@@ -43,6 +43,8 @@ import os
 import re
 import stat
 import sys
+
+from gargoyle.approvers import DEFAULT_APPROVER_ROLE
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -107,7 +109,11 @@ def cmd_init(args) -> int:
     executor, executor_hex, executor_pub = new_key()
     exp = int((datetime.now(timezone.utc) + timedelta(days=args.token_days)).timestamp())
     client_token = encode({"sub": PRINCIPAL, "aud": "gargoyle-issuer", "exp": exp}, idp, "idp-1")
-    approver_token = encode({"sub": "approver", "aud": "gargoyle-issuer", "exp": exp}, idp, "idp-1")
+    # One identity token per approver, named by the key id it travels with and
+    # carrying the approver role: the issuer shows the whole queue to approvers
+    # and only a person's own holds to anyone else.
+    def approver_token_for(kid: str) -> str:
+        return encode({"sub": kid, "roles": [DEFAULT_APPROVER_ROLE], "aud": "gargoyle-issuer", "exp": exp}, idp, "idp-1")
     issuer_url = args.issuer_url or "http://%s:%d" % (args.host, args.port)
 
     rules = out / "rules.json"
@@ -135,6 +141,7 @@ def cmd_init(args) -> int:
     _write(out / "middleware.env", _env_lines(middleware_env), private=True)
     b64url = lambda b: __import__("base64").urlsafe_b64encode(b).rstrip(b"=").decode()
     for n, (kid, _k, khex, kpub) in enumerate(approvers, 1):
+        approver_token = approver_token_for(kid)
         # approver.env / approver-web.json for the first; -2, -3 ... for the others.
         suffix = "" if n == 1 else "-%d" % n
         _write(out / ("approver%s.env" % suffix), _env_lines({

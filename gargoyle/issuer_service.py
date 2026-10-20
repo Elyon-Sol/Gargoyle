@@ -86,6 +86,7 @@ REF_ISSUER_ARGS_NOT_TEXT = "REF_ISSUER_ARGS_NOT_TEXT"   # arguments carry charac
 REF_ISSUER_UNKNOWN_HOLD = "REF_ISSUER_UNKNOWN_HOLD"
 REF_ISSUER_NO_APPROVER_TRUST = "REF_ISSUER_NO_APPROVER_TRUST"
 REF_ISSUER_NOT_AN_APPROVER = "REF_ISSUER_NOT_AN_APPROVER"   # enrollment without the approver role or group
+REF_ISSUER_FORBIDDEN = "REF_ISSUER_FORBIDDEN"               # authenticated, but not an approver and not the hold's own principal
 
 
 def build_issuer_app(
@@ -146,6 +147,20 @@ def build_issuer_app(
     def approver_keys() -> Dict[str, Any]:
         """Static keys from configuration plus every enrolled approver, by UPN."""
         return {**static_approvers, **registry.keys()}
+
+    def is_approver(who: Dict[str, Any]) -> bool:
+        """May this identity see every hold and the witness: the approver role
+        or group, a configured approver key id, or an enrolled approver."""
+        upn = who["principal"]
+        return may_enroll(who, role=approver_role, groups=approver_groups) or upn in static_approvers or upn in registry
+
+    def hold_owner(arid: str) -> Optional[str]:
+        """The principal whose call is held under `arid` (a hold or a plan), or None."""
+        env = app.state.pending.get(arid)
+        if env is not None:
+            return env.get("request_context", {}).get("principal")
+        plan = app.state.pending_plans.get(arid)
+        return plan.get("principal") if plan is not None else None
 
     def _refuse(status: int, reason: str) -> HTTPException:
         return HTTPException(status_code=status, detail={"reason": reason})
@@ -286,7 +301,11 @@ def build_issuer_app(
 
     @app.get("/pending")
     async def pending(authorization: Optional[str] = Header(default=None)):
-        authenticate(authorization)
+        """Approvers see every hold with its arguments; anyone else sees only
+        the holds on their own calls. Held arguments are often file contents,
+        and one user's are not another's to read."""
+        who = authenticate(authorization)
+        sees_all = is_approver(who)
         current = now()
         live = {}
         for arid, plan in list(app.state.pending_plans.items()):
@@ -294,6 +313,8 @@ def build_issuer_app(
                 del app.state.pending_plans[arid]
                 app.state.grants.pop(arid, None)
             elif len(app.state.grants.get(arid, [])) < _plan_terms(plan)["required"]:
+                if not sees_all and plan.get("principal") != who["principal"]:
+                    continue
                 have = app.state.grants.get(arid, [])
                 live[arid] = {"plan": plan, "collected": len(have), "required": _plan_terms(plan)["required"],
                               "approvers": [g["approver_key_id"] for g in have]}
@@ -304,6 +325,8 @@ def build_issuer_app(
                 app.state.pending_state.pop(arid, None)
                 app.state.grants.pop(arid, None)
             elif not _complete(arid):
+                if not sees_all and env.get("request_context", {}).get("principal") != who["principal"]:
+                    continue
                 have = app.state.grants.get(arid, [])
                 live[arid] = {"envelope": env, "args": app.state.pending_args.get(arid),
                               "state": app.state.pending_state.get(arid),
@@ -364,6 +387,8 @@ def build_issuer_app(
         arid = body.get("approval_request_id") if isinstance(body, dict) else None
         if not isinstance(arid, str) or (arid not in app.state.pending and arid not in app.state.pending_plans):
             return {"declined": False, "reason": REF_ISSUER_UNKNOWN_HOLD}
+        if not is_approver(who) and hold_owner(arid) != who["principal"]:
+            raise _refuse(403, REF_ISSUER_FORBIDDEN)      # only an approver, or the person whose call it is, may cancel it
         app.state.pending_plans.pop(arid, None)
         app.state.pending.pop(arid, None)
         app.state.pending_args.pop(arid, None)
@@ -422,8 +447,10 @@ def build_issuer_app(
 
     @app.get("/witness")
     async def witness_entries(authorization: Optional[str] = Header(default=None)):
-        """The issuer's signed witness log, for reconciliation with a client's evidence."""
-        authenticate(authorization)
+        """The issuer's signed witness log, for reconciliation with a client's
+        evidence. It names every user's decisions, so it is for approvers."""
+        if not is_approver(authenticate(authorization)):
+            raise _refuse(403, REF_ISSUER_FORBIDDEN)
         return {"entries": list(witness.entries) if witness is not None else []}
 
     @app.get("/health")

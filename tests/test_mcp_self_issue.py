@@ -105,7 +105,7 @@ def test_flagged_call_waits_for_the_human_then_runs_once():
     def human_approves_on_second_poll(seconds):
         polls["n"] += 1
         if polls["n"] == 2:
-            rc = approve_at_issuer("http://issuer", token("approver-human"), key_hex=approver_hex,
+            rc = approve_at_issuer("http://issuer", token("approver-alice"), key_hex=approver_hex,
                                    key_id="approver-alice", yes=True, http=Shim(client))
             assert rc == 0
 
@@ -150,7 +150,7 @@ def test_declined_hold_stops_the_wait_at_once():
         pending = client.get("/pending", headers={"Authorization": "Bearer " + token()}).json()["pending"]
         for h in pending:
             client.post("/decline", json={"approval_request_id": h["envelope"]["approval_request_id"]},
-                        headers={"Authorization": "Bearer " + token("approver-human")})
+                        headers={"Authorization": "Bearer " + token("approver-alice")})
 
     state = middleware(client, sleep=human_declines_on_first_poll, approval_timeout=60)
     assert gate_tool_call(state, call("write_file", {"path": "a.txt", "content": "x"})) == (False, REF_TARGET_APPROVAL_DECLINED)
@@ -201,7 +201,7 @@ def test_every_decision_lands_in_the_evidence_log(tmp_path):
     def human_declines(seconds):
         for h in client.get("/pending", headers={"Authorization": "Bearer " + token()}).json()["pending"]:
             client.post("/decline", json={"approval_request_id": h["envelope"]["approval_request_id"]},
-                        headers={"Authorization": "Bearer " + token("approver-human")})
+                        headers={"Authorization": "Bearer " + token("approver-alice")})
 
     state = middleware(client, sleep=human_declines, approval_timeout=60, attest=True)
     from gargoyle.evidence import EvidenceLog
