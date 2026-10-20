@@ -136,3 +136,10 @@ def test_approvers_list_and_revoke_on_the_issuer_host(tmp_path, capsys):
     assert doc["approvers"] == {} and doc["revoked"]["dana@contoso.com"]["revoked_by"].startswith("operator:")
     assert main(["approvers", "list", "--out", str(out)]) == 0
     assert "revoked: dana@contoso.com" in capsys.readouterr().out
+
+
+def test_the_package_runs_as_a_module():
+    """`python -m gargoyle --help` works where gargoyle.exe is not on PATH."""
+    import subprocess, sys
+    r = subprocess.run([sys.executable, "-m", "gargoyle", "--help"], capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0 and "audit" in r.stdout
