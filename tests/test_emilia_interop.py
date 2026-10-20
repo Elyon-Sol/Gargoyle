@@ -28,7 +28,7 @@ def _key(label):
 
 
 def test_emilia_receipt_vectors_verify_under_gargoyles_canonical_form():
-    vectors = json.loads((FIX / "receipts.v1.json").read_text())["vectors"]
+    vectors = json.loads((FIX / "receipts.v1.json").read_text(encoding="utf-8"))["vectors"]
     assert len(vectors) == 14
     for v in vectors:
         result = emilia.verify_ep_receipt(v["document"], v.get("public_key", ""))
@@ -62,7 +62,7 @@ def _dup_hook(pairs):
 def test_emilia_canonicalization_vectors_match_rfc8785_canonical_json():
     """EMILIA's strict gate (duplicate names, lone surrogates, depth over 64,
     I-JSON profile) and then SHA-256 over Gargoyle's RFC 8785 bytes."""
-    vectors = json.loads((FIX / "canonicalization.v1.json").read_text())["vectors"]
+    vectors = json.loads((FIX / "canonicalization.v1.json").read_text(encoding="utf-8"))["vectors"]
     assert len(vectors) == 35
     for v in vectors:
         spec = v["canonicalization"]
