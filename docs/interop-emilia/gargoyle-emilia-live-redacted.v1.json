@@ -1,5 +1,5 @@
 {
-  "suite": "GARGOYLE EP-TRUST-RECEIPT-v1 live pilot export (redacted, re-signed under throwaway keys)",
+  "suite": "GARGOYLE EP-TRUST-RECEIPT-v1 live workstation export (redacted, re-signed under throwaway keys)",
   "vectors": [
     {
       "id": "ep:receipt:gargoyle:c4ebd22e-7c5a-479b-ac09-bb3a96d0d8b1",
