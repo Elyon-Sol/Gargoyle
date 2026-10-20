@@ -57,3 +57,35 @@ def test_console_pkce_matches_rfc_7636(tmp_path):
     assert out["challenge"] == "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"
     assert out["url"].startswith("https://login.microsoftonline.com/t/oauth2/v2.0/authorize?")
     assert "code_challenge_method=S256" in out["url"] and "client_id=c" in out["url"] and "scope=api%3A%2F%2Fa%2Faccess+openid+profile" in out["url"]
+
+
+EMILIA_SCRIPT = r'''
+import { earlier, emiliaContext, emiliaSignoff, importApproverKey } from "%s";
+import { readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+const V = JSON.parse(readFileSync(%s, "utf8"));
+const b64url = (b) => Buffer.from(b).toString("base64url");
+const seed = createHash("sha256").update(V.approver_seed_label).digest();
+const key = await importApproverKey({ d: b64url(seed), x: b64url(Buffer.from(V.approver_public_key_hex, "hex")) });
+const context = await emiliaContext(V.signed, V.grant.approver_key_id, 1, earlier(V.signed.not_after, V.grant.not_after));
+console.log(JSON.stringify(await emiliaSignoff(context, key)));
+'''
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="Node not available")
+def test_console_emilia_signoff_matches_the_python_module(tmp_path):
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+    from gargoyle import emilia
+    vectors = json.loads(VECTORS.read_text())
+    script = tmp_path / "emilia.mjs"
+    script.write_text(EMILIA_SCRIPT % ((ROOT / "gargoyle" / "static" / "approve.js").as_uri(), json.dumps(str(VECTORS))))
+    proc = subprocess.run(["node", str(script)], capture_output=True, text=True, timeout=60)
+    assert proc.returncode == 0, proc.stderr[-2000:]
+    member = json.loads(proc.stdout.strip().splitlines()[-1])
+    receipt, grant = vectors["signed"], vectors["grant"]
+    expected = emilia.authorization_context(receipt, grant["approver_key_id"], 1, expires_at=min(receipt["not_after"], grant["not_after"]))
+    assert member["context"] == expected
+    pub = Ed25519PublicKey.from_public_bytes(bytes.fromhex(vectors["approver_public_key_hex"]))
+    pub.verify(bytes.fromhex(member["signature"]), emilia.context_hash_for(member["context"]))
+    carried = dict(grant); carried[emilia.EMILIA_MEMBER] = member
+    assert emilia.verify_embedded_signoff(carried, receipt, pub) == {"accepted": True, "reason": None}

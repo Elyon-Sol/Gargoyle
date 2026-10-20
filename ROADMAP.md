@@ -76,9 +76,13 @@ and EP-CANONICALIZATION-v1 vectors (49) pass under Gargoyle's RFC 8785 canonical
 byte for byte; Gargoyle receipts, grants and execution receipts export as EP-RECEIPT-v1
 envelopes and a Gargoyle chain exports as an EP-AUTHORIZATION-RECEIPT-v1 Trust Receipt,
 all accepted by EMILIA's own JavaScript and Python runners unmodified. One gap: EMILIA
-approvers sign the context hash, Gargoyle approvers sign the grant, so a lossless export
-needs the console to sign both (small; proposed, not built). gargoyle/emilia.py,
-tests/test_emilia_interop.py, EMILIA's vectors vendored under tests/fixtures/emilia.
+approvers sign the context hash, Gargoyle approvers sign the grant. Closed the same
+night: the console signs both, the second signature rides inside the grant as its
+`emilia` member (SPEC 8.4), the issuer checks it against the hold, and `gargoyle emilia`
+exports an evidence log as Trust Receipts under one executor-signed Merkle checkpoint
+that EMILIA's runners accept. gargoyle/emilia.py, tests/test_emilia_interop.py, EMILIA's
+vectors vendored under tests/fixtures/emilia. Next: the first live approval with the
+member, then the issue and interop pack on their repository.
 
 ## Not on the roadmap
 

@@ -485,6 +485,31 @@ frees a slot. The cap keeps one runaway client from filling every
 approver's queue and the hold store. It is a service limit, not part of
 the receipt.
 
+### 8.4 The optional `emilia` member
+
+A grant MAY carry an `emilia` member: `{"context": <EMILIA Authorization
+Context>, "signature": <hex>}`. It is inside the signed region, so the grant
+signature covers it; verifiers that do not know it ignore it (section 8.1
+checks the required members and the signature over everything but
+`approver_signature`). The context is the EP-AUTHORIZATION-RECEIPT-v1
+Authorization Context (draft-schrock-ep-authorization-receipts) that
+`gargoyle.emilia.authorization_context` derives from the receipt for the
+grant's approver: the action hash over the bound call, `policy_hash` equal to
+the receipt's `policy_sha256`, the initiator, the receipt's `decision_id` as
+`authorization_instance`, the target as `audience`, a nonce derived from
+`approval_request_id` and the approver id, `issued_at` from the receipt. The
+console chooses only `approver_index` and `expires_at`, the latter no later
+than the receipt's or the grant's `not_after`. `signature` is the approver's
+Ed25519 signature over the SHA-256 of the context's canonical form (an EMILIA
+Class B signoff), made with the same key as the grant.
+
+The reference issuing service checks the member against the hold before it
+stores the grant (`REF_EMILIA_SIGNOFF_MALFORMED`, `REF_EMILIA_CONTEXT_MISMATCH`,
+`REF_EMILIA_SIGNATURE_INVALID`); a grant without the member is accepted as
+before. `gargoyle emilia` exports an evidence log's approved calls as EMILIA
+Trust Receipts whose signoffs are these signatures, under one Merkle
+checkpoint signed by the executor key (docs/interop-emilia.md).
+
 ## 9. The published policy record
 
 A consumer learns the live policy pin either from a record file it was

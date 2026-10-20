@@ -251,6 +251,7 @@ hold and deny rules):
     gargoyle init /path/the/agent/may/touch     # keys, config, rules.json
     gargoyle init --observe /path/...           # or: allow and record everything, hold nothing, tighten later
     gargoyle tokens --out gargoyle-deploy       # later: new client and approver tokens, same keys
+    gargoyle emilia --log audit.jsonl           # export approved calls as EMILIA Trust Receipts (docs/interop-emilia.md)
     gargoyle issuer                             # the issuing service, on rules.json
     gargoyle approve --watch 2                  # where the approver sits (terminal)
 

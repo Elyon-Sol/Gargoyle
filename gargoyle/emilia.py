@@ -15,13 +15,18 @@ Two directions, both offline:
   (EP-AUTHORIZATION-RECEIPT-v1) maps a Gargoyle chain onto EMILIA's action,
   contexts, signoffs, consumption and single-leaf log proof.
 
-The one thing an export cannot manufacture is the approver's signoff: EMILIA
-approvers sign the SHA-256 of the JCS Authorization Context (32 bytes, Class B
-Ed25519), Gargoyle approvers sign the canonical grant. The bytes differ, so a
-stored grant signature is not a signoff (EMILIA's verifier refuses it, as it
-should). `context_hash_for` gives the digest an approver console would sign
-alongside the grant to make exports lossless; until that is built, a Trust
-Receipt export is structural only unless the signoff is supplied."""
+An EMILIA approver signs the SHA-256 of the JCS Authorization Context (32
+bytes, Class B Ed25519); a Gargoyle approver signs the canonical grant. The
+bytes differ, so a stored grant signature is not a signoff. The approval
+console therefore signs both: it builds the Authorization Context for the
+hold it shows (authorization_context, the same bytes this module computes),
+signs its hash with the same browser key, and carries the result inside the
+grant as the optional `emilia` member, which the grant signature then covers.
+The issuer checks the member against the hold before storing the grant
+(verify_embedded_signoff), and `gargoyle emilia` turns an evidence log into
+Trust Receipts (trust_receipts_from_entries) whose signoffs the approver made
+and whose log proof is a Merkle tree over the exported receipts, signed by
+the executor's key."""
 from __future__ import annotations
 
 import base64
@@ -29,6 +34,7 @@ import hashlib
 import json
 import math
 import uuid
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from gargoyle.envelope import canonical_json
@@ -37,6 +43,10 @@ EP_RECEIPT_VERSION = "EP-RECEIPT-v1"
 MERKLE_V2 = "EP-MERKLE-v2"
 CONTEXT_TYPE = "ep.signoff.v1"
 NONCE_PREFIX = "gargoyle-emilia-nonce/1\n"
+EMILIA_MEMBER = "emilia"                      # the optional grant member: {"context": {...}, "signature": <hex>}
+REF_EMILIA_SIGNOFF_MALFORMED = "REF_EMILIA_SIGNOFF_MALFORMED"
+REF_EMILIA_CONTEXT_MISMATCH = "REF_EMILIA_CONTEXT_MISMATCH"
+REF_EMILIA_SIGNATURE_INVALID = "REF_EMILIA_SIGNATURE_INVALID"
 _SAFE_INT = 2 ** 53 - 1
 
 
@@ -191,10 +201,11 @@ def authorization_instance(receipt: Dict[str, Any]) -> str:
     return b64u(uuid.UUID(receipt["decision_id"]).bytes)
 
 
-def context_nonce(receipt: Dict[str, Any], index: int) -> str:
+def context_nonce(receipt: Dict[str, Any], approver_id: str) -> str:
     """Per-context nonce: 128 bits derived from the random approval_request_id
-    and the approver index, distinct per context, stable per export."""
-    digest = hashlib.sha256((NONCE_PREFIX + receipt["approval_request_id"] + "\n" + str(index)).encode("utf-8")).digest()
+    and the approver's id, so two approvers of one hold never share a nonce
+    whatever order they sign in, and console and issuer compute the same."""
+    digest = hashlib.sha256((NONCE_PREFIX + receipt["approval_request_id"] + "\n" + approver_id).encode("utf-8")).digest()
     return b64u(digest[:16])
 
 
@@ -216,7 +227,7 @@ def authorization_context(receipt: Dict[str, Any], approver_id: str, index: int,
         "approver": approver_id,
         "approver_index": index,
         "required_approvals": int(terms.get("required", 1)),
-        "nonce": context_nonce(receipt, index),
+        "nonce": context_nonce(receipt, approver_id),
         "issued_at": receipt["timestamp_utc"],
         "expires_at": expires_at or receipt["not_after"],
     }
@@ -260,3 +271,168 @@ def approver_key_entry(approver_id: str, public_key: Any, *, valid_from: str, va
     """The pinned directory entry EMILIA's verifier takes for one approver."""
     return {"approver_id": approver_id, "public_key": spki_b64u(public_key), "key_class": key_class,
             "valid_from": valid_from, "valid_to": valid_to}
+
+
+# --- the grant's embedded signoff -------------------------------------------
+
+def _parse_instant(text: Any) -> Optional[datetime]:
+    if not isinstance(text, str):
+        return None
+    try:
+        value = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return value if value.tzinfo is not None else None
+
+
+def verify_embedded_signoff(grant: Dict[str, Any], receipt: Dict[str, Any], public_keys: Any) -> Dict[str, Any]:
+    """Check the grant's `emilia` member against the hold it releases: the
+    context must be exactly the one this module derives from the receipt
+    for the grant's approver (only approver_index and expires_at are the
+    console's to choose, and expires_at may not outlive the receipt or the
+    grant), and the signature must verify over the context hash under one
+    of the approver's keys. Returns {"accepted", "reason"}."""
+    from cryptography.exceptions import InvalidSignature
+    member = grant.get(EMILIA_MEMBER)
+    if not isinstance(member, dict) or not isinstance(member.get("context"), dict) or not isinstance(member.get("signature"), str):
+        return {"accepted": False, "reason": REF_EMILIA_SIGNOFF_MALFORMED}
+    ctx = member["context"]
+    index, expires_at = ctx.get("approver_index"), ctx.get("expires_at")
+    if isinstance(index, bool) or not isinstance(index, int) or index < 1:
+        return {"accepted": False, "reason": REF_EMILIA_SIGNOFF_MALFORMED}
+    exp = _parse_instant(expires_at)
+    if exp is None:
+        return {"accepted": False, "reason": REF_EMILIA_SIGNOFF_MALFORMED}
+    for bound in (receipt.get("not_after"), grant.get("not_after")):
+        limit = _parse_instant(bound)
+        if limit is None or exp > limit:
+            return {"accepted": False, "reason": REF_EMILIA_CONTEXT_MISMATCH}
+    try:
+        expected = authorization_context(receipt, grant["approver_key_id"], index, expires_at=expires_at)
+    except (KeyError, TypeError, ValueError):
+        return {"accepted": False, "reason": REF_EMILIA_CONTEXT_MISMATCH}
+    if ctx != expected:
+        return {"accepted": False, "reason": REF_EMILIA_CONTEXT_MISMATCH}
+    try:
+        signature = bytes.fromhex(member["signature"])
+    except ValueError:
+        return {"accepted": False, "reason": REF_EMILIA_SIGNATURE_INVALID}
+    digest = context_hash_for(ctx)
+    keys = list(public_keys) if isinstance(public_keys, (list, tuple)) else [public_keys]
+    for key in keys:
+        if key is None:
+            continue
+        try:
+            key.verify(signature, digest)
+            return {"accepted": True, "reason": None}
+        except InvalidSignature:
+            continue
+        except Exception:
+            continue
+    return {"accepted": False, "reason": REF_EMILIA_SIGNATURE_INVALID}
+
+
+def signoff_from_grant(grant: Dict[str, Any], signed_at: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """The EMILIA signoff a grant carries, or None when the approver's
+    console did not sign one (an approver CLI, or a console older than
+    this member). signed_at is not in the grant; the caller passes the
+    evidence entry's time, which lies inside the context window."""
+    member = grant.get(EMILIA_MEMBER) if isinstance(grant, dict) else None
+    if not isinstance(member, dict) or not isinstance(member.get("context"), dict):
+        return None
+    return signoff(member["context"], bytes.fromhex(member["signature"]), grant["approver_key_id"], signed_at or member["context"]["issued_at"])
+
+
+# --- Merkle tree over exported receipts (EP-MERKLE-v2) ------------------------
+
+def merkle_tree(leaves: List[str]) -> "tuple[str, List[List[Dict[str, str]]]]":
+    """Root and one inclusion path per leaf (hex leaf hashes in), with
+    EMILIA's positional pair rule: an odd node is promoted unchanged, so
+    every path folds back to the root under their verify_merkle_anchor."""
+    if not leaves:
+        raise ValueError("no leaves")
+    paths: List[List[Dict[str, str]]] = [[] for _ in leaves]
+    level = [(h, [i]) for i, h in enumerate(leaves)]       # (hash, leaf indexes under it)
+    while len(level) > 1:
+        nxt = []
+        for i in range(0, len(level), 2):
+            if i + 1 == len(level):
+                nxt.append(level[i])
+                continue
+            (lh, li), (rh, ri) = level[i], level[i + 1]
+            for leaf in li:
+                paths[leaf].append({"hash": rh, "position": "right"})
+            for leaf in ri:
+                paths[leaf].append({"hash": lh, "position": "left"})
+            nxt.append((_pair_v2(lh, rh), li + ri))
+        level = nxt
+    return level[0][0], paths
+
+
+def trust_receipts_from_entries(entries: List[Any], *, log_signing_key: Any, log_key_id: str) -> Dict[str, Any]:
+    """Every honored, flagged evidence entry whose grants all carry an EMILIA
+    signoff becomes a Trust Receipt; the receipts form one Merkle tree whose
+    checkpoint `log_signing_key` signs. Returns {"receipts": [...],
+    "checkpoint": {...}, "skipped": n} where skipped counts honored flagged
+    entries without a signoff on every grant."""
+    from gargoyle.approval import as_grant_list
+    bodies: List[Dict[str, Any]] = []
+    skipped = 0
+    for entry in entries:
+        if not isinstance(entry, dict) or entry.get("kind") != "honored":
+            continue
+        receipt, execution = entry.get("receipt"), entry.get("execution")
+        if not isinstance(receipt, dict) or not receipt.get("requires_approval") or not isinstance(execution, dict):
+            continue
+        grants = [g for g in as_grant_list(entry.get("grant")) if isinstance(g, dict)]
+        signoffs = [signoff_from_grant(g, entry.get("at")) for g in grants]
+        if not grants or any(s is None for s in signoffs):
+            skipped += 1
+            continue
+        contexts = [g[EMILIA_MEMBER]["context"] for g in grants]
+        action = action_object(receipt)
+        bodies.append({
+            "receipt_id": "ep:receipt:gargoyle:" + receipt["decision_id"],
+            "action": action,
+            "action_hash": action_hash(action),
+            "contexts": contexts,
+            "signoffs": signoffs,
+            "consumption": {"nonce": authorization_instance(receipt), "state": "COMMITTED", "committed_at": execution["executed_at"]},
+        })
+    if not bodies:
+        return {"receipts": [], "checkpoint": None, "skipped": skipped}
+    leaves = [_leaf_v2(canonical_json(b)) for b in bodies]
+    root, paths = merkle_tree(leaves)
+    checkpoint = {"tree_size": len(leaves), "root_hash": "sha256:" + root, "log_key_id": log_key_id, "merkle_alg": MERKLE_V2}
+    checkpoint["log_signature"] = b64u(log_signing_key.sign(hashlib.sha256(canonical_json(checkpoint).encode("utf-8")).digest()))
+    receipts = []
+    for i, body in enumerate(bodies):
+        out = dict(body)
+        out["log_proof"] = {"alg": MERKLE_V2, "leaf_hash": "sha256:" + leaves[i], "leaf_index": i, "inclusion_path": paths[i], "checkpoint": checkpoint}
+        out["approver_key_proofs"] = []
+        receipts.append(out)
+    return {"receipts": receipts, "checkpoint": checkpoint, "skipped": skipped}
+
+
+def verification_for(trust_receipt: Dict[str, Any], approver_keys_hex: Dict[str, Any], log_public_key: Any) -> Dict[str, Any]:
+    """EMILIA's pinned trust inputs for one exported receipt: for each
+    signoff, the approver key (among the id's current and past keys) that
+    verifies it, and the log key."""
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+    entries: Dict[str, Any] = {}
+    for so in trust_receipt["signoffs"]:
+        kid = so["approver_key_id"]
+        candidates = approver_keys_hex.get(kid)
+        candidates = list(candidates) if isinstance(candidates, (list, tuple)) else [candidates]
+        digest = bytes.fromhex(so["context_hash"][7:])
+        for hexkey in candidates:
+            if not isinstance(hexkey, str):
+                continue
+            pub = Ed25519PublicKey.from_public_bytes(bytes.fromhex(hexkey))
+            try:
+                pub.verify(b64u_decode(so["signature"]), digest)
+            except Exception:
+                continue
+            entries[kid] = {"approver_id": kid, "public_key": spki_b64u(pub), "key_class": "B"}
+            break
+    return {"approver_keys": entries, "log_public_key": spki_b64u(log_public_key)}

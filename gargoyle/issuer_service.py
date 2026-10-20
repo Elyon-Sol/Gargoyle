@@ -53,6 +53,7 @@ STATIC = Path(__file__).resolve().parent / "static"
 from gargoyle.approval import (REF_APPROVAL_APPROVER_NOT_ELIGIBLE, REF_APPROVAL_DUPLICATE_APPROVER,
                                verify_grant)
 from gargoyle.envelope import approval_terms
+from gargoyle.emilia import EMILIA_MEMBER, verify_embedded_signoff
 from gargoyle.state import state_sha256, text_consistent, valid_description
 from gargoyle.holdstore import ENV_HOLDS_PATH, HoldStore
 from gargoyle.witness import WitnessLog
@@ -535,6 +536,13 @@ def build_issuer_app(
             return refused(REF_APPROVAL_DUPLICATE_APPROVER)
         if terms["approvers"] is not None and grant["approver_key_id"] not in terms["approvers"]:
             return refused(REF_APPROVAL_APPROVER_NOT_ELIGIBLE)
+        if env is not None and EMILIA_MEMBER in grant:
+            # The console's second signature, over the EMILIA Authorization
+            # Context for this hold: checked against the hold now so that an
+            # export later carries only signoffs the approver actually made.
+            s = verify_embedded_signoff(grant, env, trusted.get(grant["approver_key_id"]))
+            if not s["accepted"]:
+                return refused(s["reason"])
         have.append(grant)
         app.state.grants[arid] = have                      # written back: the store persists on assignment
         event("granted", approval_request_id=arid, approver=grant["approver_key_id"], collected=len(have), required=terms["required"],

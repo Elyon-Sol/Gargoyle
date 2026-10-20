@@ -45,27 +45,41 @@ the expected verdict on all seven exported vectors. The Go lane was not run
 - Log proof: a single-leaf EP-MERKLE-v2 tree whose checkpoint the issuer key
   signs is accepted by EMILIA's degenerate empty-path rule.
 
-## The one gap
+## The gap, and how it was closed the same day
 
 An EMILIA approver signs the 32-byte SHA-256 of the canonical Authorization
-Context. A Gargoyle approver signs the canonical grant (decision hash,
-approval request id, grant id, expiry, key id). The bytes differ, so a stored
-Gargoyle grant signature cannot be presented as an EMILIA signoff; EMILIA's
-verifier refuses it, correctly. The Trust Receipt export therefore verifies
-only when the approver has signed the context hash, which no Gargoyle console
-does today.
+Context. A Gargoyle approver signs the canonical grant. The bytes differ, so a
+stored Gargoyle grant signature cannot be presented as an EMILIA signoff;
+EMILIA's verifier refuses it, correctly (the test
+`gargoyle_grant_signature_reused_as_signoff` keeps that on record).
 
-Closing it is small and costs Gargoyle nothing it has: when the console shows
-a hold, it also computes the EMILIA context for that hold
-(gargoyle.emilia.authorization_context) and signs its hash with the same
-browser key, returning both signatures with the grant. The issuer stores the
-second signature beside the grant. Exports then carry a signoff the approver
-actually made, and `gargoyle audit` can emit EMILIA Trust Receipts for every
-honored flagged call that any of EMILIA's verifiers will accept. Gargoyle's
-own verification is unchanged; the second signature is export material. The
-reverse (treating an EMILIA signoff as a Gargoyle grant) would need Gargoyle's
-grant to sign the context digest instead, which is a wire-format change and
-is not proposed.
+Closed by a second signature from the same browser key. When the console
+approves a receipt hold it also builds the EMILIA Authorization Context for
+that hold (approve.js `emiliaContext`, byte-identical to
+`gargoyle.emilia.authorization_context`; tests/test_console_js.py proves it
+under Node) and signs the context hash. The pair travels inside the grant as
+its optional `emilia` member (SPEC 8.4), covered by the grant signature, so it
+reaches the issuer's hold store, the witness and the gate's evidence log with
+no new plumbing. The issuer checks the member against the hold before storing
+the grant: the context must be exactly the derived one (only `approver_index`
+and `expires_at` are the console's, and `expires_at` may not outlive the
+receipt or the grant) and the signature must verify under the approver's
+enrolled key. A grant without the member, from the CLI approver or an older
+console, is accepted as before.
+
+`gargoyle emilia --log audit.jsonl --out DIR` then exports every honored,
+approved call whose grants all carry a signoff as EMILIA Trust Receipts, in
+the file format EMILIA's conformance runners read, with the signoffs the
+approvers actually made, under one Merkle tree (EP-MERKLE-v2, positional
+inclusion paths) whose checkpoint this gate's executor key signs. The approver
+key pinned for each receipt is chosen from the id's current and past keys
+(public-keys.json and approvers.json), as `gargoyle audit` does. EMILIA's
+JavaScript and Python runners accept a three-receipt export with multi-leaf
+paths (tests/test_emilia_interop.py, with GARGOYLE_EMILIA_REPO set).
+
+The reverse (treating an EMILIA signoff as a Gargoyle grant) would need
+Gargoyle's grant to sign the context digest instead, which is a wire-format
+change and is not proposed.
 
 ## What EMILIA has that Gargoyle does not carry across
 
@@ -81,7 +95,11 @@ counterpart and travel only in the `gargoyle` member of the Action Object.
 
 - gargoyle/emilia.py: verify_ep_receipt, ep_receipt, action_object,
   authorization_context, context_hash_for, signoff, trust_receipt,
-  approver_key_entry.
+  verify_embedded_signoff, trust_receipts_from_entries (Merkle tree),
+  verification_for.
+- gargoyle/static/approve.js: emiliaAction, emiliaContext, emiliaSignoff;
+  approve.html signs the member on every receipt approval.
+- gargoyle/cli.py: `gargoyle emilia`.
 - tests/fixtures/emilia/: EMILIA's receipts.v1.json and canonicalization.v1.json
   (Apache-2.0, attributed), run on every test run.
 - tests/test_emilia_interop.py: the vectors against Gargoyle; the exports'

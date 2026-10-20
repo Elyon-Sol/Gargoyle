@@ -137,3 +137,49 @@ export function lineDiff(before, after) {
   while (j < m) out.push({ op: "+", text: b[j++] });
   return out;
 }
+
+
+// EMILIA Protocol signoff (gargoyle/emilia.py mirrors this byte for byte).
+// The console signs two things for one hold: the Gargoyle grant, and the
+// SHA-256 of the JCS Authorization Context EMILIA's verifiers expect. The
+// second travels inside the grant as its `emilia` member, so the grant
+// signature covers it and the issuer can check it against the hold.
+const b64u = (bytes) => btoa(String.fromCharCode(...new Uint8Array(bytes))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+const hexToBytes = (h) => Uint8Array.from(h.match(/../g), (b) => parseInt(b, 16));
+const uuidBytes = (u) => hexToBytes(u.replace(/-/g, ""));
+
+export function emiliaAction(env) {
+  const rc = env.request_context;
+  const parameters = { args_sha256: rc.args_sha256 };
+  if (rc.state_sha256) parameters.state_sha256 = rc.state_sha256;
+  const action = {
+    ep_version: "1.0", action_type: "mcp.tools/call",
+    target: { system: env.target_url, resource: rc.tool },
+    parameters, initiator: rc.principal, policy_id: env.policy.policy_id, requested_at: env.timestamp_utc,
+    gargoyle: { envelope_version: env.envelope_version, decision_sha256: env.decision_sha256, decision_id: env.decision_id },
+  };
+  if (rc.on_behalf_of) action.on_behalf_of = rc.on_behalf_of;
+  return action;
+}
+
+export async function emiliaContext(env, approverId, index, expiresAt) {
+  const nonceDigest = await subtle().digest("SHA-256", new TextEncoder().encode("gargoyle-emilia-nonce/1\n" + env.approval_request_id + "\n" + approverId));
+  return {
+    ep_version: "1.0", context_type: "ep.signoff.v1",
+    action_hash: "sha256:" + (await sha256Hex(canonicalJson(emiliaAction(env)))),
+    policy_id: env.policy.policy_id, policy_hash: "sha256:" + env.policy.policy_sha256,
+    initiator: env.request_context.principal,
+    authorization_instance: b64u(uuidBytes(env.decision_id)), audience: env.target_url,
+    approver: approverId, approver_index: index, required_approvals: env.approval?.required ?? 1,
+    nonce: b64u(nonceDigest.slice(0, 16)), issued_at: env.timestamp_utc, expires_at: expiresAt,
+  };
+}
+
+/** {context, signature}: the approver's Ed25519 signature over the 32-byte context hash (EMILIA Class B). */
+export async function emiliaSignoff(context, key) {
+  const digest = await subtle().digest("SHA-256", new TextEncoder().encode(canonicalJson(context)));
+  return { context, signature: hex(await subtle().sign({ name: "Ed25519" }, key, digest)) };
+}
+
+/** The earlier of two instants, returned as the exact string that names it. */
+export function earlier(a, b) { return new Date(a) <= new Date(b) ? a : b; }

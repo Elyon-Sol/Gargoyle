@@ -490,22 +490,58 @@ def _audit_summary(report, raw) -> None:
     print("  clients: " + ", ".join("%s %d" % (w, n) for w, n in clients.most_common()))
 
 
+def _trust_hex(out: Path) -> "tuple[Dict[str, Any], Dict[str, Any]]":
+    """public-keys.json plus, when present, every key each enrolled approver
+    ever held (approvers.json, current first): grants signed under a key
+    since replaced in the browser or revoked still have to verify. Only the
+    live service and middleware are limited to the current key. Copy the
+    issuer's file beside the evidence first. Returns (keys, approvers_hex)."""
+    keys = json.loads((out / "public-keys.json").read_text())
+    approvers: Dict[str, Any] = dict(keys["approver"])
+    enrolled = out / "approvers.json"          # approvers who enrolled through Entra, by UPN
+    if enrolled.exists():
+        from gargoyle.approvers import ApproverRegistry
+        approvers.update(ApproverRegistry(str(enrolled)).audit_keys_hex())
+    return keys, approvers
+
+
+def cmd_emilia(args) -> int:
+    """Export an evidence log's honored, approved calls as EMILIA Trust
+    Receipts (docs/interop-emilia.md): one file in the format EMILIA's
+    conformance runners read, every receipt carrying the signoff the
+    approver's console made, the whole set under one Merkle checkpoint
+    signed by this gate's executor key."""
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    from gargoyle.emilia import trust_receipts_from_entries, verification_for
+    from gargoyle.evidence import read_log
+    out = Path(args.out).resolve()
+    keys, approvers = _trust_hex(out)
+    env = _read_env(Path(args.env or (out / "middleware.env")))
+    if "GARGOYLE_MCP_EXECUTOR_KEY_HEX" not in env:
+        print("%s has no GARGOYLE_MCP_EXECUTOR_KEY_HEX; point --env at this gate's middleware.env" % (args.env or out / "middleware.env"), file=sys.stderr)
+        return 2
+    executor = Ed25519PrivateKey.from_private_bytes(bytes.fromhex(env["GARGOYLE_MCP_EXECUTOR_KEY_HEX"]))
+    log_key_id = env.get("GARGOYLE_MCP_EXECUTOR_KEY_ID", "executor-1")
+    result = trust_receipts_from_entries(read_log(args.log), log_signing_key=executor, log_key_id=log_key_id)
+    vectors = [{"id": r["receipt_id"], "expect": {"valid": True}, "trust_receipt": r,
+                "verification": verification_for(r, approvers, executor.public_key())} for r in result["receipts"]]
+    missing = [v["id"] for v in vectors if len(v["verification"]["approver_keys"]) < len(v["trust_receipt"]["signoffs"])]
+    doc = {"suite": "GARGOYLE EP-TRUST-RECEIPT-v1 export", "source": "gargoyle-receipts", "log": str(Path(args.log).resolve()),
+           "exported_at": datetime.now(timezone.utc).isoformat(), "count": len(vectors), "vectors": vectors}
+    _write(Path(args.write), json.dumps(doc, indent=1) + "\n")
+    print("%d trust receipts under one checkpoint (tree size %d) -> %s; %d approved calls skipped (no console signoff on every grant)%s"
+          % (len(vectors), len(vectors), args.write, result["skipped"],
+             ("; %d receipts name an approver key not in %s/public-keys.json or approvers.json" % (len(missing), out)) if missing else ""))
+    return 0
+
+
 def cmd_audit(args) -> int:
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
     from gargoyle.execution import verify_chain
 
-    keys = json.loads((Path(args.out).resolve() / "public-keys.json").read_text())
+    keys, approvers = _trust_hex(Path(args.out).resolve())
     one = lambda h: Ed25519PublicKey.from_public_bytes(bytes.fromhex(h))
     load = lambda m: {k: ([one(x) for x in v] if isinstance(v, list) else one(v)) for k, v in m.items()}
-    approvers: Dict[str, Any] = dict(keys["approver"])
-    enrolled = Path(args.out).resolve() / "approvers.json"          # approvers who enrolled through Entra, by UPN
-    if enrolled.exists():
-        from gargoyle.approvers import ApproverRegistry
-        # Every key each approver ever held, current first: grants signed
-        # under a key since replaced in the browser or revoked still have to
-        # verify. Only the live service and middleware are limited to the
-        # current key. Copy the issuer's file beside the evidence first.
-        approvers.update(ApproverRegistry(str(enrolled)).audit_keys_hex())
     trust = dict(issuer_public_keys=load(keys["issuer"]), executor_public_keys=load(keys["executor"]),
                  approver_public_keys=load(approvers))
     if args.log:
@@ -655,6 +691,12 @@ def main(argv=None) -> int:
     p.add_argument("--summary", action="store_true", help="after the rows: calls by principal and tool with outcomes, releases, clients")
     p.add_argument("--out", default="gargoyle-deploy")
     p.set_defaults(fn=cmd_audit)
+    p = sub.add_parser("emilia", help="export an evidence log's approved calls as EMILIA Trust Receipts")
+    p.add_argument("--log", required=True, help="the middleware's audit.jsonl")
+    p.add_argument("--write", default="emilia-trust-receipts.json", help="output file, in the format EMILIA's conformance runners read")
+    p.add_argument("--env", help="this gate's middleware.env (executor key signs the checkpoint); default <out>/middleware.env")
+    p.add_argument("--out", default="gargoyle-deploy")
+    p.set_defaults(fn=cmd_emilia)
     args = parser.parse_args(argv)
     return args.fn(args)
 

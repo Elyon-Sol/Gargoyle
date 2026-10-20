@@ -52,7 +52,7 @@
   <div class="log" id="log"></div>
 </main>
 <script type="module">
-import { argsSha256, sha256Hex, canonicalJson, authorizeUrl, buildGrant, exchangeCode, generateApproverKey, importApproverKey, isoUtc, lineDiff, loadStoredKey,
+import { argsSha256, sha256Hex, canonicalJson, authorizeUrl, buildGrant, earlier, emiliaContext, emiliaSignoff, exchangeCode, generateApproverKey, importApproverKey, isoUtc, lineDiff, loadStoredKey,
          newGrantId, pkceChallenge, publicKeyHex, randomVerifier, signGrant, storeKey } from "./approve.js";
 
 const state = { token: null, key: null, keyId: null, ttl: 300, timer: null, seen: new Map() };
@@ -158,11 +158,12 @@ async function refresh() {
     const progress = required > 1 ? `${collected} of ${required} approvals` + (signers.length ? ` (${signers.map(esc).join(", ")})` : "") : "";
     if (state.seen.has(id)) {
       const card = state.seen.get(id);
+      card.dataset.collected = collected;
       const p = card.querySelector(".progress"); if (p) p.textContent = progress;
       if (mine) { card.querySelector(".approve").disabled = true; card.querySelector(".result").innerHTML = '<span class="ok">you signed; waiting for the others</span>'; }
       continue;
     }
-    const card = document.createElement("article"); card.className = "hold"; card.dataset.id = id;
+    const card = document.createElement("article"); card.className = "hold"; card.dataset.id = id; card.dataset.collected = collected;
     const rc = env.request_context;
     const bound = item.args !== null && item.args !== undefined ? (await argsSha256(item.args)) === rc.args_sha256 : false;
     const st = await verifyState(item.state, rc);
@@ -229,11 +230,16 @@ function renderPlan(item, ids) {
 async function approve(card, env) {
   const buttons = card.querySelectorAll("button"); buttons.forEach((b) => b.disabled = true);
   try {
-    const grant = await signGrant(buildGrant({
-      decisionSha256: env.decision_sha256, approvalRequestId: env.approval_request_id,
-      grantId: newGrantId(), notAfter: isoUtc(new Date(Date.now() + state.ttl * 1000)),
-    }), state.key, state.keyId);
-    const res = await api("grants", { method: "POST", body: JSON.stringify(grant) });
+    const notAfter = isoUtc(new Date(Date.now() + state.ttl * 1000));
+    const grant = buildGrant({ decisionSha256: env.decision_sha256, approvalRequestId: env.approval_request_id, grantId: newGrantId(), notAfter });
+    if (env.envelope_version) {
+      // A receipt hold (not a plan): also sign the EMILIA Authorization Context
+      // for it, so an export of this approval verifies under EMILIA's verifiers.
+      const index = 1 + (parseInt(card.dataset.collected || "0", 10) || 0);
+      grant.emilia = await emiliaSignoff(await emiliaContext(env, state.keyId, index, earlier(env.not_after, notAfter)), state.key);
+    }
+    const signed = await signGrant(grant, state.key, state.keyId);
+    const res = await api("grants", { method: "POST", body: JSON.stringify(signed) });
     if (res.accepted && res.complete === false) {
       // A threshold hold: this signature is in, the call waits for the others.
       card.querySelector(".result").innerHTML = `<span class="ok">you signed; ${res.required - res.collected} more needed</span>`;
