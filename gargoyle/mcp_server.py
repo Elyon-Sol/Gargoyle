@@ -51,6 +51,7 @@ from gargoyle.consumer import REF_TARGET_NOT_CONFIGURED, Consumer
 from gargoyle.evidence import HONORED, REFUSED, EvidenceLog, TOOL_ERROR, UPSTREAM_ERROR, UPSTREAM_UNAVAILABLE
 from gargoyle.envelope import valid_principal
 from gargoyle.policy import valid_pin
+from gargoyle.verifier import REF_VERIFY_REASSERT_RE_EVALUATE_REQUIRED
 from gargoyle.replay_cache import InMemoryReplayCache, ReplayCache, SqliteReplayCache
 
 # MCP protocol version this server speaks (a real MCP revision string).
@@ -88,6 +89,7 @@ ENV_GATE_KEY_ID = "GARGOYLE_MCP_GATE_KEY_ID"
 ENV_GATE_PUBLIC_KEY_HEX = "GARGOYLE_MCP_GATE_PUBLIC_KEY_HEX"
 ENV_TARGET_ID = "GARGOYLE_MCP_TARGET_ID"
 ENV_RECORD_PATH = "GARGOYLE_MCP_RECORD_PATH"
+ENV_RECORD_URL = "GARGOYLE_MCP_RECORD_URL"     # follow the issuer's signed record instead of a file (SPEC 9)
 ENV_PRINCIPAL = "GARGOYLE_MCP_PRINCIPAL"
 ENV_APPROVER_KEY_ID = "GARGOYLE_MCP_APPROVER_KEY_ID"
 ENV_APPROVER_PUBLIC_KEY_HEX = "GARGOYLE_MCP_APPROVER_PUBLIC_KEY_HEX"
@@ -326,6 +328,50 @@ def call_for(tool: str, args: Any, principal: str, state_sha256: Optional[str] =
     return call
 
 
+class RecordFollower:
+    """The live policy pin, fetched as the issuer's signed record (GET
+    /record) and verified against the pinned issuer key, cached for a
+    minute. A rule change on the issuer then reaches every gate within
+    that minute, or at once when a receipt arrives under a pin the cache
+    does not know (the gate forgets the cache and asks again before
+    refusing). No file copy, no restart. The trust is the same as for
+    receipts: the issuer's key, pinned out of band. A deployment that wants
+    an independent copy of the pin keeps GARGOYLE_MCP_RECORD_PATH instead."""
+
+    def __init__(self, url: str, pinned_keys: Dict[str, Any], *, http: Any = None, ttl_seconds: float = 60.0,
+                 request_timeout: float = 10.0) -> None:
+        import requests
+        self.url = url
+        self.pinned_keys = pinned_keys
+        self._http = http if http is not None else requests.Session()
+        self.ttl_seconds = ttl_seconds
+        self.request_timeout = request_timeout
+        self._cache: Optional[tuple] = None
+        self.fetches = 0
+
+    def forget(self) -> None:
+        self._cache = None
+
+    def __call__(self, last_seen_serial: Optional[int]) -> Dict[str, Any]:
+        from gargoyle.published_record_source import load_signed_record_from_bytes
+        from gargoyle.verifier import REF_VERIFY_PUBLISHED_RECORD_INVALID
+        cached = self._cache
+        if cached is not None and time.monotonic() - cached[0] < self.ttl_seconds:
+            return cached[1]
+        self.fetches += 1
+        try:
+            r = self._http.get(self.url, timeout=self.request_timeout)
+            if r.status_code != 200:
+                res = {"record": None, "reason": REF_VERIFY_PUBLISHED_RECORD_INVALID}
+            else:
+                res = load_signed_record_from_bytes(r.content, self.pinned_keys, last_seen_serial=last_seen_serial)
+        except Exception:
+            res = {"record": None, "reason": REF_VERIFY_PUBLISHED_RECORD_INVALID}
+        if res.get("record") is not None:
+            self._cache = (time.monotonic(), res)      # a failure is not cached: the next check asks again
+        return res
+
+
 class ServerState:
     """The executor's out-of-band trust material (issuer keys, the policy record,
     target id, the principal it serves) as a Consumer, and the list of tool
@@ -364,11 +410,16 @@ class ServerState:
             # receipt that was already honored (second review, finding 4).
             replay_cache = SqliteReplayCache(str(Path(audit_log).with_name(Path(audit_log).stem + ".replay.sqlite")))
         self.consumer: Optional[Consumer] = None
+        self.record_follower: Optional[RecordFollower] = None
         if config is not None and valid_principal(config.get("principal")):
+            if config.get("record_url"):
+                self.record_follower = RecordFollower(config["record_url"], config["pinned_public_keys"],
+                                                      http=getattr(issuer_client, "_http", None))
             self.consumer = Consumer(
                 target_id=config["target_id"],
                 pinned_public_keys=config["pinned_public_keys"],
-                record=config["record"],
+                record=None if self.record_follower is not None else config["record"],
+                record_source=self.record_follower,
                 replay_cache=replay_cache,
                 approver_public_keys=config.get("approver_public_keys"),
                 approver_key_source=(issuer_client.approver_keys if issuer_client is not None else None),
@@ -454,6 +505,14 @@ def _gate(state: ServerState, params: Dict[str, Any]) -> Dict[str, Any]:
     else:
         verdict = state.consumer.check(envelope, call_for(name, args, state.config["principal"], live_state),
                                        grant=grant)
+    if (not verdict.honored and verdict.reason == REF_VERIFY_REASSERT_RE_EVALUATE_REQUIRED
+            and state.record_follower is not None):
+        # The receipt names a pin the cached record does not: the rules may
+        # have just changed on the issuer. Ask once more before refusing.
+        state.record_follower.forget()
+        call = call_for(name, args, state.config["principal"], live_state)
+        verdict = (state.consumer.check(envelope, call, plan_release=grant) if is_plan_release(grant)
+                   else state.consumer.check(envelope, call, grant=grant))
     if not verdict.honored:
         return refused(verdict.reason, envelope)
     if is_plan_release(grant):
@@ -745,8 +804,10 @@ def config_from_env() -> Optional[Dict[str, Any]]:
     GARGOYLE_MCP_TARGET_ID is the identity receipts bind to;
     GARGOYLE_MCP_PRINCIPAL is the client this server serves (see the module
     docstring); the published record (the live policy pin, {policy_id,
-    policy_sha256}) is read from GARGOYLE_MCP_RECORD_PATH. All five are
-    required; there is no default record. GARGOYLE_MCP_APPROVER_KEY_ID and
+    policy_sha256}) is read from GARGOYLE_MCP_RECORD_PATH, or followed live
+    from GARGOYLE_MCP_RECORD_URL (the issuer's signed record; a rule change
+    then needs no file copy). One of the two is required with the other
+    four settings; there is no default record. GARGOYLE_MCP_APPROVER_KEY_ID and
     GARGOYLE_MCP_APPROVER_PUBLIC_KEY_HEX, both or neither, pin the approver
     keys whose grants release flagged receipts (comma-separated lists for
     several)."""
@@ -757,7 +818,8 @@ def config_from_env() -> Optional[Dict[str, Any]]:
     target_id = os.environ.get(ENV_TARGET_ID)
     principal = os.environ.get(ENV_PRINCIPAL)
     record_path = os.environ.get(ENV_RECORD_PATH)
-    if not (key_id and key_hex and target_id and principal and record_path):
+    record_url = os.environ.get(ENV_RECORD_URL)
+    if not (key_id and key_hex and target_id and principal and (record_path or record_url)):
         return None
     ap_key_id = os.environ.get(ENV_APPROVER_KEY_ID)
     ap_key_hex = os.environ.get(ENV_APPROVER_PUBLIC_KEY_HEX)
@@ -780,15 +842,18 @@ def config_from_env() -> Optional[Dict[str, Any]]:
             if len(ids) != len(hexes) or not all(ids):
                 return None
             approver_keys = {i: Ed25519PublicKey.from_public_bytes(bytes.fromhex(h)) for i, h in zip(ids, hexes)}
-        with open(record_path, "rb") as f:
-            record = json.loads(f.read().decode("utf-8"))
-        if not valid_pin(record):
-            return None
+        record = None
+        if not record_url:
+            with open(record_path, "rb") as f:
+                record = json.loads(f.read().decode("utf-8"))
+            if not valid_pin(record):
+                return None
     except Exception:
         return None
     return {
         "pinned_public_keys": {key_id: public_key},
         "record": record,
+        "record_url": record_url or None,
         "target_id": target_id,
         "principal": principal,
         "approver_public_keys": approver_keys,

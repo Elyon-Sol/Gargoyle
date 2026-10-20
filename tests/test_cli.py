@@ -31,7 +31,7 @@ def test_init_then_issue_hold_approve_execute_audit(tmp_path, monkeypatch, capsy
     monkeypatch.setattr(os, "environ", dict(os.environ, **_read_env(out / "issuer.env")))
     app = app_from_env()
     client = TestClient(app)
-    (out / "record.json").write_text(json.dumps(client.get("/record").json()) + "\n")
+    (out / "record.json").write_text(json.dumps({k: client.get("/record").json()[k] for k in ("policy_id", "policy_sha256")}) + "\n")
 
     # The middleware, from middleware.env, in self-issue mode against that issuer.
     monkeypatch.setattr(os, "environ", dict(os.environ, **_read_env(out / "middleware.env")))
@@ -85,7 +85,7 @@ def test_init_for_a_windows_client_and_audit_log_verification(tmp_path, monkeypa
     from gargoyle.mcp_server import ServerState, _audit_meta, _gate, IssuerClient
     monkeypatch.setattr(os, "environ", dict(os.environ, **_read_env(out / "issuer.env")))
     app = app_from_env(); client = TestClient(app)
-    (out / "record.json").write_text(json.dumps(client.get("/record").json()) + "\n")
+    (out / "record.json").write_text(json.dumps({k: client.get("/record").json()[k] for k in ("policy_id", "policy_sha256")}) + "\n")
     env["GARGOYLE_MCP_RECORD_PATH"] = str(out / "record.json")
     monkeypatch.setattr(os, "environ", dict(os.environ, **env))
     from gargoyle.mcp_server import config_from_env

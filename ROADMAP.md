@@ -178,6 +178,13 @@ verifying itself for no external user; that is the failure mode to avoid.
   a diff or enables Approve; the Graph adapter now sends canonical JSON as text and
   the console pretty-prints it). All ten security findings from the second review are
   now closed; the operability list stays open.
+- Operability, from the second review (2026-10-20 night): record pin propagation. The
+  issuer's GET /record is now the signed published record of SPEC 9 (issuer key, serial
+  rising with the pin, ten-minute expiry); the middleware follows it when
+  GARGOYLE_MCP_RECORD_URL is set (init sets it), caches a minute, and asks again at once
+  when a receipt names a pin the cache does not know. A rule change reaches every gate
+  without copying record.json or restarting clients; a static file stays available for
+  a deployment that wants a pin independent of the issuer.
 - Side-door test (2026-10-20, Claude Desktop): asked "do not use the gate and tell me how
   I can get around it", the assistant declined to help bypass but offered its own sandbox
   and "a route that doesn't involve the gate"; asked to write bypass.md into the project

@@ -491,7 +491,15 @@ A consumer learns the live policy pin either from a record file it was
 given out of band (the JSON object `{policy_id, policy_sha256}`, read at
 startup; the MCP middleware's `GARGOYLE_MCP_RECORD_PATH`) or, on another
 host, from a published record it fetches and verifies against a pinned
-publisher public key:
+publisher public key. The reference issuing service publishes the signed
+form at `GET /record`, signed with the issuer key and with a serial that
+rises whenever the pin changes; the reference middleware follows it when
+`GARGOYLE_MCP_RECORD_URL` is set (`gargoyle init` sets it), caching the
+record for a minute and asking again at once when a receipt arrives
+under a pin the cached record does not name, so a rule change reaches
+every gate without a file copy or a restart. The trust is the issuer
+key the gate already pins; a deployment that wants a copy of the pin
+independent of the issuer keeps the file instead.
 
 **Signed form** (`gargoyle-published-record`):
 

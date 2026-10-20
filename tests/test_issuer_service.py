@@ -164,7 +164,8 @@ def test_the_approval_console_is_served(client):
 
 
 def test_record_and_keys_are_public(client):
-    assert client.get("/record").json() == PIN
+    rec = client.get("/record").json()
+    assert {k: rec[k] for k in PIN} == PIN and rec["format"] == "gargoyle-published-record"
     from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
     assert client.get("/keys").json() == {"issuer-1": issuer.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw).hex()}
 

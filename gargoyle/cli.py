@@ -55,8 +55,8 @@ OBSERVE_RULES = {
     # Observe mode: every call allowed (deletes too), every call recorded, none held. The
     # first week of a deployment, so the hold and deny rules are written
     # from the audit rather than guessed. The policy pin changes when the
-    # rules do, so switching modes means restarting the issuer and copying
-    # the new record.json to each client.
+    # rules do; the issuer applies the edit at once and clients that follow
+    # its signed record pick the new pin up within a minute.
     "version": "1",
     "default": "allow",
     "rules": [],
@@ -142,8 +142,9 @@ def cmd_init(args) -> int:
         elif current != OBSERVE_RULES:
             print("rules.json was edited by hand and is left as it is; --observe changed nothing", file=sys.stderr)
         print("observe mode: rules.json allows every call, destructive ones included; the gate records all of "
-              "them and holds none. Tighten rules.json from `gargoyle audit --summary`, then restart the issuer "
-              "and copy the new record.json to the clients.")
+              "them and holds none. Tighten rules.json from `gargoyle audit --summary`; the issuer applies the "
+              "change at once and clients that follow its record (GARGOYLE_MCP_RECORD_URL) pick the new pin up "
+              "within a minute. A client on a static record.json needs the new file.")
     elif not rules.exists():
         _write(rules, json.dumps(DEFAULT_RULES, indent=2) + "\n")
     _write(out / "issuer.env", _env_lines({
@@ -159,6 +160,7 @@ def cmd_init(args) -> int:
         "GARGOYLE_MCP_GATE_KEY_ID": "issuer-1", "GARGOYLE_MCP_GATE_PUBLIC_KEY_HEX": issuer_pub,
         "GARGOYLE_MCP_TARGET_ID": "mcp://filesystem/" + allowed, "GARGOYLE_MCP_PRINCIPAL": PRINCIPAL,
         "GARGOYLE_MCP_RECORD_PATH": client_dir + sep + "record.json",
+        "GARGOYLE_MCP_RECORD_URL": issuer_url + "/record",       # follow the issuer's signed pin; the file is the offline fallback
         "GARGOYLE_MCP_APPROVER_KEY_ID": approver_ids, "GARGOYLE_MCP_APPROVER_PUBLIC_KEY_HEX": approver_pubs,
         "GARGOYLE_MCP_EXECUTOR_KEY_ID": "executor-1", "GARGOYLE_MCP_EXECUTOR_KEY_HEX": executor_hex,
         "GARGOYLE_MCP_ISSUER_URL": issuer_url, "GARGOYLE_MCP_CLIENT_TOKEN": client_token,

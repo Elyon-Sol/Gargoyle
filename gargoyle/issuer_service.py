@@ -63,6 +63,7 @@ from gargoyle.approvers import (DEFAULT_APPROVER_ROLE, ENV_APPROVER_GROUPS, ENV_
                                 ApproverRegistry, RevokedKeyError, may_enroll, valid_public_key_hex)
 from gargoyle.identity import entra_keys, entra_tenant_id, principal_from_token
 from gargoyle.jws import REF_JWS_KEY_UNKNOWN
+from gargoyle.published_record_source import sign_published_record
 from gargoyle.issuer import DEFAULT_TTL_SECONDS, issue
 from gargoyle.policy import Policy
 
@@ -683,9 +684,21 @@ def build_issuer_app(
     async def approve_script():
         return Response((STATIC / "approve.js").read_bytes(), media_type="text/javascript; charset=utf-8")
 
+    app.state.record_pin = None
+    app.state.record_serial = 0
+
     @app.get("/record")
     async def record():
-        return policy.pin()
+        """The live policy pin in the signed published-record form (SPEC 9),
+        so a middleware on another host can follow rule changes without a
+        file copy: it verifies the issuer's signature with the key it
+        already pins. The serial rises whenever the pin changes, so a
+        rolled-back record is refused as stale."""
+        pin = policy.pin()
+        if pin != app.state.record_pin:
+            app.state.record_pin = pin
+            app.state.record_serial = max(int(now().timestamp()), app.state.record_serial + 1)
+        return sign_published_record(pin, signing_key, key_id, serial=app.state.record_serial, now=now(), ttl_seconds=600)
 
     @app.get("/keys")
     async def keys():

@@ -109,7 +109,7 @@ def test_issuer_service_runs_on_a_rules_file(policy):
     held = c.post("/issue", json={"target_url": "t", "tool": "write_file", "args": {"path": "/srv/clients/x"}}, headers=h).json()
     assert held["envelope"]["requires_approval"] is True
     assert c.post("/issue", json={"target_url": "t", "tool": "delete_db", "args": {}}, headers=h).json() == {"issued": False, "reason": "DESTRUCTIVE_TOOL"}
-    assert c.get("/record").json() == pol.pin()
+    assert {k: c.get("/record").json()[k] for k in ("policy_id", "policy_sha256")} == pol.pin()
 
 
 def test_app_from_env_prefers_rules_over_opa(monkeypatch, policy):

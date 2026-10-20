@@ -108,7 +108,7 @@ It writes, under `/opt/gargoyle/deploy`:
 | `rules.json` | stays here | the policy; edit it any time |
 | `issuer.env` | stays here | issuer private key, trusted identity key, approver public key |
 | `middleware.env` | Windows, `C:\gargoyle\` | issuer public key, client token, executor key, paths |
-| `record.json` | Windows, `C:\gargoyle\` | the policy pin (written when the issuer starts) |
+| `record.json` | Windows, `C:\gargoyle\` | the policy pin as a file (written when the issuer starts); clients follow the issuer's signed record live and use the file only when told to |
 | `mcp-config.json` | Windows, into `.mcp.json` | the Claude Code server entry |
 | `approver-web.json` | wherever you approve from | your approver key and token, for the browser |
 | `approver.env` | optional, for the CLI approver | the same key and token |
@@ -132,8 +132,9 @@ First match wins. Rules may also carry `principals`, `on_behalf_of`,
 `groups`, `roles` and `args` globs. Path globs are matched on a normalized
 form: `C:\\proj\\*` also covers `c:/PROJ/x` and is not slipped by
 `C:\\proj\\..\\x`; `*` spans folders. Any edit changes the policy pin: the
-issuer picks it up at once, and `record.json` on the Windows side must be
-refreshed (Part 5).
+issuer picks it up at once, and every client follows the issuer's signed
+record (`GARGOYLE_MCP_RECORD_URL` in `middleware.env`), so the new pin
+reaches them within a minute, or on their next call. No copy, no restart.
 
 **2.3 Run the issuer as a service.**
 
@@ -337,10 +338,9 @@ do. Use it on a target you can restore from backup. Run a new client's first
 week this way, then read `gargoyle audit --log ... --summary`, which
 prints calls by principal and tool with their outcomes, and write the
 hold and deny rules from what the assistants actually did rather than
-from a guess. Switching rules changes the policy pin: edit `rules.json`,
-restart the issuer (it rewrites `record.json`), and copy the new
-`record.json` to each client's config folder; receipts under the old pin
-die at once, which is the intended effect. Observe mode records the hash
+from a guess. Switching rules changes the policy pin: edit `rules.json`;
+the issuer applies it at once and the clients follow its signed record,
+so receipts under the old pin die at once, which is the intended effect. Observe mode records the hash
 of each call's arguments, never the arguments themselves.
 
 **4.5 Claude Desktop instead of Claude Code.** The GUI app speaks MCP the
@@ -426,10 +426,11 @@ Ask it to delete the file: refused with `DESTRUCTIVE_TOOL`, no card, no
 wait.
 
 **Changing the policy.** Edit `/opt/gargoyle/deploy/rules.json` on the VM.
-The issuer applies it immediately and rewrites `record.json` on its next
-start; run `sudo systemctl restart gargoyle`, copy the new `record.json` to
-`C:\gargoyle\`, and restart Claude Code. Until the copy, the Windows side
-refuses every call with `REF_VERIFY_REASSERT_RE_EVALUATE_REQUIRED`, which
+The issuer applies it immediately; the Windows side follows the issuer's
+signed record and takes the new pin within a minute, or on its next call.
+A client still configured with only a static `record.json` (deployments
+before 0.18) refuses every call with `REF_VERIFY_REASSERT_RE_EVALUATE_REQUIRED`
+until the file is copied, which
 is the design working: a receipt under the old policy is not honored.
 
 **5.1 Two approvers.** For calls that should never rest on one person,
@@ -663,7 +664,7 @@ are persistent.
 | every call `REF_TARGET_NOT_CONFIGURED` | `record.json` missing or not a pin, or an env var missing in `.mcp.json` | check `C:\gargoyle\record.json` and the env block |
 | `REF_TARGET_ISSUER_UNAVAILABLE` | the client cannot reach or trust the issuer | `curl https://gargoyle.lan/record` from Windows; hosts entry; `REQUESTS_CA_BUNDLE` path; Apache `Require ip` |
 | `REF_VERIFY_PRINCIPAL_MISMATCH` | the token's subject is not `GARGOYLE_MCP_PRINCIPAL` | regenerate both with `init`; do not hand-edit one |
-| `REF_VERIFY_REASSERT_RE_EVALUATE_REQUIRED` | rules changed, `record.json` on Windows is stale | restart the issuer, copy `record.json`, restart Claude Code |
+| `REF_VERIFY_REASSERT_RE_EVALUATE_REQUIRED` | rules changed and the client holds a static `record.json` (no `GARGOYLE_MCP_RECORD_URL`) | add `GARGOYLE_MCP_RECORD_URL=<issuer>/record` to `middleware.env` and the MCP entry, or copy `record.json`; restart Claude Code |
 | `REF_TARGET_APPROVAL_TIMEOUT` | nobody approved within five minutes | open the console; raise `GARGOYLE_MCP_APPROVAL_TIMEOUT_SECONDS` if reviews take longer |
 | console: `issuer unreachable` | token expired or Apache refused the address | reload the page after a new `approver-web.json`; check `Require ip` |
 | console: red badge, Approve disabled | the arguments the issuer stored do not hash to the receipt | do not approve; restart the issuer and investigate |

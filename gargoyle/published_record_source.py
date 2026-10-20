@@ -53,6 +53,20 @@ _REQUIRED_PIN_KEYS = (
 )
 
 
+def sign_published_record(pin: Dict[str, Any], signing_key: Any, key_id: str, *, serial: int,
+                          now: Optional[datetime] = None, ttl_seconds: int = 600) -> Dict[str, Any]:
+    """The signed form of the live pin, as a publisher (the reference issuing
+    service at GET /record) hands it out: the pin, a serial that rises when
+    the pin changes, an issue time and a short expiry, signed by the
+    publisher's key. `load_signed_record_from_bytes` is its mirror."""
+    current = now if now is not None else datetime.now(timezone.utc)
+    record = {"format": PUBLISHED_RECORD_FORMAT, "version": "1", "publisher_key_id": key_id, "serial": int(serial),
+              "issued_at": current.isoformat(), "not_after": (current + timedelta(seconds=ttl_seconds)).isoformat(),
+              "policy_id": pin["policy_id"], "policy_sha256": pin["policy_sha256"]}
+    record[_SIGNATURE_FIELD] = signing_key.sign(canonical_json(record).encode("utf-8")).hex()
+    return record
+
+
 def _reject(reason: str) -> Dict[str, Any]:
     return {"record": None, "reason": reason}
 

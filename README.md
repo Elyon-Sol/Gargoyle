@@ -359,7 +359,7 @@ cannot attach receipts work unchanged. Configuration is by environment:
 | `GARGOYLE_MCP_GATE_KEY_ID`, `GARGOYLE_MCP_GATE_PUBLIC_KEY_HEX` | the pinned issuer key |
 | `GARGOYLE_MCP_TARGET_ID` | the target identity receipts bind to |
 | `GARGOYLE_MCP_PRINCIPAL` | the client this server serves |
-| `GARGOYLE_MCP_RECORD_PATH` | the published policy record |
+| `GARGOYLE_MCP_RECORD_PATH`, `GARGOYLE_MCP_RECORD_URL` | the live policy pin: a file copied out of band, or (what `init` sets) the issuer's signed record at `<issuer>/record`, followed live and cached a minute, so a rule change reaches every gate without a copy or a restart |
 | `GARGOYLE_MCP_APPROVER_KEY_ID`, `GARGOYLE_MCP_APPROVER_PUBLIC_KEY_HEX` | the approver keys whose grants release flagged calls (optional, both or neither; comma-separated lists for several) |
 | `GARGOYLE_MCP_EXECUTOR_KEY_ID`, `GARGOYLE_MCP_EXECUTOR_KEY_HEX` | this server's own signing key, so honored calls carry an execution receipt in `_meta["gargoyle/execution"]` (optional, both or neither) |
 | `GARGOYLE_MCP_ISSUER_URL`, `GARGOYLE_MCP_CLIENT_TOKEN` | self-issue mode: the issuing service and the identity token (whose subject is this server's principal) to obtain receipts with; `GARGOYLE_MCP_APPROVAL_TIMEOUT_SECONDS` and `GARGOYLE_MCP_POLL_SECONDS` tune the wait for a grant |
