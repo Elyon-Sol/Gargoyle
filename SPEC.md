@@ -401,7 +401,11 @@ removing an approver means removing the role in the directory as well.
 Every release the service refuses is a witness entry (`grant_refused`,
 with the key id offered and the reason), and so is every revocation: the
 service's own as it happens, an operator's when the service next reads
-the file (`revoked`, with who and when).
+the file (`revoked`, with who and when). A revoked public key is never
+enrolled again, by anyone: the enrollment is `REF_ISSUER_KEY_REVOKED`
+(and an `enroll_refused` witness entry), and the reference console then
+generates a new key. The revoked record stays when a fresh key enrolls,
+so grants signed under the old key still audit.
 
 What the service shows is scoped by the same notion of approver (the role
 or group in the token, a configured approver key id, or an enrolled UPN):
@@ -860,12 +864,13 @@ entry = {
   "witness_version": "gargoyle-witness/1",
   "seq": n, "prev_sha256": ..., "at": ...,
   "event": "started" | "issued" | "refused" | "granted" | "grant_refused" | "declined" | "plan"
-         | "plan_granted" | "enrolled" | "revoked",
+         | "plan_granted" | "enrolled" | "enroll_refused" | "revoked",
   ... (issued: principal, tool, decision_id, decision_sha256, approval_request_id,
        args_sha256, held, covered; granted: approval_request_id, approver,
        collected, required, hold_kind; grant_refused: approval_request_id, approver,
        reason; declined: approval_request_id, by; plan: principal, plan_id, steps,
-       held; enrolled: approver, oid, replaced; revoked: approver, by, revoked_at),
+       held; enrolled: approver, oid, replaced; enroll_refused: approver, reason;
+       revoked: approver, by, revoked_at),
   "entry_sha256":    sha256(canonical_json(entry minus entry_sha256, issuer_key_id, issuer_signature)),
   "issuer_key_id":   ..., "issuer_signature": ed25519 over canonical_json(entry minus issuer_signature)
 }

@@ -110,7 +110,12 @@ verifying itself for no external user; that is the failure mode to avoid.
   next read of the file); and the verbose access log kept the Entra sign-in code from
   the redirect (now redacted). One fact to state plainly, now in SPEC 8.3, README and
   both guides: revocation retires a key, not a person; while the Approver role stands
-  the person re-enrolls on the next sign-in, so the role must go too.
+  the person re-enrolls on the next sign-in, so the role must go too. The re-enrollment
+  itself showed a fourth gap: the browser had kept its key pair and the service accepted
+  the very key just revoked (same key id before and after). Now a revoked public key is
+  never enrolled again (REF_ISSUER_KEY_REVOKED, witnessed as enroll_refused), the console
+  generates a fresh key on that answer, and the revoked record stays on file when a new
+  key enrolls so earlier grants still audit.
 - 0.16 live (2026-10-20): the Windows client on 0.16.0.dev0 against the VM issuer on the
   same code. A free read, then a held write to notes.md; the approver's console, now an
   approvers-only queue, showed the card and the enrolled approver released it; the

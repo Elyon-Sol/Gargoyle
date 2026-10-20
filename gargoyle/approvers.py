@@ -35,6 +35,11 @@ ENV_APPROVER_GROUPS = "GARGOYLE_APPROVER_GROUPS"    # or: comma-separated group 
 DEFAULT_APPROVER_ROLE = "Approver"
 
 
+class RevokedKeyError(ValueError):
+    """The public key offered for enrollment was revoked before: a revoked
+    key stays revoked, the browser must generate a new one."""
+
+
 def valid_public_key_hex(value: Any) -> bool:
     return isinstance(value, str) and len(value) == 64 and all(c in "0123456789abcdef" for c in value)
 
@@ -97,7 +102,11 @@ class ApproverRegistry:
         UPN (one key per approver; a new browser re-enrolls). The directory's
         immutable object id and tenant id are kept beside the UPN when the
         token carried them: the UPN is the name people read, the oid is what
-        survives a rename."""
+        survives a rename. A key on the revoked list is never enrolled again,
+        for anyone (RevokedKeyError): the live exercise of 2026-10-20 showed a
+        browser re-enrolling the very key the operator had just revoked. The
+        revoked record stays when a fresh key enrolls, so grants signed under
+        the old key still audit."""
         if not isinstance(upn, str) or not upn:
             raise ValueError("upn must be a non-empty string")
         if not valid_public_key_hex(public_key_hex):
@@ -111,9 +120,10 @@ class ApproverRegistry:
             entry["tid"] = tid
         with self._lock:
             self._refresh()
+            if any(e.get("public_key_hex") == public_key_hex for e in self._revoked.values()):
+                raise RevokedKeyError("that key was revoked; enroll a new one")
             replaced = upn in self._approvers
             self._approvers[upn] = entry
-            self._revoked.pop(upn, None)            # enrolling again after a revocation is a fresh key
             self._save()
         return {"upn": upn, "replaced": replaced, **entry}
 

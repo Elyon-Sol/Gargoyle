@@ -259,7 +259,8 @@ the running service picks the change up without a restart. Revoked keys
 stay on file so earlier grants still audit; new ones are refused at the
 issuer and at every middleware on its next held call. Revocation retires
 a key, not a person: while the Approver role stands, the person can sign
-in and enroll a fresh key, so remove the role too. Approvers, and
+in and enroll a fresh key, so remove the role too; the revoked key itself
+is never accepted again. Approvers, and
 only approvers, see the whole queue and the witness; everyone else sees
 their own holds. Then paste the server entry from
 `gargoyle-deploy/mcp-config.json` into your MCP client.

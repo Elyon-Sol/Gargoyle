@@ -346,9 +346,10 @@ def cmd_approvers(args) -> int:
         for upn, e in sorted(entries.items()):
             print("%s  enrolled %s  key %s%s" % (upn, e.get("enrolled_at", "?"), e["public_key_hex"][:16],
                                                   ("  oid " + e["oid"]) if e.get("oid") else ""))
-        revoked = reg.revoked_hex()
+        revoked = reg.revoked_entries()
         if revoked:
-            print("revoked: " + ", ".join(sorted(revoked)))
+            print("revoked: " + ", ".join("%s (key %s, %s by %s)" % (u, e["public_key_hex"][:16], e.get("revoked_at", "?")[:19], e.get("revoked_by", "?"))
+                                          for u, e in sorted(revoked.items())))
         return 0
     import getpass
     if reg.revoke(args.upn, revoked_by="operator:" + getpass.getuser()):

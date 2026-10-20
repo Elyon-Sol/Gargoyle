@@ -94,8 +94,18 @@ async function entraReady() {
   const mine = await publicKeyHex(keyPair);
   if (me.enrolled_public_key_hex !== mine) {
     // First time in this browser (or a new browser): enroll this key under the UPN.
-    const res = await api("approvers/enroll", { method: "POST", body: JSON.stringify({ public_key_hex: mine }) });
-    log(res.replaced ? "this browser's key replaced your previous one" : "this browser's key enrolled");
+    let res;
+    try {
+      res = await api("approvers/enroll", { method: "POST", body: JSON.stringify({ public_key_hex: mine }) });
+    } catch (err) {
+      if (err.status !== 409) throw err;
+      // This browser's key was revoked. A revoked key stays revoked: make a new one and enroll that.
+      keyPair = await generateApproverKey(); await storeKey(me.principal, keyPair);
+      res = await api("approvers/enroll", { method: "POST", body: JSON.stringify({ public_key_hex: await publicKeyHex(keyPair) }) });
+      log("this browser's previous key was revoked; a new key enrolled");
+      res = null;
+    }
+    if (res) log(res.replaced ? "this browser's key replaced your previous one" : "this browser's key enrolled");
   }
   state.key = keyPair.privateKey; state.keyId = me.principal;
   $("entra").style.display = "none"; $("setup").style.display = "none";
@@ -117,7 +127,7 @@ $("file").addEventListener("change", async (e) => {
 
 async function api(path, opts = {}) {
   const r = await fetch(path, { ...opts, headers: { "Authorization": "Bearer " + state.token, "content-type": "application/json", ...(opts.headers || {}) } });
-  if (!r.ok) throw new Error(path + " -> " + r.status);
+  if (!r.ok) { const e = new Error(path + " -> " + r.status); e.status = r.status; throw e; }
   return r.json();
 }
 

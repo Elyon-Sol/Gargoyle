@@ -60,7 +60,7 @@ from gargoyle.plans import (REF_PLAN_MALFORMED, REF_PLAN_STEP_NOT_PLANNABLE, REF
                             sign_plan, valid_step)
 from gargoyle.notify import notifier_from_env
 from gargoyle.approvers import (DEFAULT_APPROVER_ROLE, ENV_APPROVER_GROUPS, ENV_APPROVER_ROLE, ENV_APPROVERS_PATH,
-                                ApproverRegistry, may_enroll, valid_public_key_hex)
+                                ApproverRegistry, RevokedKeyError, may_enroll, valid_public_key_hex)
 from gargoyle.identity import entra_keys, entra_tenant_id, principal_from_token
 from gargoyle.issuer import DEFAULT_TTL_SECONDS, issue
 from gargoyle.policy import Policy
@@ -90,6 +90,7 @@ REF_ISSUER_NO_APPROVER_TRUST = "REF_ISSUER_NO_APPROVER_TRUST"
 REF_ISSUER_NOT_AN_APPROVER = "REF_ISSUER_NOT_AN_APPROVER"   # enrollment without the approver role or group
 REF_ISSUER_FORBIDDEN = "REF_ISSUER_FORBIDDEN"               # authenticated, but not an approver and not the hold's own principal
 REF_ISSUER_TOO_MANY_HOLDS = "REF_ISSUER_TOO_MANY_HOLDS"     # the principal already has the cap's worth of holds waiting
+REF_ISSUER_KEY_REVOKED = "REF_ISSUER_KEY_REVOKED"           # enrollment offered a key that was revoked; a new key is needed
 
 
 def build_issuer_app(
@@ -482,7 +483,13 @@ def build_issuer_app(
             raise _refuse(400, REF_ISSUER_BAD_REQUEST)
         if not isinstance(body, dict) or not valid_public_key_hex(body.get("public_key_hex")):
             raise _refuse(400, REF_ISSUER_BAD_REQUEST)
-        result = registry.enroll(who["principal"], body["public_key_hex"], now=now(), oid=who.get("oid"), tid=who.get("tid"))
+        try:
+            result = registry.enroll(who["principal"], body["public_key_hex"], now=now(), oid=who.get("oid"), tid=who.get("tid"))
+        except RevokedKeyError:
+            # A revoked key stays revoked, whoever offers it; the console
+            # generates a fresh one on this answer.
+            event("enroll_refused", approver=who["principal"], reason=REF_ISSUER_KEY_REVOKED, oid=who.get("oid"))
+            raise _refuse(409, REF_ISSUER_KEY_REVOKED)
         event("enrolled", approver=who["principal"], replaced=result["replaced"], oid=who.get("oid"))
         return {"enrolled": True, "key_id": who["principal"], "replaced": result["replaced"]}
 

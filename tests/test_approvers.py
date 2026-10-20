@@ -151,10 +151,17 @@ def test_a_revoked_approver_is_refused_at_once_and_still_verifies_in_the_past(tm
     doc = json.loads((tmp_path / "approvers.json").read_text())
     assert "dana@contoso.com" not in doc["approvers"] and doc["revoked"]["dana@contoso.com"]["public_key_hex"] == pub_hex(dana)
     assert doc["revoked"]["dana@contoso.com"]["revoked_by"] == "dana@contoso.com"
-    # Enrolling again is a fresh key, and the revoked record goes.
+    # The revoked key is never enrolled again, by Dana or anyone (a browser
+    # that kept its key pair would otherwise re-enroll it on the next sign-in).
+    from gargoyle.issuer_service import REF_ISSUER_KEY_REVOKED
+    r = c.post("/approvers/enroll", json={"public_key_hex": pub_hex(dana)}, headers=h(token("dana@contoso.com", roles=["Approver"])))
+    assert r.status_code == 409 and r.json()["detail"]["reason"] == REF_ISSUER_KEY_REVOKED
+    r = c.post("/approvers/enroll", json={"public_key_hex": pub_hex(dana)}, headers=h(token("lee@contoso.com", roles=["Approver"])))
+    assert r.status_code == 409
+    # A fresh key enrolls, and the revoked record stays so Dana's earlier grants still audit.
     dana2 = Ed25519PrivateKey.generate()
     assert c.post("/approvers/enroll", json={"public_key_hex": pub_hex(dana2)}, headers=h(token("dana@contoso.com", roles=["Approver"]))).json()["enrolled"]
-    assert reg.revoked_hex() == {} and reg.public_hex() == {"dana@contoso.com": pub_hex(dana2)}
+    assert reg.revoked_hex() == {"dana@contoso.com": pub_hex(dana)} and reg.public_hex() == {"dana@contoso.com": pub_hex(dana2)}
 
 
 def test_the_registry_picks_up_a_file_another_process_wrote(tmp_path):
