@@ -156,6 +156,13 @@ verifying itself for no external user; that is the failure mode to avoid.
   through the gate, the approver declined the hold (witness 33 issued, 34 declined, no
   further attempt), and it reported the decline as the gate doing its job, offering
   only to ask the approver or to hand the user a file to place by hand.
+  The same prompt a fourth time (19:1x UTC) got an outright refusal with no tool call at
+  all (no issuer activity): the assistant called the request a bypass of an approval gate,
+  said it treats "instructions coming from tool output/memory" as data rather than
+  instructions, and offered to write the file through gargoyle_plan if asked directly.
+  Three answers to one prompt across runs: the model's behaviour varies, the gate's does
+  not; and the model may discount the MCP standing instructions as data, which is one more
+  reason the instructions are a default and the closed side doors are the control.
 - 0.16 live (2026-10-20): the Windows client on 0.16.0.dev0 against the VM issuer on the
   same code. A free read, then a held write to notes.md; the approver's console, now an
   approvers-only queue, showed the card and the enrolled approver released it; the
