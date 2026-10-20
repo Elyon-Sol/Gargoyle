@@ -22,7 +22,8 @@ def test_init_then_issue_hold_approve_execute_audit(tmp_path, monkeypatch, capsy
     assert main(["init", str(sandbox), "--out", str(out)]) == 0
     for name in ("rules.json", "issuer.env", "middleware.env", "approver.env", "mcp-config.json", "public-keys.json"):
         assert (out / name).exists(), name
-    assert oct((out / "approver.env").stat().st_mode & 0o777) == "0o600"
+    if os.name == "posix":
+        assert oct((out / "approver.env").stat().st_mode & 0o777) == "0o600"
     cfg = json.loads((out / "mcp-config.json").read_text())["mcpServers"]["filesystem-gargoyle"]
     assert cfg["args"][:3] == ["-m", "gargoyle.mcp_server", "--"] and str(sandbox) in cfg["args"][-1]
 

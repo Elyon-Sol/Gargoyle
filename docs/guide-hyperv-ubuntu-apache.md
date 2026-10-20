@@ -196,7 +196,10 @@ sudo tee /etc/apache2/sites-available/gargoyle.conf >/dev/null <<'CONF'
         Require ip 192.168.60.0/24 127.0.0.1
     </Location>
     ErrorLog ${APACHE_LOG_DIR}/gargoyle-error.log
-    CustomLog ${APACHE_LOG_DIR}/gargoyle-access.log combined
+    # Remote-mode capability URLs carry a bearer token in the path; keep
+    # them out of the access log. The issuer's own log has the decisions.
+    SetEnvIf Request_URI "^/mcp/" gargoyle_capability_url
+    CustomLog ${APACHE_LOG_DIR}/gargoyle-access.log combined env=!gargoyle_capability_url
 </VirtualHost>
 CONF
 sudo a2enmod ssl proxy proxy_http headers
@@ -605,10 +608,11 @@ are persistent.
 |---|---|
 | Issuer logs | `journalctl -u gargoyle -f`; Apache: `/var/log/apache2/gargoyle-*.log` |
 | Holds waiting | `https://gargoyle.lan/approve`, or `gargoyle approve --out /opt/gargoyle/deploy` on the VM |
-| Issuer restart | `sudo systemctl restart gargoyle`; holds in memory at that moment are dropped and the assistant retries |
+| Issuer restart | `sudo systemctl restart gargoyle`; holds, grants, declines and plans are in `holds.sqlite`, so a restart loses nothing a person is acting on (`GET /health` reports it) |
 | Rotate every key | re-run `gargoyle init` to a new `--out`, redistribute `middleware.env`, `record.json`, `approver-web.json`, update the unit's `--out` |
 | Client token expiry | 30 days by default (`--token-days`); re-run `init` or mint a new token before it lapses |
-| Second approver | roadmap: approver roles and thresholds; today every trusted approver key releases every hold |
+| Second approver | `gargoyle init --approvers 2` for file keys, or Entra enrollment; a rule's `"approvals": 2` and `"approvers": [...]` set the threshold and who counts |
+| Revoke an approver | `gargoyle approvers revoke <upn> --out /opt/gargoyle/deploy` on the VM; takes effect without a restart. An approver retires their own key from the console's sign-in (`POST /approvers/revoke`) |
 | Backup | `/opt/gargoyle/deploy` and `/etc/ssl/gargoyle`, both private |
 
 ## Troubleshooting

@@ -5,9 +5,13 @@ on:
   pull_request:
 jobs:
   python:
-    runs-on: ubuntu-latest
+    # Latest releases of every dependency, on the platform the issuer runs on
+    # and on the platform the clients run on.
+    runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
+        os: [ubuntu-latest, windows-latest]
         python: ["3.12", "3.13", "3.14"]
     steps:
       - uses: actions/checkout@v5
@@ -15,6 +19,27 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
       - run: pip install -e ".[dev]"
+      - run: python -m pytest -q
+  floors:
+    # The oldest versions pyproject.toml admits, so the floors are tested and
+    # not merely declared.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - run: pip install -c constraints-floors.txt -e ".[dev]"
+      - run: python -m pytest -q
+  locked:
+    # The exact set a deployment installs from requirements-lock.txt.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+      - run: pip install -r requirements-lock.txt -e . --no-deps
       - run: python -m pytest -q
   typescript:
     runs-on: ubuntu-latest

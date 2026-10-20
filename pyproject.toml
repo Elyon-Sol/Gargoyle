@@ -24,12 +24,14 @@ classifiers = [
     "Topic :: Security :: Cryptography",
 ]
 # Floors, not pins: a library on PyPI must coexist with whatever else the
-# installing environment holds. CI tests the floors and the latest.
+# installing environment holds. CI tests the floors (constraints-floors.txt),
+# the latest releases, and the exact set in requirements-lock.txt, on Linux
+# and on Windows.
 dependencies = [
     "cryptography>=44.0.0",
     "fastapi>=0.115",
     "uvicorn>=0.30",
-    "requests>=2.32",
+    "requests>=2.32.3",
 ]
 
 [project.optional-dependencies]

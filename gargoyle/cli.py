@@ -180,7 +180,9 @@ WantedBy=multi-user.target
     ProxyPass        / http://127.0.0.1:%(port)d/
     ProxyPassReverse / http://127.0.0.1:%(port)d/
     ErrorLog  ${APACHE_LOG_DIR}/gargoyle-error.log
-    CustomLog ${APACHE_LOG_DIR}/gargoyle-access.log combined
+    # Remote-mode capability URLs carry a bearer token in the path; keep them out of the access log.
+    SetEnvIf Request_URI "^/mcp/" gargoyle_capability_url
+    CustomLog ${APACHE_LOG_DIR}/gargoyle-access.log combined env=!gargoyle_capability_url
 </VirtualHost>
 """ % {"host": (args.issuer_url or "gargoyle.example").replace("https://", "").replace("http://", "").split("/")[0].split(":")[0], "port": args.port})
     upstream = (["npx", "-y", "@modelcontextprotocol/server-filesystem", allowed] if args.upstream == "npx-filesystem"
@@ -492,7 +494,7 @@ def main(argv=None) -> int:
     p = sub.add_parser("remote-token", help="mint one person's capability URL for the remote gate")
     p.add_argument("--out", default="gargoyle-deploy")
     p.add_argument("--principal", required=True, help="the UPN or principal the receipts will name")
-    p.add_argument("--days", type=int, default=365)
+    p.add_argument("--days", type=int, default=30, help="lifetime of the identity token inside the capability URL (default 30)")
     p.add_argument("--url", help="the gate's public base URL for the printed connector URL")
     p.set_defaults(fn=cmd_remote_token)
     p = sub.add_parser("approvers", help="list enrolled approvers, or revoke one on the issuer's host")
