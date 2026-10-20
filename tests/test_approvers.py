@@ -109,3 +109,12 @@ def test_an_enrolled_approver_releases_a_hold_and_the_middleware_trusts_the_publ
     assert consumer.check(env, {"tool": "transfer_funds", "args": {"amount": 5}, "principal": "agent@contoso.com"}, grant=grants).honored
     # The audit command merges approvers.json from the deploy folder.
     assert json.loads((tmp_path / "approvers.json").read_text())["approvers"]["lee@contoso.com"]["public_key_hex"] == pub_hex(lee)
+
+
+def test_enrollment_keeps_the_directory_ids_beside_the_upn(tmp_path):
+    reg = ApproverRegistry(str(tmp_path / "a.json"))
+    key = Ed25519PrivateKey.generate()
+    reg.enroll("dana@contoso.com", pub_hex(key), oid="11111111-2222-3333-4444-555555555555", tid="0a1b2c3d-4e5f-6071-8293-a4b5c6d7e8f9")
+    import json
+    entry = json.loads((tmp_path / "a.json").read_text())["approvers"]["dana@contoso.com"]
+    assert entry["oid"] == "11111111-2222-3333-4444-555555555555" and entry["tid"] == "0a1b2c3d-4e5f-6071-8293-a4b5c6d7e8f9"

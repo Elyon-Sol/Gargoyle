@@ -32,15 +32,38 @@ entra_keys (fetched from the tenant's discovery endpoint; cache and
 refresh on an unknown kid, as every OIDC client does).
 """
 
+import re
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Set
 
 from gargoyle.jws import (
     IDENTITY_ALGS, REF_JWS_AUDIENCE_MISMATCH, REF_JWS_EXPIRED, REF_JWS_MALFORMED, decode, keys_from_jwks,
 )
 
 REF_IDENTITY_NO_SUBJECT = "REF_IDENTITY_NO_SUBJECT"
+REF_IDENTITY_WRONG_TENANT = "REF_IDENTITY_WRONG_TENANT"     # a directory token for some other tenant, or one that names none
 ENTRA_JWKS_URL = "https://login.microsoftonline.com/{tenant}/discovery/v2.0/keys"
+ENTRA_OPENID_URL = "https://login.microsoftonline.com/{tenant}/v2.0/.well-known/openid-configuration"
+_GUID = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+
+
+def entra_tenant_id(tenant: str, *, http: Any = None, timeout: float = 10.0) -> str:
+    """The tenant id (a GUID) for a tenant given by id or by domain. Tokens
+    name their tenant by id in `tid`, so the check in principal_from_token
+    needs the id; a domain is resolved once, from the tenant's OpenID
+    configuration, at startup. Raises on transport failure."""
+    if _GUID.match(tenant):
+        return tenant.lower()
+    import requests
+    http = http if http is not None else requests
+    r = http.get(ENTRA_OPENID_URL.format(tenant=tenant), timeout=timeout)
+    if r.status_code != 200:
+        raise RuntimeError("OpenID configuration fetch returned %s" % r.status_code)
+    issuer = r.json().get("issuer") or ""
+    m = re.search(r"/([0-9a-fA-F-]{36})/", issuer)
+    if not m or not _GUID.match(m.group(1)):
+        raise RuntimeError("OpenID configuration for %s names no tenant id: %r" % (tenant, issuer))
+    return m.group(1).lower()
 
 
 def entra_keys(tenant: str, *, http: Any = None, timeout: float = 10.0) -> Dict[str, Any]:
@@ -77,9 +100,18 @@ def _innermost_actor(act: Any) -> Optional[str]:
 
 
 def principal_from_token(token: str, public_keys: Dict[str, Any], *,
-                         audience: Any = None, now: Optional[datetime] = None) -> Dict[str, Any]:
+                         audience: Any = None, now: Optional[datetime] = None,
+                         tenant: Optional[str] = None, tenant_key_ids: Optional[Set[str]] = None) -> Dict[str, Any]:
     """{"principal", "on_behalf_of" (or None), "claims", "reason": None} for
-    a trusted identity token, or {"principal": None, "reason": code}."""
+    a trusted identity token, or {"principal": None, "reason": code}.
+
+    `tenant` (a tenant id) makes the token's `tid` part of trust: a token
+    signed by one of `tenant_key_ids` (the keys fetched from the directory;
+    every key when None) must carry that tid, and its `iss`, when present,
+    must name it. Directory signing keys are shared across tenants, so a
+    valid signature alone says only that some tenant issued the token.
+    Tokens under other trusted keys (a pinned key `gargoyle init` wrote)
+    name no tenant and are not held to one."""
     res = decode(token, public_keys, allowed_algs=IDENTITY_ALGS)
     if res["reason"] is not None:
         return {"principal": None, "reason": res["reason"]}
@@ -97,6 +129,10 @@ def principal_from_token(token: str, public_keys: Dict[str, Any], *,
         accepted = audience if isinstance(audience, (list, tuple)) else [a.strip() for a in str(audience).split(",")]
         if not any(a in presented for a in accepted if a):
             return {"principal": None, "reason": REF_JWS_AUDIENCE_MISMATCH}
+    if tenant is not None and (tenant_key_ids is None or res["header"].get("kid") in tenant_key_ids):
+        tid = _nonempty(claims.get("tid")); iss = _nonempty(claims.get("iss"))
+        if tid is None or tid.lower() != tenant.lower() or (iss is not None and tenant.lower() not in iss.lower()):
+            return {"principal": None, "reason": REF_IDENTITY_WRONG_TENANT}
 
     # OIDC providers' `sub` is opaque; the UPN is the identity people and
     # rules recognise.
@@ -115,4 +151,4 @@ def principal_from_token(token: str, public_keys: Dict[str, Any], *,
         return {"principal": None, "reason": REF_IDENTITY_NO_SUBJECT}
     return {"principal": principal, "on_behalf_of": on_behalf_of, "claims": claims, "reason": None,
             "groups": _string_list(claims.get("groups")), "roles": _string_list(claims.get("roles")),
-            "oid": _nonempty(claims.get("oid"))}
+            "oid": _nonempty(claims.get("oid")), "tid": _nonempty(claims.get("tid"))}

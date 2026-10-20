@@ -61,7 +61,7 @@ from gargoyle.plans import (REF_PLAN_MALFORMED, REF_PLAN_STEP_NOT_PLANNABLE, REF
 from gargoyle.notify import notifier_from_env
 from gargoyle.approvers import (DEFAULT_APPROVER_ROLE, ENV_APPROVER_GROUPS, ENV_APPROVER_ROLE, ENV_APPROVERS_PATH,
                                 ApproverRegistry, may_enroll, valid_public_key_hex)
-from gargoyle.identity import entra_keys, principal_from_token
+from gargoyle.identity import entra_keys, entra_tenant_id, principal_from_token
 from gargoyle.issuer import DEFAULT_TTL_SECONDS, issue
 from gargoyle.policy import Policy
 
@@ -107,6 +107,8 @@ def build_issuer_app(
     hold_store: Optional[HoldStore] = None,
     log_events: Optional[Callable[[Dict[str, Any]], None]] = None,
     witness: Optional[WitnessLog] = None,
+    tenant: Optional[str] = None,
+    tenant_key_ids: Optional[set] = None,
 ) -> FastAPI:
     """`on_hold(envelope, args)` is called once for every new hold (gargoyle.notify
     posts it to a webhook); it is notice, not admission, and its failure
@@ -168,7 +170,8 @@ def build_issuer_app(
     def authenticate(authorization: Optional[str]) -> Dict[str, Any]:
         if not authorization or not authorization.startswith("Bearer "):
             raise _refuse(401, REF_ISSUER_UNAUTHENTICATED)
-        who = principal_from_token(authorization[7:].strip(), idp_public_keys, audience=audience, now=now())
+        who = principal_from_token(authorization[7:].strip(), idp_public_keys, audience=audience, now=now(),
+                                   tenant=tenant, tenant_key_ids=tenant_key_ids)
         if who["reason"] is not None:
             raise _refuse(401, who["reason"])
         return who
@@ -226,6 +229,7 @@ def build_issuer_app(
                     covered = True
                     break
         event("issued", principal=who["principal"], tool=body["tool"], held=bool(result.envelope["requires_approval"]),
+              **({"oid": who["oid"]} if who.get("oid") else {}),
               covered=covered, decision_id=result.envelope.get("decision_id"), decision_sha256=result.envelope["decision_sha256"],
               approval_request_id=result.envelope.get("approval_request_id"), args_sha256=result.envelope["request_context"]["args_sha256"])
         if result.envelope["requires_approval"] and not covered:
@@ -431,8 +435,8 @@ def build_issuer_app(
             raise _refuse(400, REF_ISSUER_BAD_REQUEST)
         if not isinstance(body, dict) or not valid_public_key_hex(body.get("public_key_hex")):
             raise _refuse(400, REF_ISSUER_BAD_REQUEST)
-        result = registry.enroll(who["principal"], body["public_key_hex"], now=now())
-        event("enrolled", approver=who["principal"], replaced=result["replaced"])
+        result = registry.enroll(who["principal"], body["public_key_hex"], now=now(), oid=who.get("oid"), tid=who.get("tid"))
+        event("enrolled", approver=who["principal"], replaced=result["replaced"], oid=who.get("oid"))
         return {"enrolled": True, "key_id": who["principal"], "replaced": result["replaced"]}
 
     @app.get("/me")
@@ -502,6 +506,13 @@ def app_from_env() -> FastAPI:
     missing = [k for k, v in required.items() if not v]
     if missing:
         raise RuntimeError("issuer service needs " + ", ".join(missing))
+    if tenant and not os.environ.get(ENV_AUDIENCE):
+        # Fail closed: without an audience, any token the tenant ever issued
+        # for any application would be accepted here.
+        raise RuntimeError("issuer service with %s set needs %s (the issuer API's client id or app id URI)"
+                           % (ENV_ENTRA_TENANT, ENV_AUDIENCE))
+    tenant_id = entra_tenant_id(tenant) if tenant else None
+    tenant_keys = entra_keys(tenant_id) if tenant else {}
     rules_path = os.environ.get(ENV_RULES_PATH)
     if rules_path:
         from gargoyle.rules import RulesPolicy
@@ -529,7 +540,7 @@ def app_from_env() -> FastAPI:
         # Both may be trusted at once: the tenant's keys for users who ran
         # `gargoyle login`, the pinned key for tokens `gargoyle init` minted
         # (the approver's, until approvers log in with Entra too).
-        idp_public_keys={**(entra_keys(tenant) if tenant else {}),
+        idp_public_keys={**tenant_keys,
                          **({os.environ[ENV_IDP_KEY_ID]: Ed25519PublicKey.from_public_bytes(bytes.fromhex(os.environ[ENV_IDP_PUBLIC_KEY_HEX]))}
                             if pinned_idp else {})},
         approver_public_keys=approver,
@@ -543,6 +554,8 @@ def app_from_env() -> FastAPI:
         approver_registry=ApproverRegistry(os.environ.get(ENV_APPROVERS_PATH)),
         approver_role=os.environ.get(ENV_APPROVER_ROLE, DEFAULT_APPROVER_ROLE),
         approver_groups=[g.strip() for g in os.environ.get(ENV_APPROVER_GROUPS, "").split(",") if g.strip()] or None,
+        tenant=tenant_id,
+        tenant_key_ids=set(tenant_keys) if tenant else None,
         console_entra=({"tenant": tenant, "client_id": os.environ[ENV_CONSOLE_CLIENT_ID],
                         "scope": os.environ.get(ENV_CONSOLE_SCOPE) or "api://%s/access" % (os.environ.get(ENV_AUDIENCE) or "").split(",")[-1].strip()}
                        if tenant and os.environ.get(ENV_CONSOLE_CLIENT_ID) else None),

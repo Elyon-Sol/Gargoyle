@@ -387,7 +387,16 @@ weaker than a root-signed key record and appropriate where one
 administrator runs both the service and the tenant. Separation of duties
 is unchanged: an enrolled key is never the issuer's key, and the private
 half is generated and held in the approver's browser. An enrollment
-without the role is `REF_ISSUER_NOT_AN_APPROVER`.
+without the role is `REF_ISSUER_NOT_AN_APPROVER`. The enrollment record
+keeps the directory's immutable object id and tenant id beside the UPN
+when the token carried them.
+
+What the service shows is scoped by the same notion of approver (the role
+or group in the token, a configured approver key id, or an enrolled UPN):
+an approver sees every hold with its arguments and the whole witness log
+(section 15.1); any other identity sees only holds on its own calls, may
+cancel only those, and is answered `REF_ISSUER_FORBIDDEN` for anything
+else. Held arguments are often the contents of a file.
 
 ## 9. The published policy record
 
@@ -717,7 +726,14 @@ The same encoding is accepted as the issuer's identity input (section
 12), there also under RS256 (RSASSA-PKCS1-v1_5 with SHA-256) and ES256
 (ECDSA P-256, signature as r||s), with the keys loaded from a JWKS
 document (RSA, EC P-256 and OKP Ed25519 entries by `kid`); a token with no
-usable subject is `REF_IDENTITY_NO_SUBJECT`. Receipts stay EdDSA only.
+usable subject is `REF_IDENTITY_NO_SUBJECT`. A directory's signing keys
+are shared by all its tenants, so where a tenant is configured a token
+under the directory's keys must carry that tenant's id in `tid` (and in
+`iss`, when present); one that carries another tenant's, or none, is
+`REF_IDENTITY_WRONG_TENANT`. Tokens under a key the operator pinned name
+no tenant and are not held to one. An audience is required whenever a
+directory is trusted; a service configured without one refuses to start.
+Receipts stay EdDSA only.
 
 ## 15. The evidence log
 

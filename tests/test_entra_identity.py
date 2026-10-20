@@ -154,3 +154,61 @@ def test_departments_by_group_or_role_in_the_rules_file(tmp_path):
                headers={"Authorization": "Bearer " + rs256(finance)}).json()["envelope"]
     assert r["request_context"] == {"tool": "list_mail", "args_sha256": r["request_context"]["args_sha256"],
                                     "principal": "j.doe@acme.example"}
+
+
+TID = "0a1b2c3d-4e5f-6071-8293-a4b5c6d7e8f9"
+OTHER = "ffffffff-0000-1111-2222-333333333333"
+
+
+def test_a_directory_token_must_name_the_configured_tenant():
+    """Microsoft's signing keys are shared across tenants, so a valid signature
+    says only that some tenant issued the token. With a tenant configured, a
+    token under the directory's keys must carry that tid; a token under a key
+    the operator pinned (init-minted, no tid) is not a directory token."""
+    from gargoyle.identity import REF_IDENTITY_WRONG_TENANT
+    from gargoyle.jws import encode
+    keys = keys_from_jwks(jwks())
+    kw = dict(audience="api://gargoyle-issuer", now=NOW, tenant=TID, tenant_key_ids=set(keys))
+    mine = {**ENTRA_CLAIMS, "tid": TID, "iss": "https://login.microsoftonline.com/%s/v2.0" % TID}
+    assert principal_from_token(rs256(mine), keys, **kw)["principal"] == "j.doe@acme.example"
+    assert principal_from_token(rs256({**mine, "tid": OTHER, "iss": "https://login.microsoftonline.com/%s/v2.0" % OTHER}), keys, **kw)["reason"] == REF_IDENTITY_WRONG_TENANT
+    assert principal_from_token(rs256({**mine, "iss": "https://login.microsoftonline.com/%s/v2.0" % OTHER}), keys, **kw)["reason"] == REF_IDENTITY_WRONG_TENANT
+    assert principal_from_token(rs256(ENTRA_CLAIMS), keys, **kw)["reason"] == REF_IDENTITY_WRONG_TENANT        # no tid at all
+    assert principal_from_token(rs256(mine), keys, **kw)["tid"] == TID
+    pinned = Ed25519PrivateKey.generate()
+    tok = encode({"sub": "approver-1", "aud": "api://gargoyle-issuer", "exp": EXP}, pinned, "idp-1")
+    assert principal_from_token(tok, {**keys, "idp-1": pinned.public_key()}, **kw)["principal"] == "approver-1"
+    # With no key set named, every token is held to the tenant.
+    assert principal_from_token(tok, {**keys, "idp-1": pinned.public_key()}, audience="api://gargoyle-issuer", now=NOW, tenant=TID)["reason"] == REF_IDENTITY_WRONG_TENANT
+
+
+def test_entra_tenant_id_passes_a_guid_through_and_resolves_a_domain():
+    from gargoyle.identity import entra_tenant_id
+
+    class Http:
+        def get(self, url, timeout=None):
+            assert url == "https://login.microsoftonline.com/acme.example/v2.0/.well-known/openid-configuration"
+            class R:
+                status_code = 200
+                def json(self_inner): return {"issuer": "https://login.microsoftonline.com/%s/v2.0" % TID}
+            return R()
+    assert entra_tenant_id(TID.upper()) == TID
+    assert entra_tenant_id("acme.example", http=Http()) == TID
+
+    class Down:
+        def get(self, url, timeout=None):
+            class R: status_code = 404
+            return R()
+    with pytest.raises(RuntimeError):
+        entra_tenant_id("acme.example", http=Down())
+
+
+def test_the_issuer_in_entra_mode_will_not_start_without_an_audience(monkeypatch):
+    import os
+    from gargoyle.issuer_service import app_from_env
+    env = {"GARGOYLE_ISSUER_KEY_ID": "issuer-1", "GARGOYLE_ISSUER_KEY_HEX": "11" * 32,
+           "GARGOYLE_ENTRA_TENANT": TID, "GARGOYLE_RULES_PATH": "rules.json"}
+    monkeypatch.setattr(os, "environ", env)
+    with pytest.raises(RuntimeError) as e:
+        app_from_env()
+    assert "GARGOYLE_ISSUER_AUDIENCE" in str(e.value)

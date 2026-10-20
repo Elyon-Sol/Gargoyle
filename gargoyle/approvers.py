@@ -64,9 +64,12 @@ class ApproverRegistry:
             pass
 
     def enroll(self, upn: str, public_key_hex: str, *, enrolled_by: Optional[str] = None,
-               now: Optional[datetime] = None) -> Dict[str, Any]:
+               now: Optional[datetime] = None, oid: Optional[str] = None, tid: Optional[str] = None) -> Dict[str, Any]:
         """Bind `upn` to `public_key_hex`, replacing any earlier key for that
-        UPN (one key per approver; a new browser re-enrolls)."""
+        UPN (one key per approver; a new browser re-enrolls). The directory's
+        immutable object id and tenant id are kept beside the UPN when the
+        token carried them: the UPN is the name people read, the oid is what
+        survives a rename."""
         if not isinstance(upn, str) or not upn:
             raise ValueError("upn must be a non-empty string")
         if not valid_public_key_hex(public_key_hex):
@@ -74,6 +77,10 @@ class ApproverRegistry:
         entry = {"public_key_hex": public_key_hex,
                  "enrolled_at": (now or datetime.now(timezone.utc)).isoformat(),
                  "enrolled_by": enrolled_by or upn}
+        if oid:
+            entry["oid"] = oid
+        if tid:
+            entry["tid"] = tid
         with self._lock:
             replaced = upn in self._approvers
             self._approvers[upn] = entry
