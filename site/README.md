@@ -18,16 +18,19 @@ index.html by a must-use plugin, wp-content/mu-plugins/zz-gargoyle-static-root.p
 Delete that file to give the root back to WordPress.
 
 Publishing, from a machine with the SFTP credentials (GoDaddy: Managed
-WordPress > Settings > SFTP/SSH):
+WordPress > Settings > SFTP/SSH; user and password change on each rotation):
 
-    scp -O index.html report.html elyon-sol.html USER@HOST:/html/
-    ssh USER@HOST 'cd /html && wp cache flush'
+    ./publish.sh USER@898413.us33.ssh.myftpupload.com
 
-then purge the Cloudflare cache for the zone (Caching > Configuration >
-Purge Everything) and check https://elyon-sol.io/ shows the title
-"Gargoyle - receipts and holds for agent tool calls". The plugin sends
-Cache-Control max-age=600 on the root, but the platform overrides it with
-a 31-day value, so the purge is not optional. First publish: 2026-10-20.
+which uploads the three pages and the plugin, prints their hashes on the
+host, and runs platform-cache-ban.php through wp-cli. That last step
+matters: GoDaddy keeps a page cache in front of the origin with a 31-day
+lifetime, and `wp cache flush` does not touch it. Then purge the Cloudflare
+cache for the zone (Caching > Configuration > Purge Everything) and check
+https://elyon-sol.io/ shows the title "Gargoyle - receipts and holds for
+agent tool calls". Links between the pages point at "/" rather than
+index.html by name, because the file URL was cached as the old site.
+First publish: 2026-10-20.
 
 Open slot: a screenshot of the approval console with a held write's diff
 card, taken from the enrolled approver's browser. Place it as
