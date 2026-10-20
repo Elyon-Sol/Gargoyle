@@ -183,7 +183,9 @@ chain["accepted"], chain["steps"]   # True, [("authorization", ...), ("approval"
 That is the sentence Gargoyle can say that nobody else can: a specific
 policy version authorized a specific call for a specific principal, a
 human's key released it, and exactly that call ran once, verifiable offline
-by anyone, in Python or TypeScript.
+by anyone. The receipt, grant and execution receipt verify in Python or
+TypeScript against the same vectors; the evidence log, the witness, plans
+and the older formats verify in Python.
 
 A held call is approved against the state it was shown in. Before asking
 for the receipt the middleware hashes the target (a file's bytes, or its
