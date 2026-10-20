@@ -328,6 +328,33 @@ def cmd_approve(args) -> int:
     return approver_main(argv)
 
 
+def cmd_approvers(args) -> int:
+    """List the enrolled approvers, or revoke one. Works on the issuer's
+    approvers.json; the running service re-reads the file, so a revocation
+    takes effect without a restart and reaches the middleware at its next
+    held call."""
+    from gargoyle.approvers import ApproverRegistry
+
+    reg = ApproverRegistry(str(Path(args.out).resolve() / "approvers.json"))
+    if args.action == "list":
+        entries = reg.entries()
+        if not entries:
+            print("no enrolled approvers (configured approver keys are in issuer.env)")
+        for upn, e in sorted(entries.items()):
+            print("%s  enrolled %s  key %s%s" % (upn, e.get("enrolled_at", "?"), e["public_key_hex"][:16],
+                                                  ("  oid " + e["oid"]) if e.get("oid") else ""))
+        revoked = reg.revoked_hex()
+        if revoked:
+            print("revoked: " + ", ".join(sorted(revoked)))
+        return 0
+    import getpass
+    if reg.revoke(args.upn, revoked_by="operator:" + getpass.getuser()):
+        print("revoked %s; grants under that key are refused from now on, earlier ones still audit" % args.upn)
+        return 0
+    print("%s is not an enrolled approver" % args.upn, file=sys.stderr)
+    return 1
+
+
 def cmd_audit(args) -> int:
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
     from gargoyle.execution import verify_chain
@@ -337,7 +364,11 @@ def cmd_audit(args) -> int:
     approvers = dict(keys["approver"])
     enrolled = Path(args.out).resolve() / "approvers.json"          # approvers who enrolled through Entra, by UPN
     if enrolled.exists():
-        approvers.update({u: e["public_key_hex"] for u, e in json.loads(enrolled.read_text()).get("approvers", {}).items()})
+        doc = json.loads(enrolled.read_text())
+        # Revoked approvers too: the audit verifies what was signed while they
+        # were trusted. Only the live service and middleware refuse them.
+        approvers.update({u: e["public_key_hex"] for u, e in doc.get("revoked", {}).items()})
+        approvers.update({u: e["public_key_hex"] for u, e in doc.get("approvers", {}).items()})
     trust = dict(issuer_public_keys=load(keys["issuer"]), executor_public_keys=load(keys["executor"]),
                  approver_public_keys=load(approvers))
     if args.log:
@@ -464,6 +495,11 @@ def main(argv=None) -> int:
     p.add_argument("--days", type=int, default=365)
     p.add_argument("--url", help="the gate's public base URL for the printed connector URL")
     p.set_defaults(fn=cmd_remote_token)
+    p = sub.add_parser("approvers", help="list enrolled approvers, or revoke one on the issuer's host")
+    p.add_argument("action", choices=["list", "revoke"])
+    p.add_argument("upn", nargs="?", help="the approver to revoke")
+    p.add_argument("--out", default="gargoyle-deploy")
+    p.set_defaults(fn=cmd_approvers)
     p = sub.add_parser("audit", help="verify a receipt chain offline, or a whole evidence log")
     p.add_argument("receipt", nargs="?"); p.add_argument("execution", nargs="?"); p.add_argument("grant", nargs="?")
     p.add_argument("--log", help="the middleware's audit.jsonl: verify every entry")

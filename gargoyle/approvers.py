@@ -47,21 +47,49 @@ class ApproverRegistry:
         self.path = Path(path) if path else None
         self._lock = threading.Lock()
         self._approvers: Dict[str, Dict[str, Any]] = {}
-        if self.path is not None and self.path.exists():
-            doc = json.loads(self.path.read_text(encoding="utf-8"))
-            for upn, entry in (doc.get("approvers") or {}).items():
-                if isinstance(entry, dict) and valid_public_key_hex(entry.get("public_key_hex")):
-                    self._approvers[upn] = dict(entry)
+        self._revoked: Dict[str, Dict[str, Any]] = {}      # former approvers, kept so old grants still verify in audits
+        self._mtime: Optional[float] = None
+        self._load()
+
+    def _load(self) -> None:
+        if self.path is None or not self.path.exists():
+            return
+        doc = json.loads(self.path.read_text(encoding="utf-8"))
+        approvers, revoked = {}, {}
+        for upn, entry in (doc.get("approvers") or {}).items():
+            if isinstance(entry, dict) and valid_public_key_hex(entry.get("public_key_hex")):
+                approvers[upn] = dict(entry)
+        for upn, entry in (doc.get("revoked") or {}).items():
+            if isinstance(entry, dict) and valid_public_key_hex(entry.get("public_key_hex")):
+                revoked[upn] = dict(entry)
+        self._approvers, self._revoked = approvers, revoked
+        self._mtime = self.path.stat().st_mtime
+
+    def _refresh(self) -> None:
+        """Re-read the file when something else wrote it: `gargoyle approvers
+        revoke` on the issuer's host takes effect without a restart."""
+        if self.path is None:
+            return
+        try:
+            mtime = self.path.stat().st_mtime
+        except OSError:
+            return
+        if mtime != self._mtime:
+            self._load()
 
     def _save(self) -> None:
         if self.path is None:
             return
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(json.dumps({"approvers": self._approvers}, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        doc = {"approvers": self._approvers}
+        if self._revoked:
+            doc["revoked"] = self._revoked
+        self.path.write_text(json.dumps(doc, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         try:
             os.chmod(self.path, stat.S_IRUSR | stat.S_IWUSR)
         except OSError:
             pass
+        self._mtime = self.path.stat().st_mtime
 
     def enroll(self, upn: str, public_key_hex: str, *, enrolled_by: Optional[str] = None,
                now: Optional[datetime] = None, oid: Optional[str] = None, tid: Optional[str] = None) -> Dict[str, Any]:
@@ -82,13 +110,31 @@ class ApproverRegistry:
         if tid:
             entry["tid"] = tid
         with self._lock:
+            self._refresh()
             replaced = upn in self._approvers
             self._approvers[upn] = entry
+            self._revoked.pop(upn, None)            # enrolling again after a revocation is a fresh key
             self._save()
         return {"upn": upn, "replaced": replaced, **entry}
 
+    def revoke(self, upn: str, *, revoked_by: Optional[str] = None, now: Optional[datetime] = None) -> bool:
+        """Stop trusting `upn`'s key from now on. The entry moves to the
+        revoked list with when and by whom, so an audit of earlier evidence
+        can still verify the grants it signed; the issuer and the
+        middleware stop accepting new ones at once."""
+        with self._lock:
+            self._refresh()
+            entry = self._approvers.pop(upn, None)
+            if entry is None:
+                return False
+            self._revoked[upn] = {**entry, "revoked_at": (now or datetime.now(timezone.utc)).isoformat(),
+                                  "revoked_by": revoked_by or upn}
+            self._save()
+        return True
+
     def remove(self, upn: str) -> bool:
         with self._lock:
+            self._refresh()
             gone = self._approvers.pop(upn, None) is not None
             if gone:
                 self._save()
@@ -97,7 +143,21 @@ class ApproverRegistry:
     def public_hex(self) -> Dict[str, str]:
         """{upn: public_key_hex}, what GET /approvers publishes."""
         with self._lock:
+            self._refresh()
             return {upn: e["public_key_hex"] for upn, e in self._approvers.items()}
+
+    def revoked_hex(self) -> Dict[str, str]:
+        """{upn: public_key_hex} of revoked approvers: for verifying the
+        grants they signed while trusted, never for accepting new ones."""
+        with self._lock:
+            self._refresh()
+            return {upn: e["public_key_hex"] for upn, e in self._revoked.items()}
+
+    def entries(self) -> Dict[str, Dict[str, Any]]:
+        """Every current approver's record, for `gargoyle approvers list`."""
+        with self._lock:
+            self._refresh()
+            return {upn: dict(e) for upn, e in self._approvers.items()}
 
     def keys(self) -> Dict[str, Any]:
         """{upn: Ed25519PublicKey}, the map a verifier uses."""
@@ -105,7 +165,9 @@ class ApproverRegistry:
         return {upn: Ed25519PublicKey.from_public_bytes(bytes.fromhex(h)) for upn, h in self.public_hex().items()}
 
     def __contains__(self, upn: str) -> bool:
-        return upn in self._approvers
+        with self._lock:
+            self._refresh()
+            return upn in self._approvers
 
 
 def may_enroll(who: Dict[str, Any], *, role: str = DEFAULT_APPROVER_ROLE, groups: Optional[list] = None) -> bool:

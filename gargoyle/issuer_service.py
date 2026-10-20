@@ -439,6 +439,28 @@ def build_issuer_app(
         event("enrolled", approver=who["principal"], replaced=result["replaced"], oid=who.get("oid"))
         return {"enrolled": True, "key_id": who["principal"], "replaced": result["replaced"]}
 
+    @app.post("/approvers/revoke")
+    async def revoke(request: Request, authorization: Optional[str] = Header(default=None)):
+        """An approver retires their own key (a lost or replaced device): from
+        now on grants under it are refused here and at every middleware that
+        asks this service for approver keys. Revoking someone else is the
+        operator's act, done on the host with `gargoyle approvers revoke`,
+        so that one compromised approver cannot remove the others."""
+        who = authenticate(authorization)
+        try:
+            body = await request.json()
+        except Exception:
+            raise _refuse(400, REF_ISSUER_BAD_REQUEST)
+        upn = body.get("upn") if isinstance(body, dict) else None
+        if not isinstance(upn, str) or not upn:
+            raise _refuse(400, REF_ISSUER_BAD_REQUEST)
+        if upn != who["principal"]:
+            raise _refuse(403, REF_ISSUER_FORBIDDEN)
+        gone = registry.revoke(upn, revoked_by=who["principal"], now=now())
+        if gone:
+            event("revoked", approver=upn, by=who["principal"])
+        return {"revoked": gone}
+
     @app.get("/me")
     async def me(authorization: Optional[str] = Header(default=None)):
         """Who the console is signed in as, whether they may approve, and

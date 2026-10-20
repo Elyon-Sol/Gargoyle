@@ -250,7 +250,14 @@ the page shows each held call with its full arguments, checked against
 the receipt, and signs the grant locally with WebCrypto. The key never
 leaves the browser, and with Entra it is generated there, non-exportable,
 and enrolled under the approver's UPN, so grants and audits name the
-person. Then paste the server entry from
+person. An approver retires a lost or replaced key with
+`POST /approvers/revoke` from their own sign-in; the operator revokes
+anyone with `gargoyle approvers revoke <upn>` on the issuer's host, and
+the running service picks the change up without a restart. Revoked keys
+stay on file so earlier grants still audit; new ones are refused at the
+issuer and at every middleware on its next held call. Approvers, and
+only approvers, see the whole queue and the witness; everyone else sees
+their own holds. Then paste the server entry from
 `gargoyle-deploy/mcp-config.json` into your MCP client.
 [docs/guide-hyperv-ubuntu-apache.md](docs/guide-hyperv-ubuntu-apache.md)
 is the full single-instance build: Ubuntu VM on Hyper-V, Apache with TLS,
@@ -340,7 +347,8 @@ cannot attach receipts work unchanged. Configuration is by environment:
 | issuer `GARGOYLE_ISSUER_AUDIENCE` | the `aud` an identity token must carry; a comma-separated list accepts several, so init-minted tokens (`gargoyle-issuer`) and a tenant's tokens (the issuer app's client id) work side by side |
 | `GARGOYLE_MCP_ENTRA_TENANT`, `_CLIENT_ID`, `_SCOPE`, `_TOKEN_CACHE` | instead of a fixed client token: the user's own Entra ID token, written by `gargoyle login` (device code, MSAL cache, silent refresh); the principal is their UPN. No usable token refuses `REF_TARGET_LOGIN_REQUIRED` |
 | issuer `GARGOYLE_ENTRA_CLIENT_ID`, `GARGOYLE_ENTRA_SCOPE` | lets the console sign approvers in with Entra (code flow with PKCE, no library); the browser generates a non-exportable key and enrolls it under the UPN |
-| issuer `GARGOYLE_APPROVERS_PATH`, `GARGOYLE_APPROVER_ROLE`, `GARGOYLE_APPROVER_GROUPS` | where enrolled approvers persist (default `approvers.json` beside the keys) and which Entra app role (default `Approver`) or groups may enroll |
+| issuer `GARGOYLE_APPROVERS_PATH`, `GARGOYLE_APPROVER_ROLE`, `GARGOYLE_APPROVER_GROUPS` | where enrolled approvers persist (default `approvers.json` beside the keys, with a `revoked` list; `gargoyle approvers list|revoke`) and which Entra app role (default `Approver`) or groups may enroll, see every hold and the witness |
+| issuer `GARGOYLE_ENTRA_TENANT` + `GARGOYLE_ISSUER_AUDIENCE` | trust the tenant's tokens; the audience is required with a tenant (the service will not start without it), and a directory token for any other tenant is `REF_IDENTITY_WRONG_TENANT` |
 | issuer `GARGOYLE_HOLDS_PATH` | SQLite file for holds, grants, declines and plans, so a restart loses nothing a person is acting on (`gargoyle issuer` sets `holds.sqlite` beside the keys); `GET /health` reports it |
 | issuer `GARGOYLE_WITNESS_PATH` | the issuer's signed, hash-chained record of every decision (`gargoyle issuer` sets `witness.jsonl` beside the keys); `gargoyle audit --witness` reconciles a client's evidence against it, `--check-tree DIR` finds files changed outside the gate |
 | issuer `GARGOYLE_LOG_JSON` | one JSON line per decision on stderr: issued, refused, granted, declined, plan, enrolled |

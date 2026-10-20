@@ -389,7 +389,12 @@ is unchanged: an enrolled key is never the issuer's key, and the private
 half is generated and held in the approver's browser. An enrollment
 without the role is `REF_ISSUER_NOT_AN_APPROVER`. The enrollment record
 keeps the directory's immutable object id and tenant id beside the UPN
-when the token carried them.
+when the token carried them. An approver may revoke their own key
+(`POST /approvers/revoke`); the operator revokes any approver on the
+service's host. A revoked key leaves the published map at once, so new
+grants under it are refused by the service and by every consumer that
+takes approver keys from it, and stays on file, marked with when and by
+whom, so evidence from before the revocation still verifies.
 
 What the service shows is scoped by the same notion of approver (the role
 or group in the token, a configured approver key id, or an enrolled UPN):

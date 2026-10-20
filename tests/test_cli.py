@@ -119,3 +119,19 @@ def test_init_for_a_windows_client_and_audit_log_verification(tmp_path, monkeypa
     assert main(["audit", "--log", str(log), "--out", str(out)]) == 1
     out_text = capsys.readouterr().out
     assert "1 failed" in out_text and "REF_EVIDENCE_HASH_MISMATCH" in out_text
+
+
+def test_approvers_list_and_revoke_on_the_issuer_host(tmp_path, capsys):
+    from gargoyle.approvers import ApproverRegistry
+    out = tmp_path / "deploy"; out.mkdir()
+    reg = ApproverRegistry(str(out / "approvers.json"))
+    reg.enroll("dana@contoso.com", "ab" * 32, oid="11111111-2222-3333-4444-555555555555")
+    assert main(["approvers", "list", "--out", str(out)]) == 0
+    assert "dana@contoso.com" in capsys.readouterr().out
+    assert main(["approvers", "revoke", "nobody@contoso.com", "--out", str(out)]) == 1
+    assert main(["approvers", "revoke", "dana@contoso.com", "--out", str(out)]) == 0
+    assert "revoked dana@contoso.com" in capsys.readouterr().out
+    doc = json.loads((out / "approvers.json").read_text())
+    assert doc["approvers"] == {} and doc["revoked"]["dana@contoso.com"]["revoked_by"].startswith("operator:")
+    assert main(["approvers", "list", "--out", str(out)]) == 0
+    assert "revoked: dana@contoso.com" in capsys.readouterr().out

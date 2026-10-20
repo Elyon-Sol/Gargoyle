@@ -118,3 +118,54 @@ def test_enrollment_keeps_the_directory_ids_beside_the_upn(tmp_path):
     import json
     entry = json.loads((tmp_path / "a.json").read_text())["approvers"]["dana@contoso.com"]
     assert entry["oid"] == "11111111-2222-3333-4444-555555555555" and entry["tid"] == "0a1b2c3d-4e5f-6071-8293-a4b5c6d7e8f9"
+
+
+def test_a_revoked_approver_is_refused_at_once_and_still_verifies_in_the_past(tmp_path):
+    """Revocation moves the key out of trust for new grants (issuer and
+    middleware) and into the revoked list, where an audit of earlier
+    evidence still finds it. An approver may revoke only their own key here;
+    the operator revokes anyone on the host."""
+    from gargoyle.approval import REF_APPROVAL_KEY_UNKNOWN
+    from gargoyle.issuer_service import REF_ISSUER_FORBIDDEN
+    from gargoyle.mcp_server import IssuerClient
+    c, reg = _app(tmp_path, policy=Hold(1, ("dana@contoso.com",)))
+    dana = Ed25519PrivateKey.generate()
+    h = lambda t: {"Authorization": "Bearer " + t}
+    assert c.post("/approvers/enroll", json={"public_key_hex": pub_hex(dana)}, headers=h(token("dana@contoso.com", roles=["Approver"]))).json()["enrolled"]
+    agent = token("agent@contoso.com")
+    env = c.post("/issue", json={"target_url": TARGET, "tool": "transfer_funds", "args": {"amount": 5}}, headers=h(agent)).json()["envelope"]
+    g = sign_grant(build_grant(decision_sha256=env["decision_sha256"], approval_request_id=env["approval_request_id"], grant_id="g-1",
+                               not_after=datetime.now(timezone.utc) + timedelta(minutes=5)), dana, "dana@contoso.com")
+    # Someone else cannot revoke Dana; Dana can.
+    r = c.post("/approvers/revoke", json={"upn": "dana@contoso.com"}, headers=h(token("lee@contoso.com", roles=["Approver"])))
+    assert r.status_code == 403 and r.json()["detail"]["reason"] == REF_ISSUER_FORBIDDEN
+    assert c.post("/approvers/revoke", json={"upn": "dana@contoso.com"}, headers=h(token("dana@contoso.com", roles=["Approver"]))).json() == {"revoked": True}
+    assert c.post("/approvers/revoke", json={"upn": "dana@contoso.com"}, headers=h(token("dana@contoso.com", roles=["Approver"]))).json() == {"revoked": False}
+    assert c.get("/approvers").json()["approvers"] == {}
+    assert c.post("/grants", json=g, headers=h(agent)).json()["reason"] in (REF_APPROVAL_KEY_UNKNOWN, "REF_ISSUER_NO_APPROVER_TRUST")
+
+    class Shim:
+        def post(self, url, json=None, headers=None, timeout=None): return c.post(url.replace("http://i", ""), json=json, headers=headers)
+        def get(self, url, headers=None, timeout=None): return c.get(url.replace("http://i", ""), headers=headers)
+    assert IssuerClient("http://i", agent, http=Shim()).approver_keys() == {}
+    doc = json.loads((tmp_path / "approvers.json").read_text())
+    assert "dana@contoso.com" not in doc["approvers"] and doc["revoked"]["dana@contoso.com"]["public_key_hex"] == pub_hex(dana)
+    assert doc["revoked"]["dana@contoso.com"]["revoked_by"] == "dana@contoso.com"
+    # Enrolling again is a fresh key, and the revoked record goes.
+    dana2 = Ed25519PrivateKey.generate()
+    assert c.post("/approvers/enroll", json={"public_key_hex": pub_hex(dana2)}, headers=h(token("dana@contoso.com", roles=["Approver"]))).json()["enrolled"]
+    assert reg.revoked_hex() == {} and reg.public_hex() == {"dana@contoso.com": pub_hex(dana2)}
+
+
+def test_the_registry_picks_up_a_file_another_process_wrote(tmp_path):
+    """`gargoyle approvers revoke` edits the file on the issuer's host; the
+    running service sees the change without a restart."""
+    import os, time
+    path = tmp_path / "a.json"
+    live = ApproverRegistry(str(path))
+    key = Ed25519PrivateKey.generate()
+    live.enroll("dana@contoso.com", pub_hex(key))
+    operator = ApproverRegistry(str(path))                 # another process
+    assert operator.revoke("dana@contoso.com", revoked_by="operator:root")
+    os.utime(path, (time.time() + 2, time.time() + 2))     # make the change visible even on a coarse filesystem clock
+    assert "dana@contoso.com" not in live and live.public_hex() == {} and live.revoked_hex() == {"dana@contoso.com": pub_hex(key)}
