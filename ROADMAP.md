@@ -92,6 +92,13 @@ verifying itself for no external user; that is the failure mode to avoid.
   hold and the receipt, with a link to /approve from GARGOYLE_APPROVE_URL); posted in
   a thread, failures logged and ignored, the grant still only from the approver's
   key. 80 lines. All six roadmap steps are done.
+- 0.16 live (2026-10-20): the Windows client on 0.16.0.dev0 against the VM issuer on the
+  same code. A free read, then a held write to notes.md; the approver's console, now an
+  approvers-only queue, showed the card and the enrolled approver released it; the
+  middleware fetched the approver map and ran the write. The witness carries the
+  requester's object id on both issued entries and verifies as one chain across the
+  restart (14 entries). Scoping, tenant binding and the role-bearing approver path
+  all held on real identities.
 - First outside review (2026-10-20): a language model with access to the public
   repository (a Claude model, so one that shares blind spots with the co-author) ran
   both suites, matched the PyPI sdist and wheel to the tag, and read the issuer,
