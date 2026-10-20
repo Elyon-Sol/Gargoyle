@@ -10,12 +10,20 @@ GoDaddy (160.153.0.167) behind Cloudflare:
                   banner and the retirement timeline
 
 The host is GoDaddy managed WordPress: nginx, no .htaccess, a root-owned
-index.php that answers the site root. Static files in /html are served as
-themselves, so the pages are plain uploads; the root is handed to
-index.html by a must-use plugin, wp-content/mu-plugins/zz-gargoyle-static-root.php
-(copy in this folder as zz-gargoyle-static-root.php), which serves
-/html/index.html for GET or HEAD of "/" or "/index.php" and nothing else.
-Delete that file to give the root back to WordPress.
+index.php that answers the site root, and a gateway page cache in front of
+everything with a 31-day lifetime. The platform's cache ban refreshes
+responses that went through PHP but not static files, so the pages are
+served through a must-use plugin, wp-content/mu-plugins/zz-gargoyle-static-root.php
+(copy in this folder), which maps GET or HEAD of these paths to the files:
+
+    /            index.html
+    /report      report.html
+    /elyon-sol   elyon-sol.html
+
+and leaves every other path to WordPress. Links between the pages use
+those routes, never the .html names: the gateway cached the .html URLs on
+first upload and will not let go of them. Delete the plugin file to give
+the root back to WordPress.
 
 Publishing, from a machine with the SFTP credentials (GoDaddy: Managed
 WordPress > Settings > SFTP/SSH; user and password change on each rotation):
@@ -25,11 +33,11 @@ WordPress > Settings > SFTP/SSH; user and password change on each rotation):
 which uploads the three pages and the plugin, prints their hashes on the
 host, and runs platform-cache-ban.php through wp-cli. That last step
 matters: GoDaddy keeps a page cache in front of the origin with a 31-day
-lifetime, and `wp cache flush` does not touch it. Then purge the Cloudflare
-cache for the zone (Caching > Configuration > Purge Everything) and check
-https://elyon-sol.io/ shows the title "Gargoyle - receipts and holds for
-agent tool calls". Links between the pages point at "/" rather than
-index.html by name, because the file URL was cached as the old site.
+lifetime, and `wp cache flush` does not touch it. The "cloudflare" server
+header on responses is GoDaddy's gateway, not a Cloudflare zone of ours;
+there is nothing to purge elsewhere. Check that https://elyon-sol.io/,
+/report and /elyon-sol match the files, for instance with
+`curl -s https://elyon-sol.io/report | sha256sum` against the local file.
 First publish: 2026-10-20.
 
 Open slot: a screenshot of the approval console with a held write's diff

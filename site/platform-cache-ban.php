@@ -7,8 +7,8 @@ add_action('shutdown', function () {
     if (!$c) { fwrite(STDERR, "no platform cache class; nothing flushed\n"); return; }
     $r = $c->ban();
     fwrite(STDERR, "platform cache ban: " . ($r ? "sent" : "refused (throttled or disabled)") . "\n");
-    foreach (array('/', '/index.html', '/report.html', '/elyon-sol.html') as $p) {
+    foreach (array('/', '/report', '/elyon-sol') as $p) {
         $c->purge(array(home_url($p)));
     }
-    fwrite(STDERR, "purge sent for the root and the three pages\n");
+    fwrite(STDERR, "purge sent for /, /report and /elyon-sol\n");
 }, 1);
