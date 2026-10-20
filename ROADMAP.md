@@ -116,6 +116,12 @@ verifying itself for no external user; that is the failure mode to avoid.
   never enrolled again (REF_ISSUER_KEY_REVOKED, witnessed as enroll_refused), the console
   generates a fresh key on that answer, and the revoked record stays on file when a new
   key enrolls so earlier grants still audit.
+  Re-run on the fixed code the same evening, all of it witnessed and the witness verified
+  as one chain of 30 entries: operator revocation (entry 24, by operator:vboxuser), a
+  release attempt with the revoked key refused REF_APPROVAL_KEY_UNKNOWN (27), the
+  stored key refused re-enrollment REF_ISSUER_KEY_REVOKED (28), a fresh key enrolled
+  the same second (29), and the release under it (30). Both pre-pilot items are done;
+  the next step is the first client enrollment.
 - 0.16 live (2026-10-20): the Windows client on 0.16.0.dev0 against the VM issuer on the
   same code. A free read, then a held write to notes.md; the approver's console, now an
   approvers-only queue, showed the card and the enrolled approver released it; the
