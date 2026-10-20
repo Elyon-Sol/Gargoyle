@@ -39,7 +39,7 @@ export function signGrant(grant: Grant, signingKey: KeyObject, keyId: string): G
 }
 
 export function verifyGrant(grant: unknown, opts: {
-  expectedDecisionSha256: string; expectedApprovalRequestId: string; approverPublicKeys: KeyMap;
+  expectedDecisionSha256: string; expectedApprovalRequestId: string; approverPublicKeys: KeyMap | Record<string, KeyObject | KeyObject[]>;
   gateKeyId: string | null | undefined; now?: Date; clockSkewMs?: number;
 }): Verdict {
   if (typeof grant !== "object" || grant === null || Array.isArray(grant)) return reject(REF_APPROVAL_MALFORMED);
@@ -49,10 +49,13 @@ export function verifyGrant(grant: unknown, opts: {
   const keyId = g.approver_key_id, sig = g.approver_signature;
   if (typeof keyId !== "string" || typeof sig !== "string") return reject(REF_APPROVAL_SIGNATURE_INVALID);
   if (keyId === opts.gateKeyId) return reject(REF_APPROVAL_SOD);
-  const key = opts.approverPublicKeys[keyId];
-  if (!key) return reject(REF_APPROVAL_KEY_UNKNOWN);
+  // Several keys for one approver id (an audit of grants from before the approver's
+  // browser key was replaced or revoked): the signature is valid if any verifies it.
+  const found = (opts.approverPublicKeys as Record<string, KeyObject | KeyObject[]>)[keyId];
+  const keys = Array.isArray(found) ? found : found ? [found] : [];
+  if (keys.length === 0) return reject(REF_APPROVAL_KEY_UNKNOWN);
   const region: Grant = {}; for (const [k, v] of Object.entries(g)) if (k !== "approver_signature") region[k] = v;
-  if (!verifyHex(key, canonicalJson(region), sig)) return reject(REF_APPROVAL_SIGNATURE_INVALID);
+  if (!keys.some((key) => verifyHex(key, canonicalJson(region), sig))) return reject(REF_APPROVAL_SIGNATURE_INVALID);
   if (g.decision_sha256 !== opts.expectedDecisionSha256) return reject(REF_APPROVAL_BINDING_MISMATCH);
   if (g.approval_request_id !== opts.expectedApprovalRequestId) return reject(REF_APPROVAL_REQUEST_MISMATCH);
   if (g.not_after === null || g.not_after === undefined) return reject(REF_APPROVAL_EXPIRED);

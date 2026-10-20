@@ -26,7 +26,7 @@ import stat
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import List, Any, Dict, Optional
 
 ENV_APPROVERS_PATH = "GARGOYLE_APPROVERS_PATH"
 ENV_APPROVER_ROLE = "GARGOYLE_APPROVER_ROLE"        # Entra app role an enrolling token must carry (default Approver)
@@ -53,6 +53,7 @@ class ApproverRegistry:
         self._lock = threading.Lock()
         self._approvers: Dict[str, Dict[str, Any]] = {}
         self._revoked: Dict[str, Dict[str, Any]] = {}      # former approvers, kept so old grants still verify in audits
+        self._history: Dict[str, List[Dict[str, Any]]] = {}  # every key each UPN held and how it ended (replaced, revoked)
         self._mtime: Optional[float] = None
         self._load()
 
@@ -67,7 +68,16 @@ class ApproverRegistry:
         for upn, entry in (doc.get("revoked") or {}).items():
             if isinstance(entry, dict) and valid_public_key_hex(entry.get("public_key_hex")):
                 revoked[upn] = dict(entry)
-        self._approvers, self._revoked = approvers, revoked
+        history: Dict[str, List[Dict[str, Any]]] = {}
+        for upn, items in (doc.get("history") or {}).items():
+            if isinstance(items, list):
+                history[upn] = [dict(h) for h in items if isinstance(h, dict) and valid_public_key_hex(h.get("public_key_hex"))]
+        for upn, e in revoked.items():
+            # A file from before history existed: its revoked record is the one former key known.
+            if not any(h.get("public_key_hex") == e["public_key_hex"] for h in history.get(upn, [])):
+                history.setdefault(upn, []).append({**{k: v for k, v in e.items() if k not in ("revoked_at", "revoked_by")},
+                                                    "ended_at": e.get("revoked_at"), "ended_by": e.get("revoked_by"), "reason": "revoked"})
+        self._approvers, self._revoked, self._history = approvers, revoked, history
         self._mtime = self.path.stat().st_mtime
 
     def _refresh(self) -> None:
@@ -89,6 +99,8 @@ class ApproverRegistry:
         doc = {"approvers": self._approvers}
         if self._revoked:
             doc["revoked"] = self._revoked
+        if self._history:
+            doc["history"] = self._history
         self.path.write_text(json.dumps(doc, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         try:
             os.chmod(self.path, stat.S_IRUSR | stat.S_IWUSR)
@@ -120,12 +132,44 @@ class ApproverRegistry:
             entry["tid"] = tid
         with self._lock:
             self._refresh()
-            if any(e.get("public_key_hex") == public_key_hex for e in self._revoked.values()):
+            if public_key_hex in self._revoked_keys():
                 raise RevokedKeyError("that key was revoked; enroll a new one")
             replaced = upn in self._approvers
+            if replaced and self._approvers[upn].get("public_key_hex") != public_key_hex:
+                # The superseded key is kept: grants signed under it still audit.
+                self._remember(upn, self._approvers[upn], "replaced", enrolled_by or upn, now)
             self._approvers[upn] = entry
             self._save()
         return {"upn": upn, "replaced": replaced, **entry}
+
+    def _remember(self, upn: str, entry: Dict[str, Any], reason: str, ended_by: str, now: Optional[datetime]) -> None:
+        hist = self._history.setdefault(upn, [])
+        if not any(h.get("public_key_hex") == entry.get("public_key_hex") for h in hist):
+            hist.append({**{k: v for k, v in entry.items() if k not in ("revoked_at", "revoked_by")},
+                         "ended_at": (now or datetime.now(timezone.utc)).isoformat(), "ended_by": ended_by, "reason": reason})
+
+    def _revoked_keys(self) -> set:
+        """Every public key ever revoked, under any UPN: none may enroll again."""
+        return ({e.get("public_key_hex") for e in self._revoked.values()}
+                | {h.get("public_key_hex") for hist in self._history.values() for h in hist if h.get("reason") == "revoked"})
+
+    def audit_keys_hex(self) -> Dict[str, List[str]]:
+        """{upn: [public_key_hex, ...]}: the current key first, then every key
+        the UPN held before. An audit verifies a grant with any of them; the
+        live service and middleware trust only the current one."""
+        with self._lock:
+            self._refresh()
+            out: Dict[str, List[str]] = {}
+            for upn, e in self._approvers.items():
+                out[upn] = [e["public_key_hex"]]
+            for upn, hist in self._history.items():
+                for h in hist:
+                    if h["public_key_hex"] not in out.setdefault(upn, []):
+                        out[upn].append(h["public_key_hex"])
+            for upn, e in self._revoked.items():
+                if e["public_key_hex"] not in out.setdefault(upn, []):
+                    out[upn].append(e["public_key_hex"])
+            return out
 
     def revoke(self, upn: str, *, revoked_by: Optional[str] = None, now: Optional[datetime] = None) -> bool:
         """Stop trusting `upn`'s key from now on. The entry moves to the
@@ -139,6 +183,7 @@ class ApproverRegistry:
                 return False
             self._revoked[upn] = {**entry, "revoked_at": (now or datetime.now(timezone.utc)).isoformat(),
                                   "revoked_by": revoked_by or upn}
+            self._remember(upn, entry, "revoked", revoked_by or upn, now)
             self._save()
         return True
 

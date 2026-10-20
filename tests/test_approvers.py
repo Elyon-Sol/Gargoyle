@@ -204,3 +204,39 @@ def test_an_operators_revocation_on_the_host_reaches_the_witness(tmp_path):
     c.get("/approvers")
     revoked = [e for e in events if e["event"] == "revoked"]
     assert [(e["approver"], e["by"]) for e in revoked] == [("dana@contoso.com", "operator:root"), ("lee@contoso.com", "lee@contoso.com")]
+
+
+def test_every_key_an_approver_held_stays_for_audits(tmp_path):
+    """The client audit of 2026-10-20 failed a row released under a key that a
+    later browser enrollment had replaced: the registry had dropped it. Now
+    every key a UPN held is kept (history: replaced or revoked, when, by whom),
+    the audit map carries them all, and a grant verifies with any of them."""
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+    from gargoyle.approval import ACCEPT_GRANT_VALID, build_grant, sign_grant, verify_grant
+    from gargoyle.approvers import RevokedKeyError
+    path = tmp_path / "a.json"
+    reg = ApproverRegistry(str(path))
+    k1, k2, k3 = (Ed25519PrivateKey.generate() for _ in range(3))
+    reg.enroll("dana@contoso.com", pub_hex(k1))
+    assert reg.enroll("dana@contoso.com", pub_hex(k2))["replaced"] is True            # a new browser
+    assert reg.revoke("dana@contoso.com", revoked_by="operator:root")
+    reg.enroll("dana@contoso.com", pub_hex(k3))
+    assert reg.audit_keys_hex() == {"dana@contoso.com": [pub_hex(k3), pub_hex(k1), pub_hex(k2)]}
+    doc = json.loads(path.read_text())
+    assert [(h["reason"], h["ended_by"]) for h in doc["history"]["dana@contoso.com"]] == [("replaced", "dana@contoso.com"), ("revoked", "operator:root")]
+    now = datetime.now(timezone.utc)
+    keys = {u: [Ed25519PublicKey.from_public_bytes(bytes.fromhex(x)) for x in hs] for u, hs in reg.audit_keys_hex().items()}
+    for k in (k1, k2, k3):
+        g = sign_grant(build_grant(decision_sha256="a" * 64, approval_request_id="r", grant_id="g", not_after=now + timedelta(minutes=5)), k, "dana@contoso.com")
+        v = verify_grant(g, expected_decision_sha256="a" * 64, expected_approval_request_id="r", approver_public_keys=keys, gate_key_id="issuer-1", now=now)
+        assert v["accepted"] is True and v["reason"] == ACCEPT_GRANT_VALID
+    stranger = sign_grant(build_grant(decision_sha256="a" * 64, approval_request_id="r", grant_id="g", not_after=now + timedelta(minutes=5)),
+                          Ed25519PrivateKey.generate(), "dana@contoso.com")
+    assert verify_grant(stranger, expected_decision_sha256="a" * 64, expected_approval_request_id="r", approver_public_keys=keys, gate_key_id="issuer-1", now=now)["accepted"] is False
+    # The revoked key k2 is refused for anyone, from history, even after Dana's revoked record is gone.
+    with pytest.raises(RevokedKeyError):
+        reg.enroll("lee@contoso.com", pub_hex(k2))
+    # A file from before history existed: its revoked record seeds the history.
+    old = tmp_path / "old.json"
+    old.write_text(json.dumps({"approvers": {}, "revoked": {"x@contoso.com": {"public_key_hex": pub_hex(k1), "revoked_at": "t", "revoked_by": "b"}}}))
+    assert ApproverRegistry(str(old)).audit_keys_hex() == {"x@contoso.com": [pub_hex(k1)]}

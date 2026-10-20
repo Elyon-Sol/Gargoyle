@@ -345,7 +345,9 @@ consumer that finds `requires_approval` true:
 2. refuses `REF_TARGET_NO_APPROVER_TRUST` if it trusts no approver key. The
    approver map comes from the key record's `approver`-role keys when a key
    record is in use (unrevoked, in window, and never the issuer's key id),
-   else from a pinned approver map;
+   else from a pinned approver map. A map may hold several keys for one
+   approver id (an audit of grants from before the approver's key was
+   replaced or revoked); the signature verifies when any of them verifies it;
 3. runs `verify_grants` (section 8.0) against the receipt's own terms,
    refusing with its reason;
 4. claims every counted grant's `grant_id` in the replay store under its
@@ -404,8 +406,11 @@ service's own as it happens, an operator's when the service next reads
 the file (`revoked`, with who and when). A revoked public key is never
 enrolled again, by anyone: the enrollment is `REF_ISSUER_KEY_REVOKED`
 (and an `enroll_refused` witness entry), and the reference console then
-generates a new key. The revoked record stays when a fresh key enrolls,
-so grants signed under the old key still audit.
+generates a new key. The registry keeps every key an approver held
+(`history`, with when and why it ended: replaced or revoked), and
+`gargoyle audit` gives the verifier all of them for that UPN, so grants
+signed under an earlier key still audit while the service and the
+middleware trust only the current one.
 
 What the service shows is scoped by the same notion of approver (the role
 or group in the token, a configured approver key id, or an enrolled UPN):

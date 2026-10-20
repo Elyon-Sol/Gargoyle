@@ -120,8 +120,16 @@ verifying itself for no external user; that is the failure mode to avoid.
   as one chain of 30 entries: operator revocation (entry 24, by operator:vboxuser), a
   release attempt with the revoked key refused REF_APPROVAL_KEY_UNKNOWN (27), the
   stored key refused re-enrollment REF_ISSUER_KEY_REVOKED (28), a fresh key enrolled
-  the same second (29), and the release under it (30). Both pre-pilot items are done;
-  the next step is the first client enrollment.
+  the same second (29), and the release under it (30). The client's audit of the day
+  (55 rows) then failed row 55, the write released under the fresh key: the client's
+  copy of approvers.json still had the key of 2026-10-19, and the VM's file no longer
+  had it at all, because a replacement dropped the old key. 0.16.3.dev0: the registry
+  keeps every key a UPN held (`history`, replaced or revoked, when, by whom), the audit
+  gives the verifier all of them, and a grant verifies with any key of its approver id
+  (Python and TypeScript); the live service and middleware still trust only the
+  current key. The lost key of 2026-10-19 was restored to the VM's history from the
+  handoff copy. Both pre-pilot items are done; the next step is the first client
+  enrollment.
 - 0.16 live (2026-10-20): the Windows client on 0.16.0.dev0 against the VM issuer on the
   same code. A free read, then a held write to notes.md; the approver's console, now an
   approvers-only queue, showed the card and the enrolled approver released it; the

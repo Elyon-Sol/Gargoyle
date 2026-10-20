@@ -39,6 +39,7 @@ the response metadata; `gargoyle audit` verifies them later, offline.
 
 import argparse
 import json
+from typing import Any, Dict
 import os
 import re
 import stat
@@ -364,15 +365,17 @@ def cmd_audit(args) -> int:
     from gargoyle.execution import verify_chain
 
     keys = json.loads((Path(args.out).resolve() / "public-keys.json").read_text())
-    load = lambda m: {k: Ed25519PublicKey.from_public_bytes(bytes.fromhex(v)) for k, v in m.items()}
-    approvers = dict(keys["approver"])
+    one = lambda h: Ed25519PublicKey.from_public_bytes(bytes.fromhex(h))
+    load = lambda m: {k: ([one(x) for x in v] if isinstance(v, list) else one(v)) for k, v in m.items()}
+    approvers: Dict[str, Any] = dict(keys["approver"])
     enrolled = Path(args.out).resolve() / "approvers.json"          # approvers who enrolled through Entra, by UPN
     if enrolled.exists():
-        doc = json.loads(enrolled.read_text())
-        # Revoked approvers too: the audit verifies what was signed while they
-        # were trusted. Only the live service and middleware refuse them.
-        approvers.update({u: e["public_key_hex"] for u, e in doc.get("revoked", {}).items()})
-        approvers.update({u: e["public_key_hex"] for u, e in doc.get("approvers", {}).items()})
+        from gargoyle.approvers import ApproverRegistry
+        # Every key each approver ever held, current first: grants signed
+        # under a key since replaced in the browser or revoked still have to
+        # verify. Only the live service and middleware are limited to the
+        # current key. Copy the issuer's file beside the evidence first.
+        approvers.update(ApproverRegistry(str(enrolled)).audit_keys_hex())
     trust = dict(issuer_public_keys=load(keys["issuer"]), executor_public_keys=load(keys["executor"]),
                  approver_public_keys=load(approvers))
     if args.log:

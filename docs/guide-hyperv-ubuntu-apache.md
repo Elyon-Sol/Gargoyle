@@ -486,7 +486,10 @@ gargoyle audit --log C:\gargoyle\audit.jsonl --out C:\gargoyle
 An edited, removed or inserted line prints `FAIL` with the reason at the
 point the chain breaks. Two further checks close the gap between "what
 the workstation says" and "what happened". Copy the issuer's
-`witness.jsonl` from the VM beside the client's files and run:
+`witness.jsonl` and its current `approvers.json` from the VM beside the
+client's files (the audit needs every key the approvers ever held, and the
+client's copy goes stale each time an approver's browser key is replaced)
+and run:
 
 ```powershell
 python -m gargoyle.cli audit --log C:\gargoyle\audit.jsonl --out C:\gargoyle --witness C:\gargoyle\witness.jsonl --check-tree C:\gargoyle-poc\project

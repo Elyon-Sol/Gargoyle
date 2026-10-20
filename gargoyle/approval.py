@@ -32,6 +32,21 @@ _SIGNATURE_EXCLUDED_KEYS = ("approver_signature",)
 
 # Refusal codes.
 REF_APPROVAL_MALFORMED = "REF_APPROVAL_MALFORMED"
+
+
+class _AnyOf:
+    """A verifying key made of several: the signature is valid if any verifies it."""
+    def __init__(self, keys: list) -> None:
+        self.keys = keys
+
+    def verify(self, signature: bytes, message: bytes) -> None:
+        for key in self.keys[:-1]:
+            try:
+                key.verify(signature, message)
+                return
+            except Exception:
+                continue
+        self.keys[-1].verify(signature, message)
 REF_APPROVAL_MISSING_GRANT_ID = "REF_APPROVAL_MISSING_GRANT_ID"
 REF_APPROVAL_SIGNATURE_INVALID = "REF_APPROVAL_SIGNATURE_INVALID"
 REF_APPROVAL_KEY_UNKNOWN = "REF_APPROVAL_KEY_UNKNOWN"
@@ -178,6 +193,10 @@ def verify_grant(
 
     # 4. known approver key
     public_key = approver_public_keys.get(key_id)
+    if isinstance(public_key, (list, tuple)):
+        # Several keys for one approver id: an audit of grants from before the
+        # approver's browser key was replaced or revoked. Any of them may verify.
+        public_key = _AnyOf(list(public_key)) if public_key else None
     if public_key is None:
         return _reject(REF_APPROVAL_KEY_UNKNOWN)
 
