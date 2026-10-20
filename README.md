@@ -241,7 +241,8 @@ chat channel can approve anything.
     pip install gargoyle-receipts
 
 Three commands, no policy engine, no containers, no client changes
-(`--observe` starts a deployment in record-only mode; `gargoyle audit
+(`--observe` starts a deployment in record-only mode, every call allowed
+including destructive ones and every call recorded; `gargoyle audit
 --summary` then shows calls by principal and tool, the input for the
 hold and deny rules):
 

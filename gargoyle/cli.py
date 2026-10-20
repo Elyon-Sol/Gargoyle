@@ -52,7 +52,7 @@ from pathlib import Path
 PRINCIPAL = "spiffe://gargoyle.local/agents/assistant"
 
 OBSERVE_RULES = {
-    # Observe mode: every call allowed, every call recorded, none held. The
+    # Observe mode: every call allowed (deletes too), every call recorded, none held. The
     # first week of a deployment, so the hold and deny rules are written
     # from the audit rather than guessed. The policy pin changes when the
     # rules do, so switching modes means restarting the issuer and copying
@@ -130,11 +130,20 @@ def cmd_init(args) -> int:
 
     rules = out / "rules.json"
     if args.observe:
-        if not rules.exists() or json.loads(rules.read_text()) == DEFAULT_RULES:
+        current = None
+        if rules.exists():
+            try:
+                current = json.loads(rules.read_text())
+            except ValueError as exc:
+                print("%s is not valid JSON (%s); fix or remove it before --observe" % (rules, exc), file=sys.stderr)
+                return 2
+        if current is None or current == DEFAULT_RULES:
             _write(rules, json.dumps(OBSERVE_RULES, indent=2) + "\n")
-        print("observe mode: rules.json allows every call; the gate records all of them and holds none. "
-              "Tighten rules.json from `gargoyle audit --summary`, then restart the issuer and copy the new "
-              "record.json to the clients.")
+        elif current != OBSERVE_RULES:
+            print("rules.json was edited by hand and is left as it is; --observe changed nothing", file=sys.stderr)
+        print("observe mode: rules.json allows every call, destructive ones included; the gate records all of "
+              "them and holds none. Tighten rules.json from `gargoyle audit --summary`, then restart the issuer "
+              "and copy the new record.json to the clients.")
     elif not rules.exists():
         _write(rules, json.dumps(DEFAULT_RULES, indent=2) + "\n")
     _write(out / "issuer.env", _env_lines({

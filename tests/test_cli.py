@@ -166,3 +166,8 @@ def test_init_observe_allows_everything_and_records_it(tmp_path, capsys):
     (out / "rules.json").write_text(json.dumps(custom))
     assert main(["init", str(tmp_path / "project"), "--out", str(out), "--observe"]) == 0
     assert json.loads((out / "rules.json").read_text()) == custom
+    assert "left as it is" in capsys.readouterr().err
+    # A broken rules file is refused, not overwritten and not a traceback.
+    (out / "rules.json").write_text("{not json")
+    assert main(["init", str(tmp_path / "project"), "--out", str(out), "--observe"]) == 2
+    assert (out / "rules.json").read_text() == "{not json"

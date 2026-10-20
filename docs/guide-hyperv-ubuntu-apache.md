@@ -323,8 +323,10 @@ ask. Run live on 2026-10-20 in Claude Desktop: no route, both options
 offered, nothing written.
 
 **4.4c Observe first.** `gargoyle init --observe DIR ...` writes a rules
-file that allows every call: the gate records all of them (receipt,
-evidence entry, witness entry) and holds none. Run a new client's first
+file that allows every call, destructive ones included: the gate records
+all of them (receipt, evidence entry, witness entry) and holds none, so
+the assistant can do in that week anything the upstream server lets it
+do. Use it on a target you can restore from backup. Run a new client's first
 week this way, then read `gargoyle audit --log ... --summary`, which
 prints calls by principal and tool with their outcomes, and write the
 hold and deny rules from what the assistants actually did rather than
