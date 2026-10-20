@@ -24,6 +24,25 @@ your MCP server and lets through only what both agreed to.
 Status: pre-release (`0.19.0.dev0`, on PyPI as `gargoyle-receipts`). The wire format is `gargoyle/3` and may
 still change before the first release; it is specified in [SPEC.md](SPEC.md).
 
+## How this was built
+
+Gargoyle is designed and operated by one person with an operations and
+security background and no software engineering background. The code,
+tests and most of the prose were written by an AI model (Anthropic's
+Claude) working under that person's direction: the design decisions,
+the threat judgments, the deployments and the choice of what to build,
+remove or publish are the author's; the implementation is the model's.
+
+Read that as a limit on assurance. Nobody who can read this code deeply
+has reviewed it independently of the model that wrote it. What stands
+outside that loop so far: two outside, model-driven security reviews
+(2026-10-20, ten findings, all fixed and recorded in ROADMAP.md); the
+EMILIA Protocol's own JavaScript and Python verifiers accepting a live
+Gargoyle export unmodified (docs/interop-emilia.md); the test suite and
+CI on Linux and Windows, which the model also wrote and so count for
+less. No human has reviewed the code. SECURITY.md says so and will
+until it is false. If you are that reviewer, open an issue.
+
 ## What a receipt gives you
 
 - **Binding.** A receipt for `transfer_funds` with `{"amount": 250}` is
