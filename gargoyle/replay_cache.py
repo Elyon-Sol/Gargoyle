@@ -100,6 +100,48 @@ class InMemoryReplayCache:
             return True
 
 
+class SqliteReplayCache:
+    """A replay cache that survives the process: claims live in a SQLite file
+    (the reference middleware keeps it beside the evidence log), so a gate
+    restarted, or started twice against the same log, still refuses a
+    receipt it already honored. One claim is one transaction: prune expired
+    rows, insert the id (the primary key refuses a second insert). Several
+    processes on one host may share the file; SQLite serializes them. A file
+    that cannot be opened or written raises, and the caller refuses."""
+
+    def __init__(self, path: str) -> None:
+        import sqlite3
+        self._conn = sqlite3.connect(path, check_same_thread=False, isolation_level=None, timeout=10)
+        self._conn.execute("PRAGMA journal_mode=WAL")
+        self._conn.execute("CREATE TABLE IF NOT EXISTS claims (id TEXT PRIMARY KEY, not_after REAL)")
+        self._lock = threading.Lock()
+
+    def check_and_claim(
+        self,
+        decision_id: str,
+        not_after: Optional[datetime],
+        *,
+        now: Optional[datetime] = None,
+    ) -> bool:
+        import sqlite3
+        current = _utcnow(now).timestamp()
+        expiry = not_after.timestamp() if not_after is not None else None
+        with self._lock:
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                self._conn.execute("DELETE FROM claims WHERE not_after IS NOT NULL AND not_after <= ?", (current,))
+                try:
+                    self._conn.execute("INSERT INTO claims (id, not_after) VALUES (?, ?)", (decision_id, expiry))
+                    claimed = True
+                except sqlite3.IntegrityError:
+                    claimed = False
+                self._conn.execute("COMMIT")
+            except Exception:
+                self._conn.execute("ROLLBACK")
+                raise
+        return claimed
+
+
 class ExternalStoreReplayCache:
     """Cross-process replay cache: delegates the atomic claim to a shared
     ReplayStore, so single use holds across every executor instance.

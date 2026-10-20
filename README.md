@@ -21,7 +21,7 @@ your MCP server and lets through only what both agreed to.
 
 [![PyPI](https://img.shields.io/pypi/v/gargoyle-receipts)](https://pypi.org/project/gargoyle-receipts/)
 
-Status: pre-release (`0.16.4.dev0`, on PyPI as `gargoyle-receipts`). The wire format is `gargoyle/3` and may
+Status: pre-release (`0.17.0.dev0`, on PyPI as `gargoyle-receipts`). The wire format is `gargoyle/3` and may
 still change before the first release; it is specified in [SPEC.md](SPEC.md).
 
 ## What a receipt gives you
@@ -265,7 +265,11 @@ stay on file so earlier grants still audit; new ones are refused at the
 issuer and at every middleware on its next held call. Revocation retires
 a key, not a person: while the Approver role stands, the person can sign
 in and enroll a fresh key, so remove the role too; the revoked key itself
-is never accepted again. Every key an approver held stays in the file
+is never accepted again. The role is what counts at release time: a
+grant under an enrolled key is accepted only from that account, under a
+token that carries the role now, so a role removed in the directory ends
+the power at once. One key per account: a second browser does not enroll
+until the first key consents or the operator revokes it. Every key an approver held stays in the file
 (`history`), so an audit of grants released under an earlier key still
 verifies: copy the issuer's current `approvers.json` beside the evidence
 before auditing. Approvers, and
@@ -372,7 +376,7 @@ cannot attach receipts work unchanged. Configuration is by environment:
 | `GARGOYLE_MCP_ADAPTER_SPEC` | with `GARGOYLE_MCP_STATE_PROBE=graph`: the tool-to-resource mapping JSON (default: the reference naming) |
 | `GARGOYLE_MCP_UPSTREAM_URL`, `GARGOYLE_MCP_UPSTREAM_TOKEN` | remote mode: the MCP server to front over Streamable HTTP, and its bearer |
 | `GARGOYLE_MCP_SNAPSHOT_DIR` | where the bytes a held, state-bound write replaces are kept (default `snapshots/` beside the audit log; `none` disables undo); the middleware then offers a `gargoyle_revert` tool that restores an approved change through the gate, held and state-bound like any write |
-| `GARGOYLE_MCP_AUDIT_LOG` | the evidence log: every decision, honored or refused, as one hash-chained JSON line with its receipt, grant and execution receipt; `gargoyle audit --log` verifies the file |
+| `GARGOYLE_MCP_AUDIT_LOG` | the evidence log: every decision, honored or refused, as one hash-chained JSON line with its receipt, grant and execution receipt; `gargoyle audit --log` verifies the file; the replay claims that make a receipt single-use live beside it in `<log stem>.replay.sqlite`, so a restarted gate still refuses a receipt it honored |
 
 **Issuing service** (`gargoyle.issuer_service`, run with uvicorn from
 `app_from_env()`): identity token in, receipt out, with the hold and grant
@@ -420,7 +424,7 @@ on it.
 | `mcp_server` | the stdio MCP middleware (and demo executor), with self-issue mode |
 | `fs_server` | a small Python filesystem MCP server, for clients without Node |
 | `issuer_service` | the HTTP issuing service: identity in, receipts out, holds and grants |
-| `replay_cache`, `pending_store` | single use for receipts and holds; in-memory or Redis |
+| `replay_cache`, `pending_store` | single use for receipts and holds; in memory, SQLite beside the audit log (the middleware's default) or Redis |
 | `approval`, `approver_cli`, `approver_trust` | grants, the human's tool, approver key trust |
 | `published_record_source` | the live policy pin as a publisher-signed record with serial and expiry |
 | `key_record_source` | root-signed issuer and approver keys with windows and revocation |

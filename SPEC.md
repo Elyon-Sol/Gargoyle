@@ -280,6 +280,14 @@ without failing step 2.
   executor process or replica must share one store (the reference
   `RedisReplayStore` uses `SET key 1 NX EX ttl`). A store that cannot
   answer is a refusal, never an action.
+- The store must outlive the executor process, or a restart (or a second
+  process on the same log) honors a captured receipt again inside its
+  lifetime. The reference middleware keeps its claims in a SQLite file
+  beside the evidence log (`SqliteReplayCache`, `<log>.replay.sqlite`)
+  unless given a shared store. Single use is also checked after the fact:
+  a decision id, or a plan step, honored twice in one evidence log fails
+  verification (`REF_EVIDENCE_REPLAY`, section 14) and reconciliation
+  reports it (`REPLAYED_RECEIPT`, section 15.2).
 
 Expiry bounds the useful life of a captured receipt or a leaked issuer key
 without anyone having to detect the leak; single use bounds it to one call.
@@ -391,7 +399,20 @@ weaker than a root-signed key record and appropriate where one
 administrator runs both the service and the tenant. Separation of duties
 is unchanged: an enrolled key is never the issuer's key, and the private
 half is generated and held in the approver's browser. An enrollment
-without the role is `REF_ISSUER_NOT_AN_APPROVER`. The enrollment record
+without the role is `REF_ISSUER_NOT_AN_APPROVER`. The role is checked
+again every time an enrolled key releases a hold: a grant under an
+enrolled key is accepted only when posted by that same account, under a
+token that carries the approver role or group now
+(`REF_ISSUER_NOT_AN_APPROVER` and a `grant_refused` entry otherwise), so
+removing the role in the directory ends the power at once, whatever key
+record remains; a configured (static) key is trusted by configuration and
+not held to this. A second key for an account that already has one
+enrolls only with the current key's consent, an Ed25519 signature by it
+over `"gargoyle-enroll/1\n" + <new public key hex>` sent as
+`supersede_signature`, or after the operator revoked the current key;
+otherwise the enrollment is `REF_ISSUER_KEY_ENROLLED` (with an
+`enroll_refused` entry), and a sign-in alone never swaps the key holds
+are released with. The enrollment record
 keeps the directory's immutable object id and tenant id beside the UPN
 when the token carried them. An approver may revoke their own key
 (`POST /approvers/revoke`); the operator revokes any approver on the
@@ -414,8 +435,9 @@ generates a new key. The registry keeps every key an approver held
 signed under an earlier key still audit while the service and the
 middleware trust only the current one.
 
-What the service shows is scoped by the same notion of approver (the role
-or group in the token, a configured approver key id, or an enrolled UPN):
+What the service shows is scoped by who is an approver today (the role
+or group in the token, or a configured approver key id; an enrolled key
+alone does not make one):
 an approver sees every hold with its arguments and the whole witness log
 (section 15.1); any other identity sees only holds on its own calls, may
 cancel only those, and is answered `REF_ISSUER_FORBIDDEN` for anything
@@ -645,7 +667,11 @@ The complete objects are the `threshold` member of
   Tokens for Agents); else `preferred_username` or `upn` (OIDC providers
   such as Entra ID, whose `sub` is opaque); else `sub`. `groups` and
   `roles` claims are passed to the policy as inputs and never enter the
-  receipt. The token must be signed EdDSA, RS256 or ES256 by a key the
+  receipt. Anything the caller asserts beside the token (the `claims`
+  member of an issue request) reaches the policy only under
+  `interaction.claims` and never sets the principal, the delegation, the
+  groups, the roles or the state hash, which come from the token and the
+  described state alone. The token must be signed EdDSA, RS256 or ES256 by a key the
   service trusts, with the algorithm fixed by the key's type (a header
   cannot choose), unexpired, and for the service's audience when one is
   configured.
@@ -774,8 +800,10 @@ for the libraries that cannot compute canonical JSON.
 The same encoding is accepted as the issuer's identity input (section
 12), there also under RS256 (RSASSA-PKCS1-v1_5 with SHA-256) and ES256
 (ECDSA P-256, signature as r||s), with the keys loaded from a JWKS
-document (RSA, EC P-256 and OKP Ed25519 entries by `kid`); a token with no
-usable subject is `REF_IDENTITY_NO_SUBJECT`. A directory's signing keys
+document (RSA, EC P-256 and OKP Ed25519 entries by `kid`), and loaded
+again, at most once a minute, when a token names a `kid` the service
+does not know, since a directory rolls its keys while a service runs; a
+token with no usable subject is `REF_IDENTITY_NO_SUBJECT`. A directory's signing keys
 are shared by all its tenants, so where a tenant is configured a token
 under the directory's keys must carry that tenant's id in `tid` (and in
 `iss`, when present); one that carries another tenant's, or none, is
@@ -818,7 +846,13 @@ the line. A `refused` entry carries no receipt when the policy refused
 (nothing was issued) and carries the flagged receipt when a human declined
 the hold or let it lapse; its `grant` and `execution` are null. An
 `honored` entry carries the receipt, the grant if the receipt was flagged,
-and the execution receipt.
+and the execution receipt. Its `reason` is the verifier's accept code
+when the upstream did the work, and `TOOL_ERROR` (the upstream answered
+`isError: true`), `UPSTREAM_ERROR` (a JSON-RPC error) or
+`UPSTREAM_UNAVAILABLE` (no answer) when the admitted call failed after
+the receipt was claimed: the receipt is spent either way, so the entry
+exists either way, and the execution receipt's outputs carry the error.
+`gargoyle audit --summary` counts these as failed, not honored.
 
 **Verification** (`evidence.verify_log`), offline, with the issuer's,
 approver's and executor's public keys, for each entry in file order:
@@ -833,7 +867,9 @@ approver's and executor's public keys, for each entry in file order:
 4. `honored`: receipt and execution are present, the section 13 chain
    verifies, and the receipt's `request_context` names the entry's
    `tool`, `args_sha256` and `principal`, else `REF_EVIDENCE_RECEIPT_MISSING`
-   or the chain's own refusal;
+   or the chain's own refusal; and neither the receipt's `decision_id` nor
+   the plan step a release names was honored by an earlier entry of the
+   log, else `REF_EVIDENCE_REPLAY`;
 5. `refused` with a receipt: the receipt has issuer provenance (section 6
    steps 1 and 2) judged at the entry's `at`, else that refusal;
    otherwise `ENTRY_VERIFIED`.
@@ -896,6 +932,8 @@ compares them by `decision_id`. Findings, never resolved silently:
   approval, or evidence signed around it);
 - `MISSING_EVIDENCE`: the issuer issued a receipt to this principal and the
   client recorded nothing (dropped or suppressed evidence);
+- `REPLAYED_RECEIPT`: the evidence honors one decision id twice (a replay
+  the executor's cache did not catch: a second process, a lost cache);
 - `EVIDENCE_BEFORE_ISSUE`: the client's entry predates the issuance.
 
 Tree check (`gargoyle audit --check-tree DIR`): every file under `DIR`

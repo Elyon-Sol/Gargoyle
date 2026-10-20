@@ -649,7 +649,8 @@ are persistent.
 | Rotate every key | re-run `gargoyle init` to a new `--out`, redistribute `middleware.env`, `record.json`, `approver-web.json`, update the unit's `--out` |
 | Client token expiry | 30 days by default (`--token-days`); re-run `init` or mint a new token before it lapses |
 | Second approver | `gargoyle init --approvers 2` for file keys, or Entra enrollment; a rule's `"approvals": 2` and `"approvers": [...]` set the threshold and who counts |
-| Revoke an approver | `gargoyle approvers revoke <upn> --out /opt/gargoyle/deploy` on the VM; takes effect without a restart and is witnessed on the service's next read of the file. An approver retires their own key from the console's sign-in (`POST /approvers/revoke`). Revocation retires the key, not the person: remove the Approver role in Entra as well, or the next sign-in enrolls a fresh key |
+| Revoke an approver | `gargoyle approvers revoke <upn> --out /opt/gargoyle/deploy` on the VM; takes effect without a restart and is witnessed on the service's next read of the file. An approver retires their own key from the console's sign-in (`POST /approvers/revoke`). Revocation retires the key, not the person: remove the Approver role in Entra as well, or the next sign-in enrolls a fresh key. Removing the role alone also works at once: a grant under an enrolled key is accepted only from that account with the role in today's token |
+| New browser for an approver | The console says a key is already on record. Run `gargoyle approvers revoke <upn> --out /opt/gargoyle/deploy`, then have the approver sign in from the new browser; a sign-in alone never replaces an enrolled key |
 | Backup | `/opt/gargoyle/deploy` and `/etc/ssl/gargoyle`, both private |
 
 ## Troubleshooting

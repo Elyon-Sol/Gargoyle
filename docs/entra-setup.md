@@ -166,11 +166,15 @@ GARGOYLE_ENTRA_CLIENT_ID=CLIENT_APP_ID
 
 Then open `https://<issuer host>/approve`: a **Sign in with Microsoft**
 button appears above the file loader. Sign in, and the page reports
-"this browser's key enrolled" and "approving as <upn>". A new browser or
-device enrolls a new key, replacing the old one for that UPN. To remove
-an approver, revoke the key (`gargoyle approvers revoke <upn>`) and remove
-the role assignment in step 7.2; the key alone is not enough, since the
-next sign-in with the role enrolls a fresh key. The
+"this browser's key enrolled" and "approving as <upn>". One key per
+account: a second browser or device is told that a key is already on
+record and does not enroll until the operator revokes the first
+(`gargoyle approvers revoke <upn>` on the issuer's host); a sign-in alone
+never swaps the key holds are released with. Every grant is checked
+against the directory again when it is posted: the key's own account must
+post it, under a token that carries the Approver role now, so removing
+the role in step 7.2 ends the power at once. To remove an approver, do
+both: revoke the key and remove the role. The
 enrolled public keys are published at `/approvers` for the middleware and
 are read from `approvers.json` by `gargoyle audit`. The file loader stays
 for sites that prefer key files.

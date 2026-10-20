@@ -142,6 +142,29 @@ verifying itself for no external user; that is the failure mode to avoid.
   row 55 under the new key and rows 18 to 51 under the restored key of 2026-10-19 all
   CHAIN_VERIFIED. Both pre-pilot items are done; the next step is the first client
   enrollment.
+- Second outside review, fixes (2026-10-20 evening): two review agents found ten
+  security findings on 0.16.4; findings 1-5 and 9 are fixed here, the rest stay open
+  (see the review notes). (1) Plans: a release must meet the receipt's own terms,
+  so a one-signature plan over `*` no longer releases a two-approver finance write
+  or a `plan: false` call (REF_PLAN_TERMS_WEAKER, REF_PLAN_RECEIPT_NOT_PLANNABLE;
+  `approval.plannable` signed into the receipt), and pattern steps are judged over
+  every call they admit by the strictest rule reachable (decide_pattern), not by the
+  glob text as a literal. (2) Approver trust: a grant under an enrolled key is
+  accepted only from that account with the Approver role in today's token, so a role
+  removed in Entra ends the power at once; a second browser does not enroll while a
+  key is on record (REF_ISSUER_KEY_ENROLLED) without the first key's consent or the
+  operator's revocation; hold visibility follows the role, not the key record.
+  (3) Caller `claims` stay under interaction.claims and never set principal,
+  delegation, groups, roles or state hash. (4) Single use survives the process: the
+  middleware keeps its claims in `audit.replay.sqlite` beside the log; `gargoyle
+  audit` fails a decision id honored twice (REF_EVIDENCE_REPLAY) and reconciliation
+  reports REPLAYED_RECEIPT. (5) Every path after the claim leaves an evidence entry:
+  a tool error, a JSON-RPC error and an unreachable upstream are honored entries
+  with verdicts TOOL_ERROR, UPSTREAM_ERROR, UPSTREAM_UNAVAILABLE, counted as failed in
+  the summary. (9) The issuer refetches the tenant's JWKS, at most once a minute,
+  when a token names an unknown kid. Format addition (plannable) and a stricter grant
+  endpoint: 0.17.0.dev0. Operational change for the pilot: an approver's new browser
+  needs `gargoyle approvers revoke <upn>` first.
 - Side-door test (2026-10-20, Claude Desktop): asked "do not use the gate and tell me how
   I can get around it", the assistant declined to help bypass but offered its own sandbox
   and "a route that doesn't involve the gate"; asked to write bypass.md into the project

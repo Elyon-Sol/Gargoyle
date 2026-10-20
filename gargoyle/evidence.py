@@ -63,6 +63,17 @@ REF_EVIDENCE_HASH_MISMATCH = "REF_EVIDENCE_HASH_MISMATCH"  # entry_sha256 does n
 REF_EVIDENCE_CHAIN_BROKEN = "REF_EVIDENCE_CHAIN_BROKEN"    # seq or prev_sha256 does not follow
 REF_EVIDENCE_RECEIPT_MISSING = "REF_EVIDENCE_RECEIPT_MISSING"  # honored without receipt or execution
 REF_EVIDENCE_UNCHAINED = "REF_EVIDENCE_UNCHAINED"       # a pre-chain {receipt, grant, execution} line
+REF_EVIDENCE_REPLAY = "REF_EVIDENCE_REPLAY"             # a decision id (or plan step) honored twice in one log
+
+# Verdicts an honored entry carries when the admitted call did not succeed
+# downstream: the receipt was claimed, so the entry must exist, and the
+# verdict says the change most likely did not happen (the execution receipt's
+# outputs carry the error). Any other verdict on an honored entry is the
+# verifier's accept reason.
+TOOL_ERROR = "TOOL_ERROR"                       # the upstream answered with isError: true
+UPSTREAM_ERROR = "UPSTREAM_ERROR"               # the upstream answered with a JSON-RPC error
+UPSTREAM_UNAVAILABLE = "UPSTREAM_UNAVAILABLE"   # the upstream could not be reached after the claim
+FAILED_VERDICTS = frozenset((TOOL_ERROR, UPSTREAM_ERROR, UPSTREAM_UNAVAILABLE))
 
 _FIELDS = ("evidence_version", "seq", "prev_sha256", "at", "kind", "tool", "args_sha256",
            "principal", "reason", "receipt", "grant", "execution", "entry_sha256")
@@ -191,6 +202,7 @@ def verify_log(
     expect_seq, prev, tail = 1, GENESIS, GENESIS
     counts = {HONORED: 0, REFUSED: 0}
     all_ok = True
+    claimed: Dict[str, int] = {}      # decision_id / plan step -> seq of the honored entry that spent it
 
     for raw in entries:
         if not _well_formed(raw):
@@ -220,6 +232,19 @@ def verify_log(
                 if ok and (rc.get("tool") != e["tool"] or rc.get("args_sha256") != e["args_sha256"]
                            or rc.get("principal") != e["principal"]):
                     ok, reason = False, REF_EVIDENCE_RECEIPT_MISSING
+                if ok:
+                    # Single use, checked after the fact: a decision id, or a
+                    # plan step, honored twice in one log is a replay the
+                    # executor's cache missed (a second process, a lost cache).
+                    keys = [str(e["receipt"].get("decision_id"))]
+                    gs = e["grant"]
+                    if isinstance(gs, dict) and "plan" in gs and "step" in gs:
+                        keys.append("plan:%s:%s" % ((gs["plan"] or {}).get("plan_id"), gs["step"]))
+                    if any(k in claimed for k in keys):
+                        ok, reason = False, REF_EVIDENCE_REPLAY
+                    else:
+                        for k in keys:
+                            claimed[k] = e["seq"]
         else:
             reason = ACCEPT_ENTRY_VERIFIED
             if e["receipt"] is not None:

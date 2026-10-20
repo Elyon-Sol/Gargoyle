@@ -99,6 +99,14 @@ async function entraReady() {
       res = await api("approvers/enroll", { method: "POST", body: JSON.stringify({ public_key_hex: mine }) });
     } catch (err) {
       if (err.status !== 409) throw err;
+      if (err.reason === "REF_ISSUER_KEY_ENROLLED") {
+        // Another browser's key is on record for this account. A sign-in
+        // alone must not swap it: approve from that browser, or have the
+        // operator revoke that key; then this browser enrolls.
+        $("entra-note").textContent = `${me.principal} already has an approver key enrolled in another browser; approve there, or ask the operator to run: gargoyle approvers revoke ${me.principal}`;
+        log("not enrolled: another key is on record for this account");
+        return;
+      }
       // This browser's key was revoked. A revoked key stays revoked: make a new one and enroll that.
       keyPair = await generateApproverKey(); await storeKey(me.principal, keyPair);
       res = await api("approvers/enroll", { method: "POST", body: JSON.stringify({ public_key_hex: await publicKeyHex(keyPair) }) });
@@ -127,7 +135,11 @@ $("file").addEventListener("change", async (e) => {
 
 async function api(path, opts = {}) {
   const r = await fetch(path, { ...opts, headers: { "Authorization": "Bearer " + state.token, "content-type": "application/json", ...(opts.headers || {}) } });
-  if (!r.ok) { const e = new Error(path + " -> " + r.status); e.status = r.status; throw e; }
+  if (!r.ok) {
+    const e = new Error(path + " -> " + r.status); e.status = r.status;
+    try { e.reason = (await r.json()).detail.reason; } catch (err) { e.reason = null; }
+    throw e;
+  }
   return r.json();
 }
 

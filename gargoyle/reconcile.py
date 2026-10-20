@@ -47,6 +47,7 @@ def reconcile(evidence: Iterable[Any], witness: Iterable[Any], *, principal: Opt
 
     findings: List[Dict[str, Any]] = []
     seen_decisions = set()
+    honored_at: Dict[Any, Any] = {}          # decision_id -> seq of the entry that first honored it
     for e in evidence:
         if not isinstance(e, dict):
             continue
@@ -57,6 +58,13 @@ def reconcile(evidence: Iterable[Any], witness: Iterable[Any], *, principal: Opt
         seen_decisions.add(did)
         w = issued.get(did)
         if e.get("kind") == "honored":
+            # The issuer issued each decision id once; the evidence honoring
+            # it twice is a replay the executor's cache did not catch.
+            if did in honored_at:
+                findings.append({"finding": "REPLAYED_RECEIPT", "seq": e.get("seq"), "decision_id": did, "tool": e.get("tool"),
+                                 "first_seq": honored_at[did]})
+                continue
+            honored_at[did] = e.get("seq")
             if w is None:
                 at_e = _parse(e.get("at"))
                 if horizon is not None and at_e is not None and at_e < horizon:

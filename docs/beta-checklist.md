@@ -53,8 +53,9 @@ console, a handful of workstations, files or Microsoft 365 behind the gate.
   diff is not what the user described, decline; the user's assistant is told.
 - A plan card lists tools and patterns, not contents. Approve plans only for
   work you would let the person do unsupervised.
-- Your key lives in your browser. A new browser means enrolling again, which
-  replaces the old key; tell the operator if that was not you.
+- Your key lives in your browser. A new browser cannot enroll while your
+  current key is on record: ask the operator to revoke it first, then sign in
+  from the new browser. Tell the operator if a revocation was not you.
 
 ## What to watch, weekly
 

@@ -48,10 +48,10 @@ import time
 from typing import Any, Dict, List, Optional
 
 from gargoyle.consumer import REF_TARGET_NOT_CONFIGURED, Consumer
-from gargoyle.evidence import HONORED, REFUSED, EvidenceLog
+from gargoyle.evidence import HONORED, REFUSED, EvidenceLog, TOOL_ERROR, UPSTREAM_ERROR, UPSTREAM_UNAVAILABLE
 from gargoyle.envelope import valid_principal
 from gargoyle.policy import valid_pin
-from gargoyle.replay_cache import InMemoryReplayCache
+from gargoyle.replay_cache import InMemoryReplayCache, ReplayCache, SqliteReplayCache
 
 # MCP protocol version this server speaks (a real MCP revision string).
 PROTOCOL_VERSION = "2025-06-18"
@@ -336,7 +336,7 @@ class ServerState:
     def __init__(
         self,
         config: Optional[Dict[str, Any]],
-        replay_cache: Optional[InMemoryReplayCache] = None,
+        replay_cache: Optional[ReplayCache] = None,
         upstream: Optional[StdioUpstream] = None,
         issuer_client: Optional[IssuerClient] = None,
         audit_log: Optional[str] = None,
@@ -357,6 +357,12 @@ class ServerState:
         self.upstream = upstream
         self.issuer_client = issuer_client
         self.evidence: Optional[EvidenceLog] = EvidenceLog(audit_log) if audit_log else None
+        if replay_cache is None and audit_log:
+            # Single use has to outlive this process: the claims sit in a
+            # SQLite file beside the evidence log (audit.replay.sqlite), so a
+            # restarted gate, or a second one on the same log, refuses a
+            # receipt that was already honored (second review, finding 4).
+            replay_cache = SqliteReplayCache(str(Path(audit_log).with_name(Path(audit_log).stem + ".replay.sqlite")))
         self.consumer: Optional[Consumer] = None
         if config is not None and valid_principal(config.get("principal")):
             self.consumer = Consumer(
@@ -678,18 +684,29 @@ def handle_message(state: ServerState, msg: Dict[str, Any]) -> Optional[Dict[str
             # the verdict in _meta.
             forwarded = dict(msg)
             forwarded["params"] = _without_gargoyle_meta(params)
+            # The receipt is claimed from here on, so every way out leaves an
+            # evidence entry: the verdict says whether the upstream did the
+            # work (second review, finding 5).
             try:
                 reply = state.upstream.send(forwarded)
             except Exception as exc:
+                _record(state, HONORED, dict(gate, reason=UPSTREAM_UNAVAILABLE), params,
+                        _attest(state, gate["envelope"], {"error": str(exc)}, params))
                 return _error(msg_id, JSONRPC_INTERNAL_ERROR, "upstream unavailable: %s" % exc)
             if isinstance(reply, dict) and isinstance(reply.get("result"), dict):
                 meta = dict(reply["result"].get("_meta") or {})
                 meta.update({EXECUTED_META_KEY: True, REASON_META_KEY: reason})
                 # The outputs the execution receipt attests to are the
-                # upstream's result minus the metadata we are adding.
+                # upstream's result minus the metadata we are adding. A tool
+                # error is recorded as one, not as a change that happened.
                 outputs = {k: v for k, v in reply["result"].items() if k != "_meta"}
-                meta.update(_audit_meta(state, gate, outputs, params))
+                verdict = TOOL_ERROR if reply["result"].get("isError") is True else reason
+                meta.update(_audit_meta(state, dict(gate, reason=verdict), outputs, params))
                 reply["result"]["_meta"] = meta
+            else:
+                err = reply.get("error") if isinstance(reply, dict) else None
+                _record(state, HONORED, dict(gate, reason=UPSTREAM_ERROR), params,
+                        _attest(state, gate["envelope"], {"error": err}, params))
             return reply
         if not executed:
             _record(state, REFUSED, gate, params)

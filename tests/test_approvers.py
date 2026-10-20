@@ -13,7 +13,7 @@ from fastapi.testclient import TestClient
 from gargoyle.approval import build_grant, sign_grant
 from gargoyle.approvers import ApproverRegistry, may_enroll
 from gargoyle.consumer import Consumer
-from gargoyle.issuer_service import REF_ISSUER_NOT_AN_APPROVER, build_issuer_app
+from gargoyle.issuer_service import REF_ISSUER_KEY_ENROLLED, REF_ISSUER_NOT_AN_APPROVER, build_issuer_app, supersede_message
 from gargoyle.jws import encode
 from gargoyle.policy import ELIGIBLE, Decision
 
@@ -92,8 +92,9 @@ def test_an_enrolled_approver_releases_a_hold_and_the_middleware_trusts_the_publ
     arid = env["approval_request_id"]
     g = lambda key, upn: sign_grant(build_grant(decision_sha256=env["decision_sha256"], approval_request_id=arid, grant_id="g-" + upn,
                                                 not_after=datetime.now(timezone.utc) + timedelta(minutes=5)), key, upn)
-    assert c.post("/grants", json=g(dana, "dana@contoso.com"), headers=h(agent)).json()["accepted"]
-    assert c.post("/grants", json=g(lee, "lee@contoso.com"), headers=h(agent)).json()["complete"] is True
+    # Each approver posts their own grant, under a token that carries the role today.
+    assert c.post("/grants", json=g(dana, "dana@contoso.com"), headers=h(token("dana@contoso.com", roles=["Approver"]))).json()["accepted"]
+    assert c.post("/grants", json=g(lee, "lee@contoso.com"), headers=h(token("lee@contoso.com", roles=["Approver"]))).json()["complete"] is True
     grants = c.get("/grants/" + arid, headers=h(agent)).json()["grants"]
     assert [x["approver_key_id"] for x in grants] == ["dana@contoso.com", "lee@contoso.com"]
 
@@ -240,3 +241,51 @@ def test_every_key_an_approver_held_stays_for_audits(tmp_path):
     old = tmp_path / "old.json"
     old.write_text(json.dumps({"approvers": {}, "revoked": {"x@contoso.com": {"public_key_hex": pub_hex(k1), "revoked_at": "t", "revoked_by": "b"}}}))
     assert ApproverRegistry(str(old)).audit_keys_hex() == {"x@contoso.com": [pub_hex(k1)]}
+
+
+def test_an_enrolled_key_releases_only_under_its_own_role_bearing_token(tmp_path):
+    """Second review, finding 2: a bearer token alone must not release a hold.
+    The key's own account posts the grant, carrying the approver role today;
+    the role removed in the directory ends the power at once."""
+    c, reg = _app(tmp_path, policy=Hold(1))
+    dana = Ed25519PrivateKey.generate()
+    h = lambda t: {"Authorization": "Bearer " + t}
+    assert c.post("/approvers/enroll", json={"public_key_hex": pub_hex(dana)}, headers=h(token("dana@contoso.com", roles=["Approver"]))).json()["enrolled"]
+    agent = token("agent@contoso.com")
+    env = c.post("/issue", json={"target_url": TARGET, "tool": "transfer_funds", "args": {"amount": 5}}, headers=h(agent)).json()["envelope"]
+    arid = env["approval_request_id"]
+    g = sign_grant(build_grant(decision_sha256=env["decision_sha256"], approval_request_id=arid, grant_id="g-1",
+                               not_after=datetime.now(timezone.utc) + timedelta(minutes=5)), dana, "dana@contoso.com")
+    # Visibility follows the role, not the key record.
+    assert c.get("/pending", headers=h(token("dana@contoso.com"))).json()["pending"] == []
+    assert len(c.get("/pending", headers=h(token("dana@contoso.com", roles=["Approver"]))).json()["pending"]) == 1
+    # The agent relaying dana's grant; dana without the role; eve with the role relaying dana's grant: all refused.
+    for t in (agent, token("dana@contoso.com"), token("eve@contoso.com", roles=["Approver"])):
+        assert c.post("/grants", json=g, headers=h(t)).json() == {"accepted": False, "reason": REF_ISSUER_NOT_AN_APPROVER}
+    assert c.get("/grants/" + arid, headers=h(agent)).json()["collected"] == 0
+    assert c.post("/grants", json=g, headers=h(token("dana@contoso.com", roles=["Approver"]))).json()["complete"] is True
+
+
+def test_a_second_key_needs_the_first_keys_consent_or_the_operators_revocation(tmp_path):
+    """Second review, finding 2: a sign-in alone must not swap the key holds
+    are released with."""
+    c, reg = _app(tmp_path)
+    k1, k2, k3 = (Ed25519PrivateKey.generate() for _ in range(3))
+    h = lambda t: {"Authorization": "Bearer " + t}
+    dana = token("dana@contoso.com", roles=["Approver"])
+    assert c.post("/approvers/enroll", json={"public_key_hex": pub_hex(k1)}, headers=h(dana)).json()["enrolled"]
+    # A second browser, with only a sign-in: refused, and the first key stands.
+    r = c.post("/approvers/enroll", json={"public_key_hex": pub_hex(k2)}, headers=h(dana))
+    assert r.status_code == 409 and r.json()["detail"]["reason"] == REF_ISSUER_KEY_ENROLLED
+    assert c.get("/approvers").json()["approvers"]["dana@contoso.com"] == pub_hex(k1)
+    # The same key again is fine; a consent signed by the wrong key is not; the first key's consent is.
+    assert c.post("/approvers/enroll", json={"public_key_hex": pub_hex(k1)}, headers=h(dana)).json()["enrolled"]
+    bad = k3.sign(supersede_message(pub_hex(k2))).hex()
+    assert c.post("/approvers/enroll", json={"public_key_hex": pub_hex(k2), "supersede_signature": bad}, headers=h(dana)).status_code == 409
+    good = k1.sign(supersede_message(pub_hex(k2))).hex()
+    assert c.post("/approvers/enroll", json={"public_key_hex": pub_hex(k2), "supersede_signature": good}, headers=h(dana)).json()["replaced"] is True
+    assert c.get("/approvers").json()["approvers"]["dana@contoso.com"] == pub_hex(k2)
+    # After the operator revokes the current key, a fresh one enrolls without consent.
+    assert reg.revoke("dana@contoso.com", revoked_by="operator")
+    assert c.post("/approvers/enroll", json={"public_key_hex": pub_hex(k3)}, headers=h(dana)).json()["enrolled"]
+    assert c.get("/approvers").json()["approvers"]["dana@contoso.com"] == pub_hex(k3)

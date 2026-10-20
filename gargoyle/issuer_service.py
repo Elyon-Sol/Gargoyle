@@ -62,6 +62,7 @@ from gargoyle.notify import notifier_from_env
 from gargoyle.approvers import (DEFAULT_APPROVER_ROLE, ENV_APPROVER_GROUPS, ENV_APPROVER_ROLE, ENV_APPROVERS_PATH,
                                 ApproverRegistry, RevokedKeyError, may_enroll, valid_public_key_hex)
 from gargoyle.identity import entra_keys, entra_tenant_id, principal_from_token
+from gargoyle.jws import REF_JWS_KEY_UNKNOWN
 from gargoyle.issuer import DEFAULT_TTL_SECONDS, issue
 from gargoyle.policy import Policy
 
@@ -91,6 +92,28 @@ REF_ISSUER_NOT_AN_APPROVER = "REF_ISSUER_NOT_AN_APPROVER"   # enrollment without
 REF_ISSUER_FORBIDDEN = "REF_ISSUER_FORBIDDEN"               # authenticated, but not an approver and not the hold's own principal
 REF_ISSUER_TOO_MANY_HOLDS = "REF_ISSUER_TOO_MANY_HOLDS"     # the principal already has the cap's worth of holds waiting
 REF_ISSUER_KEY_REVOKED = "REF_ISSUER_KEY_REVOKED"           # enrollment offered a key that was revoked; a new key is needed
+REF_ISSUER_KEY_ENROLLED = "REF_ISSUER_KEY_ENROLLED"          # another key is enrolled for this account; it must consent, or the operator revoke it
+
+
+SUPERSEDE_PREFIX = b"gargoyle-enroll/1\n"
+
+
+def supersede_message(new_public_key_hex: str) -> bytes:
+    """What an enrolled key signs to hand its account to a new key."""
+    return SUPERSEDE_PREFIX + new_public_key_hex.encode("ascii")
+
+
+def _supersedes(current_hex: str, signature_hex: Any, new_hex: str) -> bool:
+    """Does `signature_hex` (Ed25519, by the key `current_hex`) consent to `new_hex`?"""
+    from cryptography.exceptions import InvalidSignature
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+    if not isinstance(signature_hex, str) or len(signature_hex) != 128:
+        return False
+    try:
+        Ed25519PublicKey.from_public_bytes(bytes.fromhex(current_hex)).verify(bytes.fromhex(signature_hex), supersede_message(new_hex))
+        return True
+    except (InvalidSignature, ValueError):
+        return False
 
 
 def build_issuer_app(
@@ -114,10 +137,18 @@ def build_issuer_app(
     tenant: Optional[str] = None,
     tenant_key_ids: Optional[set] = None,
     max_open_holds: int = DEFAULT_MAX_OPEN_HOLDS,
+    idp_key_refresh: Optional[Callable[[], Dict[str, Any]]] = None,
 ) -> FastAPI:
     """`on_hold(envelope, args)` is called once for every new hold (gargoyle.notify
     posts it to a webhook); it is notice, not admission, and its failure
-    never affects the hold."""
+    never affects the hold. `idp_key_refresh()` returns the identity
+    provider's current signing keys {kid: key}; it is called, at most once a
+    minute, when a token names a kid the service does not know, so a key the
+    directory rolled after startup is picked up without a restart."""
+    # The trusted identity keys are held in a dict this app owns: a refresh adds to them.
+    idp_public_keys = dict(idp_public_keys)
+    tenant_key_ids = set(tenant_key_ids) if tenant_key_ids is not None else None
+    key_refreshed_at: list = [None]
     app = FastAPI(title="Gargoyle issuing service")
     # Everything a human may be in the middle of acting on lives in the hold
     # store (gargoyle.holdstore): SQLite on disk in a deployment, memory in tests.
@@ -170,9 +201,21 @@ def build_issuer_app(
 
     def is_approver(who: Dict[str, Any]) -> bool:
         """May this identity see every hold and the witness: the approver role
-        or group, a configured approver key id, or an enrolled approver."""
+        or group in today's token, or a configured approver key id. An
+        enrolled key alone does not count: the directory decides who is an
+        approver now, the registry only remembers which key is theirs."""
         upn = who["principal"]
-        return may_enroll(who, role=approver_role, groups=approver_groups) or upn in static_approvers or upn in registry
+        return may_enroll(who, role=approver_role, groups=approver_groups) or upn in static_approvers
+
+    def _enrolled_speaks_for(who: Dict[str, Any], approver_key_id: str) -> bool:
+        """May a grant under this key id be posted by `who`? A configured
+        (static) key is trusted by configuration. An enrolled key releases a
+        hold only when posted by its own account, under a token that still
+        carries the approver role or group: losing the role ends the power
+        at once, whatever key record remains (second review, finding 2)."""
+        if approver_key_id in static_approvers or approver_key_id not in registry:
+            return True
+        return who["principal"] == approver_key_id and may_enroll(who, role=approver_role, groups=approver_groups)
 
     def hold_owner(arid: str) -> Optional[str]:
         """The principal whose call is held under `arid` (a hold or a plan), or None."""
@@ -200,11 +243,35 @@ def build_issuer_app(
     def _refuse(status: int, reason: str) -> HTTPException:
         return HTTPException(status_code=status, detail={"reason": reason})
 
+    def _refresh_idp_keys() -> bool:
+        """Fetch the identity provider's keys again (an unknown kid is how a
+        key roll shows up), at most once a minute. True when new keys came."""
+        if idp_key_refresh is None:
+            return False
+        current = now()
+        last = key_refreshed_at[0]
+        if last is not None and (current - last).total_seconds() < 60:
+            return False
+        key_refreshed_at[0] = current
+        try:
+            fresh = idp_key_refresh()
+        except Exception as exc:
+            import sys
+            sys.stderr.write("gargoyle: identity key refresh failed: %s\n" % exc)
+            return False
+        new = {k: v for k, v in fresh.items() if k not in idp_public_keys}
+        idp_public_keys.update(fresh)
+        if tenant_key_ids is not None:
+            tenant_key_ids.update(fresh)
+        return bool(new)
+
     def authenticate(authorization: Optional[str]) -> Dict[str, Any]:
         if not authorization or not authorization.startswith("Bearer "):
             raise _refuse(401, REF_ISSUER_UNAUTHENTICATED)
-        who = principal_from_token(authorization[7:].strip(), idp_public_keys, audience=audience, now=now(),
-                                   tenant=tenant, tenant_key_ids=tenant_key_ids)
+        token = authorization[7:].strip()
+        who = principal_from_token(token, idp_public_keys, audience=audience, now=now(), tenant=tenant, tenant_key_ids=tenant_key_ids)
+        if who["reason"] == REF_JWS_KEY_UNKNOWN and _refresh_idp_keys():
+            who = principal_from_token(token, idp_public_keys, audience=audience, now=now(), tenant=tenant, tenant_key_ids=tenant_key_ids)
         if who["reason"] is not None:
             raise _refuse(401, who["reason"])
         return who
@@ -227,11 +294,17 @@ def build_issuer_app(
             json.dumps(body["args"], ensure_ascii=False).encode("utf-8")
         except UnicodeEncodeError:
             raise _refuse(400, REF_ISSUER_ARGS_NOT_TEXT)
-        # The policy sees the identity provider's groups and roles as claims;
-        # the receipt binds only the call and the principal.
-        interaction = {**body.get("claims", {}), "tool": body["tool"], "args": body["args"],
+        # The policy sees the identity provider's groups and roles; the receipt
+        # binds only the call and the principal (and the token's delegation).
+        # Anything the caller asserts in `claims` is kept apart under
+        # interaction["claims"]: it never sets principal, on_behalf_of,
+        # groups, roles or the state hash, which come from the token and the
+        # described state alone (second review, finding 3).
+        interaction = {"tool": body["tool"], "args": body["args"],
                        "principal": who["principal"], "groups": who.get("groups", []),
                        "roles": who.get("roles", [])}
+        if body.get("claims"):
+            interaction["claims"] = dict(body["claims"])
         state = body.get("state")
         if state is not None:
             # The executor's description of the target before the call: its
@@ -400,7 +473,7 @@ def build_issuer_app(
 
     @app.post("/grants")
     async def post_grant(request: Request, authorization: Optional[str] = Header(default=None)):
-        authenticate(authorization)
+        who = authenticate(authorization)
         try:
             grant = await request.json()
         except Exception:
@@ -424,6 +497,8 @@ def build_issuer_app(
                          gate_key_id=key_id, now=now())
         if not g["accepted"]:
             return refused(g["reason"])
+        if not _enrolled_speaks_for(who, grant["approver_key_id"]):
+            return refused(REF_ISSUER_NOT_AN_APPROVER)
         # The receipt's (or plan's) own terms: distinct approvers, from the named set if any.
         terms = approval_terms(env) if env else _plan_terms(plan)
         have = list(app.state.grants.get(arid, []))
@@ -495,6 +570,15 @@ def build_issuer_app(
             raise _refuse(400, REF_ISSUER_BAD_REQUEST)
         if not isinstance(body, dict) or not valid_public_key_hex(body.get("public_key_hex")):
             raise _refuse(400, REF_ISSUER_BAD_REQUEST)
+        current = registry.public_hex().get(who["principal"])
+        if current is not None and current != body["public_key_hex"]:
+            # A bearer token alone must not swap the key holds are released
+            # with: a second browser's key enrolls only with the first key's
+            # signature over it (`supersede_signature`), or after the operator
+            # revoked the first (`gargoyle approvers revoke <upn>`).
+            if not _supersedes(current, body.get("supersede_signature"), body["public_key_hex"]):
+                event("enroll_refused", approver=who["principal"], reason=REF_ISSUER_KEY_ENROLLED, oid=who.get("oid"))
+                raise _refuse(409, REF_ISSUER_KEY_ENROLLED)
         try:
             result = registry.enroll(who["principal"], body["public_key_hex"], now=now(), oid=who.get("oid"), tid=who.get("tid"))
         except RevokedKeyError:
@@ -664,6 +748,7 @@ def app_from_env() -> FastAPI:
         approver_groups=[g.strip() for g in os.environ.get(ENV_APPROVER_GROUPS, "").split(",") if g.strip()] or None,
         tenant=tenant_id,
         tenant_key_ids=set(tenant_keys) if tenant else None,
+        idp_key_refresh=(lambda: entra_keys(tenant_id)) if tenant else None,
         console_entra=({"tenant": tenant, "client_id": os.environ[ENV_CONSOLE_CLIENT_ID],
                         "scope": os.environ.get(ENV_CONSOLE_SCOPE) or "api://%s/access" % (os.environ.get(ENV_AUDIENCE) or "").split(",")[-1].strip()}
                        if tenant and os.environ.get(ENV_CONSOLE_CLIENT_ID) else None),

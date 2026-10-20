@@ -395,15 +395,19 @@ def _audit_summary(report, raw) -> None:
     releases: Counter = Counter()
     clients: Counter = Counter()
     ats = [e.get("at") for e in raw if isinstance(e, dict) and isinstance(e.get("at"), str)]
+    from gargoyle.evidence import FAILED_VERDICTS
     for r in report:
-        counts.setdefault((r["principal"] or "?", r["tool"] or "?"), Counter())[r["kind"] or "?"] += 1
+        kind = r["kind"] or "?"
+        if kind == "honored" and r.get("verdict") in FAILED_VERDICTS:
+            kind = "failed"            # admitted, but the upstream did not do it
+        counts.setdefault((r["principal"] or "?", r["tool"] or "?"), Counter())[kind] += 1
         for who in r.get("released_by") or []:
             releases[who] += 1
         clients[r.get("client") or "(client unnamed)"] += 1
     print("summary: %d call(s)%s" % (len(report), (", %s to %s" % (min(ats)[:19], max(ats)[:19])) if ats else ""))
-    print("  %-28s %-24s %7s %7s" % ("principal", "tool", "honored", "refused"))
+    print("  %-28s %-24s %7s %7s %7s" % ("principal", "tool", "honored", "failed", "refused"))
     for (principal, tool), c in sorted(counts.items(), key=lambda kv: (kv[0][0], -sum(kv[1].values()), kv[0][1])):
-        print("  %-28s %-24s %7d %7d" % (principal[:28], tool[:24], c.get("honored", 0), c.get("refused", 0)))
+        print("  %-28s %-24s %7d %7d %7d" % (principal[:28], tool[:24], c.get("honored", 0), c.get("failed", 0), c.get("refused", 0)))
     if releases:
         print("  releases: " + ", ".join("%s %d" % (w, n) for w, n in releases.most_common()))
     print("  clients: " + ", ".join("%s %d" % (w, n) for w, n in clients.most_common()))
