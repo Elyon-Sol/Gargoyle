@@ -92,6 +92,17 @@ verifying itself for no external user; that is the failure mode to avoid.
   hold and the receipt, with a link to /approve from GARGOYLE_APPROVE_URL); posted in
   a thread, failures logged and ignored, the grant still only from the approver's
   key. 80 lines. All six roadmap steps are done.
+- Pre-pilot (2026-10-20): two items before the first client enrollment. The console's
+  trust limit is written down (SPEC 8.3, report 9.2 and 11): the issuer serves the
+  approval page, so its operator could make an approver's browser key sign a release
+  the approver never saw; the grant would verify, the witness would charge it to the
+  approver, and no verifier would notice. Mitigations named, not built: a locally
+  installed console, or a console hash pinned in the record. And the issuer now caps
+  the holds one principal may have open (GARGOYLE_MAX_OPEN_HOLDS, default 20, receipts
+  and plans together; REF_ISSUER_TOO_MANY_HOLDS, nothing stored; a decline, release or
+  expiry frees a slot), so a runaway client cannot fill the approvers' queue. 0.16.1.dev0.
+  The live revocation exercise (enroll a second browser, revoke it, see its grant
+  refused) is still to run.
 - 0.16 live (2026-10-20): the Windows client on 0.16.0.dev0 against the VM issuer on the
   same code. A free read, then a held write to notes.md; the approver's console, now an
   approvers-only queue, showed the card and the enrolled approver released it; the

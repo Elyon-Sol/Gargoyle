@@ -79,6 +79,8 @@ ENV_APPROVER_PUBLIC_KEY_HEX = "GARGOYLE_APPROVER_PUBLIC_KEY_HEX"
 ENV_RECEIPT_TTL = "GARGOYLE_RECEIPT_TTL_SECONDS"
 ENV_CONSOLE_CLIENT_ID = "GARGOYLE_ENTRA_CLIENT_ID"   # the public client app the console signs in with (User-Client-Flow)
 ENV_CONSOLE_SCOPE = "GARGOYLE_ENTRA_SCOPE"           # default api://<last audience>/access
+ENV_MAX_OPEN_HOLDS = "GARGOYLE_MAX_OPEN_HOLDS"       # holds one principal may have waiting at once
+DEFAULT_MAX_OPEN_HOLDS = 20
 
 REF_ISSUER_UNAUTHENTICATED = "REF_ISSUER_UNAUTHENTICATED"
 REF_ISSUER_BAD_REQUEST = "REF_ISSUER_BAD_REQUEST"
@@ -87,6 +89,7 @@ REF_ISSUER_UNKNOWN_HOLD = "REF_ISSUER_UNKNOWN_HOLD"
 REF_ISSUER_NO_APPROVER_TRUST = "REF_ISSUER_NO_APPROVER_TRUST"
 REF_ISSUER_NOT_AN_APPROVER = "REF_ISSUER_NOT_AN_APPROVER"   # enrollment without the approver role or group
 REF_ISSUER_FORBIDDEN = "REF_ISSUER_FORBIDDEN"               # authenticated, but not an approver and not the hold's own principal
+REF_ISSUER_TOO_MANY_HOLDS = "REF_ISSUER_TOO_MANY_HOLDS"     # the principal already has the cap's worth of holds waiting
 
 
 def build_issuer_app(
@@ -109,6 +112,7 @@ def build_issuer_app(
     witness: Optional[WitnessLog] = None,
     tenant: Optional[str] = None,
     tenant_key_ids: Optional[set] = None,
+    max_open_holds: int = DEFAULT_MAX_OPEN_HOLDS,
 ) -> FastAPI:
     """`on_hold(envelope, args)` is called once for every new hold (gargoyle.notify
     posts it to a webhook); it is notice, not admission, and its failure
@@ -163,6 +167,21 @@ def build_issuer_app(
             return env.get("request_context", {}).get("principal")
         plan = app.state.pending_plans.get(arid)
         return plan.get("principal") if plan is not None else None
+
+    def _open_holds(principal: str) -> int:
+        """Held receipts and plans of `principal` still waiting on a release:
+        not expired, not complete. A declined hold is already gone. One runaway
+        client must not fill every approver's queue and the hold store."""
+        current = now()
+        n = 0
+        for arid, env in app.state.pending.items():
+            if (env.get("request_context", {}).get("principal") == principal
+                    and datetime.fromisoformat(env["not_after"]) > current and not _complete(arid)):
+                n += 1
+        for arid, plan in app.state.pending_plans.items():
+            if plan.get("principal") == principal and datetime.fromisoformat(plan["not_after"]) > current and not _complete(arid):
+                n += 1
+        return n
 
     def _refuse(status: int, reason: str) -> HTTPException:
         return HTTPException(status_code=status, detail={"reason": reason})
@@ -228,6 +247,11 @@ def build_issuer_app(
                 if plan["plan_id"] == plan_id and _complete(arid_p) and match_step(plan, body["tool"], body["args"]) is not None:
                     covered = True
                     break
+        if result.envelope["requires_approval"] and not covered and _open_holds(who["principal"]) >= max_open_holds:
+            # A service limit, not a policy decision: nothing is stored, the
+            # signed envelope is dropped, the client reports the reason.
+            event("refused", principal=who["principal"], tool=body["tool"], reason=REF_ISSUER_TOO_MANY_HOLDS)
+            return {"issued": False, "reason": REF_ISSUER_TOO_MANY_HOLDS}
         event("issued", principal=who["principal"], tool=body["tool"], held=bool(result.envelope["requires_approval"]),
               **({"oid": who["oid"]} if who.get("oid") else {}),
               covered=covered, decision_id=result.envelope.get("decision_id"), decision_sha256=result.envelope["decision_sha256"],
@@ -287,6 +311,9 @@ def build_issuer_app(
                 if d.approvers:
                     approvers.update(d.approvers)
             norm.append(step)
+        if held and _open_holds(who["principal"]) >= max_open_holds:
+            event("refused", principal=who["principal"], tool="plan", reason=REF_ISSUER_TOO_MANY_HOLDS)
+            return {"issued": False, "reason": REF_ISSUER_TOO_MANY_HOLDS}
         import uuid
         approval = None
         if required > 1 or approvers:
@@ -485,6 +512,7 @@ def build_issuer_app(
         how much is waiting, and since when. No secrets."""
         return {"ok": True, "policy": policy.pin(), "issuer_key_id": key_id,
                 "pending_receipts": len(app.state.pending), "pending_plans": len(app.state.pending_plans),
+                "max_open_holds": max_open_holds,
                 "enrolled_approvers": len(registry.public_hex()), "static_approvers": len(static_approvers),
                 "entra": bool(console_entra), "persistent": store.path != ":memory:", "started_at": app.state.started_at}
 
@@ -570,6 +598,7 @@ def app_from_env() -> FastAPI:
         ttl_seconds=int(os.environ.get(ENV_RECEIPT_TTL, DEFAULT_TTL_SECONDS)),
         on_hold=notifier_from_env(os.environ),
         hold_store=HoldStore(os.environ.get(ENV_HOLDS_PATH) or None),
+        max_open_holds=int(os.environ.get(ENV_MAX_OPEN_HOLDS, DEFAULT_MAX_OPEN_HOLDS)),
         witness=(WitnessLog(os.environ["GARGOYLE_WITNESS_PATH"], Ed25519PrivateKey.from_private_bytes(bytes.fromhex(required[ENV_ISSUER_KEY_HEX])),
                             required[ENV_ISSUER_KEY_ID]) if os.environ.get("GARGOYLE_WITNESS_PATH") else None),
         log_events=(lambda e: sys.stderr.write(json.dumps(e, sort_keys=True) + "\n")) if os.environ.get("GARGOYLE_LOG_JSON") else None,

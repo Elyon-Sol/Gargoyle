@@ -403,6 +403,32 @@ an approver sees every hold with its arguments and the whole witness log
 cancel only those, and is answered `REF_ISSUER_FORBIDDEN` for anything
 else. Held arguments are often the contents of a file.
 
+The console an approver signs with is served by the issuing service
+(`GET /approve`, `GET /approve.js`), and that is a trust limit of the
+reference service, not of the format. The approver's browser key is
+non-extractable and never leaves the browser, but the page that asks it
+to sign is the operator's: an operator who alters the served script can
+have an approver's key sign a release for a hold the approver did not
+see, and the resulting grant verifies everywhere, because it is the
+approver's signature over the hash of a real decision. Separation of
+duties still holds (the issuer key cannot sign a grant), and the witness
+records the grant under the approver's id, so the forgery needs the
+operator and is charged to the approver; no verifier detects it. The
+mitigations are those for any signing page: a console installed locally
+or served by a party the issuer's operator does not control, or a pin of
+the console's hash in the record that the approver's browser checks
+before loading the script. Neither is built. Until one is, an approver
+trusts the issuer's operator with their signature.
+
+The reference service caps the holds one principal may have waiting at
+once (`GARGOYLE_MAX_OPEN_HOLDS`, default 20, counting held receipts and
+held plans that are neither expired nor released). A held call or plan
+over the cap is answered `REF_ISSUER_TOO_MANY_HOLDS` and nothing is
+stored; free calls are unaffected, and a decline, a release or an expiry
+frees a slot. The cap keeps one runaway client from filling every
+approver's queue and the hold store. It is a service limit, not part of
+the receipt.
+
 ## 9. The published policy record
 
 A consumer learns the live policy pin either from a record file it was

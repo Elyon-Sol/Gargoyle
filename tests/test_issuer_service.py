@@ -9,7 +9,8 @@ from fastapi.testclient import TestClient
 from gargoyle.approval import REF_APPROVAL_SOD, build_grant, sign_grant
 from gargoyle.consumer import Consumer
 from gargoyle.issuer_service import (
-    REF_ISSUER_BAD_REQUEST, REF_ISSUER_NO_APPROVER_TRUST, REF_ISSUER_UNAUTHENTICATED, REF_ISSUER_UNKNOWN_HOLD,
+    REF_ISSUER_BAD_REQUEST, REF_ISSUER_NO_APPROVER_TRUST, REF_ISSUER_TOO_MANY_HOLDS, REF_ISSUER_UNAUTHENTICATED,
+    REF_ISSUER_UNKNOWN_HOLD,
     build_issuer_app,
 )
 from gargoyle.jws import REF_JWS_EXPIRED, encode
@@ -227,3 +228,37 @@ def test_the_approver_role_in_an_identity_token_also_sees_every_hold():
     c.post("/issue", json={"target_url": TARGET, "tool": "write_file", "args": {"path": "x"}}, headers=auth(token(sub="carol@contoso.com", aud="gargoyle-issuer")))
     assert c.get("/pending", headers=auth(token(sub="dana@contoso.com", aud="gargoyle-issuer", roles=["Approver"]))).json()["pending"][0]["args"] == {"path": "x"}
     assert c.get("/pending", headers=auth(token(sub="erin@contoso.com", aud="gargoyle-issuer", roles=["Reader"]))).json()["pending"] == []
+
+
+def test_open_holds_per_principal_are_capped():
+    """One runaway client cannot fill the approvers' queue: the cap counts a
+    principal's held receipts and plans that are neither expired nor released;
+    reads, other principals, declines and expiry are unaffected or free a slot."""
+    clock = {"now": NOW}
+    app = build_issuer_app(policy=ToolPolicy(), signing_key=issuer, key_id="issuer-1",
+                           idp_public_keys={"idp-1": idp.public_key()},
+                           approver_public_keys={"approver-alice": approver.public_key()},
+                           audience="gargoyle-issuer", now=lambda: clock["now"], max_open_holds=2)
+    c = TestClient(app)
+
+    def write(i, tok=None):
+        return c.post("/issue", json={"target_url": TARGET, "tool": "write_file", "args": {"path": "%d.txt" % i, "content": "x"}},
+                      headers=auth(tok)).json()
+
+    assert write(1)["issued"] is True and write(2)["issued"] is True
+    assert write(3) == {"issued": False, "reason": REF_ISSUER_TOO_MANY_HOLDS}
+    assert c.get("/health").json()["pending_receipts"] == 2                     # the refused call stored nothing
+    assert c.post("/issue", json={"target_url": TARGET, "tool": "read_file", "args": {"path": "a"}}, headers=auth()).json()["issued"] is True
+    assert write(4, token(sub="spiffe://example.org/agents/other", aud="gargoyle-issuer"))["issued"] is True
+    plan = c.post("/plans", json={"target_url": TARGET, "steps": [{"tool": "write_file", "args": {"path": "p.txt", "content": "y"}}], "note": "n"},
+                  headers=auth()).json()
+    assert plan == {"issued": False, "reason": REF_ISSUER_TOO_MANY_HOLDS}
+    mine = [h for h in c.get("/pending", headers=auth()).json()["pending"]]
+    assert len(mine) == 2                                                        # the requester sees only their own
+    arid = mine[0]["envelope"]["approval_request_id"]
+    assert c.post("/decline", json={"approval_request_id": arid}, headers=auth()).json()["declined"] is True
+    assert write(5)["issued"] is True                                            # the decline freed a slot
+    assert write(6)["issued"] is False
+    clock["now"] = NOW + timedelta(minutes=10)                                   # expiry frees the rest
+    assert write(7, token(exp=NOW + timedelta(minutes=20), aud="gargoyle-issuer"))["issued"] is True
+    assert c.get("/health").json()["max_open_holds"] == 2
