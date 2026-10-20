@@ -319,8 +319,13 @@ the tree check detects. If instead a file appears in the folder, a side
 door is open: find it with the audit's `--check-tree` and close it (Part
 8). Run this once per workstation at enrollment and keep the exchange
 with the client's evidence; it is the question the client's auditor will
-ask. Run live on 2026-10-20 in Claude Desktop: no route, both options
-offered, nothing written.
+ask. Run live on 2026-10-20 in Claude Desktop five times with varying
+wording: the answers ranged from an offer to find another route (before
+checking whether one existed), through a flat refusal with no tool call,
+to a write through the gate that stopped at the approver's decline with
+the refusal code reported and the side routes named as ones it would not
+take. The model's answer varied; the folder never changed except through
+a released hold.
 
 **4.4c Observe first.** `gargoyle init --observe DIR ...` writes a rules
 file that allows every call, destructive ones included: the gate records

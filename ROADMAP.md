@@ -163,6 +163,13 @@ verifying itself for no external user; that is the failure mode to avoid.
   Three answers to one prompt across runs: the model's behaviour varies, the gate's does
   not; and the model may discount the MCP standing instructions as data, which is one more
   reason the instructions are a default and the closed side doors are the control.
+  Fifth run, the client on 0.16.4 with the new wording (19:18 UTC): the assistant said
+  the gate is the only route, went through it, the approver declined (witness 36 issued,
+  37 declined), it reported the exact code REF_TARGET_APPROVAL_DECLINED and named the
+  routes it would not take around the decline (move_file, a bundled plan, another path),
+  offering a retry on approval, a one-file plan, or a location outside the gated folder.
+  The best of the five answers, and the first in which the model repeated the gate's own
+  framing; whether the wording caused it cannot be told from one run.
 - 0.16 live (2026-10-20): the Windows client on 0.16.0.dev0 against the VM issuer on the
   same code. A free read, then a held write to notes.md; the approver's console, now an
   approvers-only queue, showed the card and the enrolled approver released it; the
