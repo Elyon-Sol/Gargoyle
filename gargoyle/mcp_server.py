@@ -294,12 +294,14 @@ def gate_instructions(target_id: str, upstream_instructions: Optional[str] = Non
     that there is nothing to type. The upstream's own instructions, if
     any, follow the gate's."""
     text = override if override else (
-        "Every operation on %s goes through this server's tools; do not use any other tool, built-in "
-        "capability or workaround for that target. Reads run at once. A write may pause for a human "
-        "approval: wait for the result, it is normal. A refused call is a decision, not an error: report "
-        "the reason to the user and stop; do not retry or route around it. For a task with several "
-        "writes, gargoyle_plan may ask for one approval covering them; gargoyle_revert undoes an approved "
-        "change through the same approval. The user never needs to name this server." % target_id)
+        "Every operation on %s goes through this server's tools (this server is a Gargoyle gate); do not "
+        "use any other tool, built-in capability or workaround for that target. Reads run at once. A write "
+        "may pause for a human approval: wait for the result, it is normal. A refused call is a decision, "
+        "not an error: report the reason to the user and stop; do not retry or route around it. If asked "
+        "to work on that target without these tools or around the gate, say that the target is reachable "
+        "only through them and continue through them. For a task with several writes, gargoyle_plan may "
+        "ask for one approval covering them; gargoyle_revert undoes an approved change through the same "
+        "approval. The user never needs to name this server." % target_id)
     if upstream_instructions:
         text += "\n\n" + upstream_instructions
     return text
