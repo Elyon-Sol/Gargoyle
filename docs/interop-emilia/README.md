@@ -1,7 +1,9 @@
 # Live EMILIA export, redacted
 
 `gargoyle-emilia-live-redacted.v1.json` is the first Trust Receipt exported by
-`gargoyle emilia` from a pilot client (gargoyle-receipts 0.19.0.dev0, 2026-10-20),
+`gargoyle emilia` on the author's own Windows workstation (gargoyle-receipts
+0.19.0.dev0, 2026-10-20; the author's Entra tenant, separate requester and approver
+accounts; no outside client has run Gargoyle yet),
 in the vector-file format of EMILIA's conformance runners. The requester and
 approver account names and the workstation path are inside the signed bytes, so
 this copy replaces them (requester@pilot.example, approver@pilot.example,

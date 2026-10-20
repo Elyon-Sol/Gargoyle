@@ -82,7 +82,8 @@ night: the console signs both, the second signature rides inside the grant as it
 exports an evidence log as Trust Receipts under one executor-signed Merkle checkpoint
 that EMILIA's runners accept. gargoyle/emilia.py, tests/test_emilia_interop.py, EMILIA's
 vectors vendored under tests/fixtures/emilia. Next: the first live approval with the
-member, then the issue and interop pack on their repository. Live on 2026-10-20 23:11 UTC: the Windows pilot client exported its first
+member, then the issue and interop pack on their repository. Live on 2026-10-20 23:11 UTC: the author's own Windows workstation (own tenant, separate
+requester and approver accounts; no outside client yet) exported its first
 dual-signed approval with `gargoyle emilia` (0.19.0.dev0) and EMILIA's JavaScript and
 Python runners accepted it unmodified and refused four tampered copies.
 

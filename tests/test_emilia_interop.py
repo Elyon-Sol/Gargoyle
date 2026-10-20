@@ -77,16 +77,16 @@ def test_emilia_canonicalization_vectors_match_rfc8785_canonical_json():
 
 def _chain():
     issuer, approver, executor = _key("gargoyle-spec-issuer"), _key("gargoyle-spec-approver"), _key("gargoyle-spec-executor")
-    call = {"tool": "write_file", "args": {"path": "C:\\finance\\q3.md", "content": "..."}, "principal": "claude@hearthcorp.com", "on_behalf_of": "jdoe@hearthcorp.com"}
+    call = {"tool": "write_file", "args": {"path": "C:\\finance\\q3.md", "content": "..."}, "principal": "claude@contoso.com", "on_behalf_of": "jdoe@contoso.com"}
     pin = {"policy_id": "gargoyle.rules/1", "policy_sha256": "19" * 32}
     env = build_envelope(decision="ELIGIBLE", target_url="mcp://filesystem/C:\\finance", call=call, policy_pin=pin,
                          timestamp_utc=T0.isoformat(), requires_approval=True, approval={"required": 1})
     receipt = sign_envelope(env, issuer, "issuer-1", not_after=T0 + timedelta(minutes=5), decision_id=str(uuid.uuid4()), approval_request_id=str(uuid.uuid4()))
     grant = sign_grant(build_grant(decision_sha256=receipt["decision_sha256"], approval_request_id=receipt["approval_request_id"],
-                                   grant_id=str(uuid.uuid4()), not_after=T0 + timedelta(minutes=10)), approver, "sysops@hearthcorp.com")
+                                   grant_id=str(uuid.uuid4()), not_after=T0 + timedelta(minutes=10)), approver, "sysops@contoso.com")
     execution = sign_execution_receipt(build_execution_receipt(envelope=receipt, outputs={"ok": True}, executed_at=T0 + timedelta(minutes=1)), executor, "executor-1")
     chain = verify_chain(receipt, execution, issuer_public_keys={"issuer-1": issuer.public_key()}, executor_public_keys={"executor-1": executor.public_key()},
-                         grant=grant, approver_public_keys={"sysops@hearthcorp.com": approver.public_key()})
+                         grant=grant, approver_public_keys={"sysops@contoso.com": approver.public_key()})
     assert chain["accepted"], chain
     return issuer, approver, executor, receipt, grant, execution
 
@@ -190,15 +190,15 @@ def _signed_grant_with_signoff(receipt, approver, approver_id, *, index=1, grant
 
 def test_a_grant_carrying_a_signoff_verifies_as_a_grant_and_the_signoff_checks_against_the_hold():
     issuer, approver, executor, receipt, _, execution = _chain()
-    grant = _signed_grant_with_signoff(receipt, approver, "sysops@hearthcorp.com")
+    grant = _signed_grant_with_signoff(receipt, approver, "sysops@contoso.com")
     ok = verify_grant(grant, expected_decision_sha256=receipt["decision_sha256"], expected_approval_request_id=receipt["approval_request_id"],
-                      approver_public_keys={"sysops@hearthcorp.com": approver.public_key()}, gate_key_id="issuer-1", now=T0)
+                      approver_public_keys={"sysops@contoso.com": approver.public_key()}, gate_key_id="issuer-1", now=T0)
     assert ok["accepted"], ok                              # the member is inside the grant signature; verifiers ignore what they do not know
     assert emilia.verify_embedded_signoff(grant, receipt, approver.public_key()) == {"accepted": True, "reason": None}
     assert emilia.verify_embedded_signoff(grant, receipt, [executor.public_key(), approver.public_key()])["accepted"]   # key history: any of them
     # The whole chain, exported, verifies by the draft's rules with the approver's real signoff.
     chain = verify_chain(receipt, execution, issuer_public_keys={"issuer-1": issuer.public_key()}, executor_public_keys={"executor-1": executor.public_key()},
-                         grant=grant, approver_public_keys={"sysops@hearthcorp.com": approver.public_key()})
+                         grant=grant, approver_public_keys={"sysops@contoso.com": approver.public_key()})
     assert chain["accepted"]
 
 
@@ -214,9 +214,9 @@ def test_the_issuer_side_check_refuses_a_signoff_that_does_not_match_the_hold():
         "index zero": (dict(index=0), emilia.REF_EMILIA_SIGNOFF_MALFORMED),
     }
     for name, (kw, reason) in cases.items():
-        grant = _signed_grant_with_signoff(receipt, approver, "sysops@hearthcorp.com", **kw)
+        grant = _signed_grant_with_signoff(receipt, approver, "sysops@contoso.com", **kw)
         assert emilia.verify_embedded_signoff(grant, receipt, approver.public_key()) == {"accepted": False, "reason": reason}, name
-    bare = _signed_grant_with_signoff(receipt, approver, "sysops@hearthcorp.com")
+    bare = _signed_grant_with_signoff(receipt, approver, "sysops@contoso.com")
     bare[emilia.EMILIA_MEMBER] = {"context": "no"}
     assert emilia.verify_embedded_signoff(bare, receipt, approver.public_key())["reason"] == emilia.REF_EMILIA_SIGNOFF_MALFORMED
 
@@ -273,24 +273,24 @@ def _exported_log(tmp_path):
     issuer, approver, executor, _, _, _ = _chain()
     rows = []
     for n in range(4):
-        call = {"tool": "write_file", "args": {"path": "C:\\finance\\f%d.md" % n}, "principal": "claude@hearthcorp.com"}
+        call = {"tool": "write_file", "args": {"path": "C:\\finance\\f%d.md" % n}, "principal": "claude@contoso.com"}
         env = build_envelope(decision="ELIGIBLE", target_url="mcp://filesystem/C:\\finance", call=call, policy_pin={"policy_id": "gargoyle.rules/1", "policy_sha256": "19" * 32},
                              timestamp_utc=(T0 + timedelta(minutes=n)).isoformat(), requires_approval=True)
         receipt = sign_envelope(env, issuer, "issuer-1", not_after=T0 + timedelta(minutes=n + 5), decision_id=str(uuid.uuid4()), approval_request_id=str(uuid.uuid4()))
         if n < 3:
-            grant = _signed_grant_with_signoff(receipt, approver, "sysops@hearthcorp.com", grant_not_after=T0 + timedelta(minutes=n + 10))
+            grant = _signed_grant_with_signoff(receipt, approver, "sysops@contoso.com", grant_not_after=T0 + timedelta(minutes=n + 10))
         else:
             grant = sign_grant(build_grant(decision_sha256=receipt["decision_sha256"], approval_request_id=receipt["approval_request_id"], grant_id="g-cli",
-                                           not_after=T0 + timedelta(minutes=n + 10)), approver, "sysops@hearthcorp.com")
+                                           not_after=T0 + timedelta(minutes=n + 10)), approver, "sysops@contoso.com")
         execution = sign_execution_receipt(build_execution_receipt(envelope=receipt, outputs={"ok": True}, executed_at=T0 + timedelta(minutes=n, seconds=40)), executor, "executor-1")
         rows.append(dict(kind=HONORED, tool="write_file", args=call["args"], principal=call["principal"], reason="ACCEPT", receipt=receipt, grant=grant, execution=execution,
                          at=T0 + timedelta(minutes=n, seconds=41)))
-    rows.append(dict(kind=REFUSED, tool="delete_file", args={"path": "x"}, principal="claude@hearthcorp.com", reason="REF_TARGET_POLICY_REFUSED", at=T0 + timedelta(minutes=9)))
+    rows.append(dict(kind=REFUSED, tool="delete_file", args={"path": "x"}, principal="claude@contoso.com", reason="REF_TARGET_POLICY_REFUSED", at=T0 + timedelta(minutes=9)))
     _write_log(tmp_path / "audit.jsonl", rows)
     from gargoyle.evidence import read_log
     result = emilia.trust_receipts_from_entries(read_log(str(tmp_path / "audit.jsonl")), log_signing_key=executor, log_key_id="executor-1")
     assert result["skipped"] == 1 and len(result["receipts"]) == 3
-    approvers_hex = {"sysops@hearthcorp.com": [Ed25519PrivateKey.generate().public_key().public_bytes_raw().hex(), approver.public_key().public_bytes_raw().hex()]}
+    approvers_hex = {"sysops@contoso.com": [Ed25519PrivateKey.generate().public_key().public_bytes_raw().hex(), approver.public_key().public_bytes_raw().hex()]}
     return [{"id": r["receipt_id"], "expect": {"valid": True}, "trust_receipt": r, "verification": emilia.verification_for(r, approvers_hex, executor.public_key())}
             for r in result["receipts"]]
 
@@ -308,7 +308,7 @@ def test_an_evidence_log_exports_as_trust_receipts_under_one_merkle_checkpoint(t
         assert lp["inclusion_path"] and "sha256:" + _fold(leaf, lp["inclusion_path"]) == cp["root_hash"]
         signed = {k: x for k, x in cp.items() if k != "log_signature"}
         load_der_public_key(emilia.b64u_decode(v["verification"]["log_public_key"])).verify(emilia.b64u_decode(cp["log_signature"]), hashlib.sha256(canonical_json(signed).encode()).digest())
-        key = v["verification"]["approver_keys"]["sysops@hearthcorp.com"]        # the key that verifies, chosen from the id's history
+        key = v["verification"]["approver_keys"]["sysops@contoso.com"]        # the key that verifies, chosen from the id's history
         load_der_public_key(emilia.b64u_decode(key["public_key"])).verify(emilia.b64u_decode(tr["signoffs"][0]["signature"]), bytes.fromhex(tr["signoffs"][0]["context_hash"][7:]))
         assert tr["signoffs"][0]["signed_at"] == tr["contexts"][0]["issued_at"][:16] + tr["signoffs"][0]["signed_at"][16:]    # the evidence entry's time, inside the window
 
@@ -322,7 +322,7 @@ def test_gargoyle_emilia_command_writes_the_export(tmp_path, capsys):
     issuer = Ed25519PrivateKey.from_private_bytes(bytes.fromhex(ienv["GARGOYLE_ISSUER_KEY_HEX"]))
     approver = Ed25519PrivateKey.from_private_bytes(bytes.fromhex(aenv["GARGOYLE_APPROVER_KEY_HEX"]))
     executor = Ed25519PrivateKey.from_private_bytes(bytes.fromhex(menv["GARGOYLE_MCP_EXECUTOR_KEY_HEX"]))
-    call = {"tool": "write_file", "args": {"path": "a.md"}, "principal": "claude@hearthcorp.com"}
+    call = {"tool": "write_file", "args": {"path": "a.md"}, "principal": "claude@contoso.com"}
     env = build_envelope(decision="ELIGIBLE", target_url=menv["GARGOYLE_MCP_TARGET_ID"], call=call, policy_pin={"policy_id": "gargoyle.rules/1", "policy_sha256": "19" * 32},
                          timestamp_utc=T0.isoformat(), requires_approval=True)
     receipt = sign_envelope(env, issuer, "issuer-1", not_after=T0 + timedelta(minutes=5), decision_id=str(uuid.uuid4()), approval_request_id=str(uuid.uuid4()))

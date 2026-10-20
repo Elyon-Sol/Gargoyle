@@ -18,12 +18,13 @@ verifiers (commit 3f712d2 of their repository, their runners unmodified).
 | EMILIA vectors, Gargoyle canonical form | EP-CANONICALIZATION-v1, 35 vectors (NFC, surrogates, duplicate names, depth, I-JSON profile) | 35/35 agree |
 | Gargoyle export, EMILIA verifiers | A Gargoyle receipt and an execution receipt wrapped as EP-RECEIPT-v1 under the issuer and executor keys; a tampered copy | JS and Python runners: valid, valid, refused |
 | Gargoyle export, EMILIA verifiers | A full Gargoyle chain (flagged receipt, grant, execution receipt) as an EP-AUTHORIZATION-RECEIPT-v1 Trust Receipt with a Class B signoff over the context hash, single-leaf Merkle-v2 log proof signed by the issuer key; plus three negatives | JS and Python runners: valid; grant-signature-reused refused; tampered args refused; approver equals initiator refused |
-| LIVE pilot export, EMILIA verifiers (2026-10-20 23:11 UTC) | `gargoyle emilia` run on the Windows pilot client (gargoyle-receipts 0.19.0.dev0) over its 60-entry evidence log: one write_file approved in the browser console by the Entra-enrolled approver, the grant carrying the dual-signed `emilia` member; 17 earlier approvals skipped (grants predate the member); executor-signed checkpoint, tree size 1 | JS and Python runners: valid; copies with the initiator, args hash, checkpoint root or signoff signature altered: refused by both |
+| LIVE export, EMILIA verifiers (2026-10-20 23:11 UTC) | `gargoyle emilia` run on the author's own Windows workstation (gargoyle-receipts 0.19.0.dev0; the author's Entra tenant, separate requester and approver accounts; no outside client has run Gargoyle yet) over its 60-entry evidence log: one write_file approved in the browser console by the Entra-enrolled approver, the grant carrying the dual-signed `emilia` member; 17 earlier approvals skipped (grants predate the member); executor-signed checkpoint, tree size 1 | JS and Python runners: valid; copies with the initiator, args hash, checkpoint root or signoff signature altered: refused by both |
 
 Both EMILIA runners (`conformance/runners/run-js.mjs`, `run_py.py`) produced
-the expected verdict on all seven synthetic vectors and on the live pilot export
+the expected verdict on all seven synthetic vectors and on the live workstation export
 (sha256 067d55b73317a5dd0e37ace02d4a5992c6d279274e446fe67cdeb28058fbe0d0, kept
-outside the repository because it names the pilot's accounts and paths). The Go lane was not run
+outside the repository because it names the author's accounts and paths; a redacted,
+re-signed copy is in docs/interop-emilia/). The Go lane was not run
 (no Go toolchain on this machine).
 
 ## What maps cleanly
