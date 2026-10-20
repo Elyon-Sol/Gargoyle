@@ -62,7 +62,7 @@ def rpc(client, token, msg, sid=None):
 
 
 def test_remote_gate_over_stdio_upstream(tmp_path):
-    root = tmp_path / "root"; root.mkdir(); (root / "n.md").write_text("one\n", encoding="utf-8")
+    root = tmp_path / "root"; root.mkdir(); (root / "n.md").write_text("one\n", encoding="utf-8", newline="\n")
     _, shim, human = _issuer()
     tokens = TokenMap(str(tmp_path / "remote-tokens.json"))
     alice = tokens.mint("alice@contoso.com", mint_identity_token("alice@contoso.com", idp, "idp-1", "gargoyle-issuer"))

@@ -88,7 +88,7 @@ def call(state, n, name, args):
 
 
 def test_honest_evidence_reconciles_and_tampering_is_found(tmp_path):
-    root = tmp_path / "root"; root.mkdir(); (root / "n.md").write_text("one\n", encoding="utf-8"); (root / "other.md").write_text("x", encoding="utf-8")
+    root = tmp_path / "root"; root.mkdir(); (root / "n.md").write_text("one\n", encoding="utf-8", newline="\n"); (root / "other.md").write_text("x", encoding="utf-8")
     state, up, c, h, w = _rig(tmp_path, root)
     try:
         assert call(state, 2, "read_file", {"path": str(root / "n.md")})["_meta"][EXECUTED_META_KEY]
@@ -130,7 +130,7 @@ def test_honest_evidence_reconciles_and_tampering_is_found(tmp_path):
     # The tree: as the gate left it, then edited behind its back, then deleted.
     t = check_tree(evidence, str(root))
     assert t["accepted"] and t["checked"] == 1 and t["untouched"] == 1
-    (root / "n.md").write_text("edited in notepad\n", encoding="utf-8")
+    (root / "n.md").write_text("edited in notepad\n", encoding="utf-8", newline="\n")
     t = check_tree(evidence, str(root))
     assert [f["finding"] for f in t["findings"]] == ["CHANGED_OUTSIDE_GATE"] and t["findings"][0]["path"] == str(root / "n.md")
     (root / "n.md").unlink()
@@ -138,7 +138,7 @@ def test_honest_evidence_reconciles_and_tampering_is_found(tmp_path):
 
 
 def test_audit_command_reports_reconciliation_and_tree(tmp_path, capsys):
-    root = tmp_path / "root"; root.mkdir(); (root / "n.md").write_text("one\n", encoding="utf-8")
+    root = tmp_path / "root"; root.mkdir(); (root / "n.md").write_text("one\n", encoding="utf-8", newline="\n")
     state, up, c, h, w = _rig(tmp_path, root)
     try:
         assert call(state, 2, "write_file", {"path": str(root / "n.md"), "content": "two\n"})["_meta"][EXECUTED_META_KEY]

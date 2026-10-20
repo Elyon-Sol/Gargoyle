@@ -93,7 +93,7 @@ def call(state, n, name, args):
 
 def test_revert_restores_an_approved_write_through_the_gate(tmp_path):
     root = tmp_path / "root"; root.mkdir()
-    target = root / "notes.md"; target.write_text("one\n", encoding="utf-8")
+    target = root / "notes.md"; target.write_text("one\n", encoding="utf-8", newline="\n")
     state, up, cards = _rig(tmp_path, root)
     try:
         tools = handle_message(state, {"jsonrpc": "2.0", "id": 0, "method": "tools/list", "params": {}})["result"]["tools"]
@@ -128,7 +128,7 @@ def test_revert_restores_an_approved_write_through_the_gate(tmp_path):
 
         # Changed since: refused before any card.
         n_cards = len(cards)
-        target.write_text("someone edited this\n", encoding="utf-8")
+        target.write_text("someone edited this\n", encoding="utf-8", newline="\n")
         r = call(state, 5, REVERT_TOOL, {"decision_id": "last"})
         assert r["result"]["isError"] and r["result"]["_meta"][REASON_META_KEY] == REF_REVERT_STATE_CHANGED and len(cards) == n_cards
 

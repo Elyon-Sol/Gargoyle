@@ -127,7 +127,7 @@ def test_middleware_refuses_when_the_file_moved_between_card_and_run(tmp_path):
         def post(self, url, json=None, headers=None, timeout=None): return c.post(url.replace("http://i", ""), json=json, headers=headers)
         def get(self, url, headers=None, timeout=None): return c.get(url.replace("http://i", ""), headers=headers)
 
-    target = tmp_path / "notes.md"; target.write_text("one\n", encoding="utf-8")
+    target = tmp_path / "notes.md"; target.write_text("one\n", encoding="utf-8", newline="\n")
     params = {"name": "write_file", "arguments": {"path": str(target), "content": "two\n"}}
     seen = {}
 
@@ -135,7 +135,7 @@ def test_middleware_refuses_when_the_file_moved_between_card_and_run(tmp_path):
         hold = c.get("/pending", headers=h).json()["pending"][0]
         seen["state"] = hold["state"]
         if seen.get("edit"):
-            target.write_text("someone else wrote this\n", encoding="utf-8")    # the world moved
+            target.write_text("someone else wrote this\n", encoding="utf-8", newline="\n")    # the world moved
         env = hold["envelope"]
         g = sign_grant(build_grant(decision_sha256=env["decision_sha256"], approval_request_id=env["approval_request_id"],
                                    grant_id="g-" + env["approval_request_id"], not_after=datetime.now(timezone.utc) + timedelta(minutes=5)),
@@ -156,11 +156,11 @@ def test_middleware_refuses_when_the_file_moved_between_card_and_run(tmp_path):
     assert target.read_text(encoding="utf-8") == "someone else wrote this\n"       # untouched by the gate
 
     seen["edit"] = False
-    target.write_text("one\n", encoding="utf-8")
+    target.write_text("one\n", encoding="utf-8", newline="\n")
     state = mw()
     gate = _gate(state, params)
     assert gate["executed"], gate["reason"]
-    target.write_text("two\n", encoding="utf-8")                                   # the upstream's effect, simulated
+    target.write_text("two\n", encoding="utf-8", newline="\n")                                   # the upstream's effect, simulated
     meta = _audit_meta(state, gate, {"ok": True}, params)
     ex = meta["gargoyle/execution"]
     assert ex["pre_state_sha256"] == state_sha256(describe(str(target), b"one\n"))
