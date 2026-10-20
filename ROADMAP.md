@@ -98,7 +98,12 @@ verifying itself for no external user; that is the failure mode to avoid.
   middleware fetched the approver map and ran the write. The witness carries the
   requester's object id on both issued entries and verifies as one chain across the
   restart (14 entries). Scoping, tenant binding and the role-bearing approver path
-  all held on real identities.
+  all held on real identities. Client audit: 51 entries (48 honored, 3 refused),
+  0 failed, EVIDENCE_VERIFIED; with the current witness copied over, reconciled 9
+  issued against 50 in evidence with 0 findings; tree 2 gated files unchanged. The
+  first audit, run against a stale witness copy, reported six UNWITNESSED_RECEIPT
+  findings for exactly the rows the stale copy could not see, then withdrew them with
+  the current copy: the audit refusing to vouch on evidence it did not have.
 - First outside review (2026-10-20): a language model with access to the public
   repository (a Claude model, so one that shares blind spots with the co-author) ran
   both suites, matched the PyPI sdist and wheel to the tag, and read the issuer,
