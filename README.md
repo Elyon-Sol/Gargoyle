@@ -21,7 +21,7 @@ your MCP server and lets through only what both agreed to.
 
 [![PyPI](https://img.shields.io/pypi/v/gargoyle-receipts)](https://pypi.org/project/gargoyle-receipts/)
 
-Status: pre-release (`0.16.3.dev0`, on PyPI as `gargoyle-receipts`). The wire format is `gargoyle/3` and may
+Status: pre-release (`0.16.4.dev0`, on PyPI as `gargoyle-receipts`). The wire format is `gargoyle/3` and may
 still change before the first release; it is specified in [SPEC.md](SPEC.md).
 
 ## What a receipt gives you
@@ -240,9 +240,13 @@ chat channel can approve anything.
 
     pip install gargoyle-receipts
 
-Three commands, no policy engine, no containers, no client changes:
+Three commands, no policy engine, no containers, no client changes
+(`--observe` starts a deployment in record-only mode; `gargoyle audit
+--summary` then shows calls by principal and tool, the input for the
+hold and deny rules):
 
     gargoyle init /path/the/agent/may/touch     # keys, config, rules.json
+    gargoyle init --observe /path/...           # or: allow and record everything, hold nothing, tighten later
     gargoyle issuer                             # the issuing service, on rules.json
     gargoyle approve --watch 2                  # where the approver sits (terminal)
 

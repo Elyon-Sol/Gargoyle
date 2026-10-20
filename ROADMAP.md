@@ -92,6 +92,14 @@ verifying itself for no external user; that is the failure mode to avoid.
   hold and the receipt, with a link to /approve from GARGOYLE_APPROVE_URL); posted in
   a thread, failures logged and ignored, the grant still only from the approver's
   key. 80 lines. All six roadmap steps are done.
+- Observe mode (2026-10-20): `gargoyle init --observe` writes an allow-all rules file, so
+  the gate records every call (receipt, evidence, witness) and holds none; `gargoyle audit
+  --summary` prints calls by principal and tool with outcomes, releases and clients. The
+  pilot pattern (guide 4.4c, beta checklist): a client's first week in observe mode, then
+  the hold and deny rules written from the summary; switching rules changes the pin, so
+  restart the issuer and copy record.json to the clients. Hashes of arguments only, by
+  design; recording contents would be an explicit per-client flag, not built; the model's
+  own prompt traffic is out of scope. 0.16.4.dev0.
 - Pre-pilot (2026-10-20): two items before the first client enrollment. The console's
   trust limit is written down (SPEC 8.3, report 9.2 and 11): the issuer serves the
   approval page, so its operator could make an approver's browser key sign a release

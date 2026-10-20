@@ -322,6 +322,18 @@ with the client's evidence; it is the question the client's auditor will
 ask. Run live on 2026-10-20 in Claude Desktop: no route, both options
 offered, nothing written.
 
+**4.4c Observe first.** `gargoyle init --observe DIR ...` writes a rules
+file that allows every call: the gate records all of them (receipt,
+evidence entry, witness entry) and holds none. Run a new client's first
+week this way, then read `gargoyle audit --log ... --summary`, which
+prints calls by principal and tool with their outcomes, and write the
+hold and deny rules from what the assistants actually did rather than
+from a guess. Switching rules changes the policy pin: edit `rules.json`,
+restart the issuer (it rewrites `record.json`), and copy the new
+`record.json` to each client's config folder; receipts under the old pin
+die at once, which is the intended effect. Observe mode records the hash
+of each call's arguments, never the arguments themselves.
+
 **4.5 Claude Desktop instead of Claude Code.** The GUI app speaks MCP the
 same way. `gargoyle init` already writes the entry in Desktop's shape
 (`mcp-config.json`); use the full path to `python.exe` as the command,

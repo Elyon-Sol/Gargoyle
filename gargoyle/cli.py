@@ -51,6 +51,17 @@ from pathlib import Path
 
 PRINCIPAL = "spiffe://gargoyle.local/agents/assistant"
 
+OBSERVE_RULES = {
+    # Observe mode: every call allowed, every call recorded, none held. The
+    # first week of a deployment, so the hold and deny rules are written
+    # from the audit rather than guessed. The policy pin changes when the
+    # rules do, so switching modes means restarting the issuer and copying
+    # the new record.json to each client.
+    "version": "1",
+    "default": "allow",
+    "rules": [],
+}
+
 DEFAULT_RULES = {
     "version": "1",
     "default": "deny",
@@ -118,7 +129,13 @@ def cmd_init(args) -> int:
     issuer_url = args.issuer_url or "http://%s:%d" % (args.host, args.port)
 
     rules = out / "rules.json"
-    if not rules.exists():
+    if args.observe:
+        if not rules.exists() or json.loads(rules.read_text()) == DEFAULT_RULES:
+            _write(rules, json.dumps(OBSERVE_RULES, indent=2) + "\n")
+        print("observe mode: rules.json allows every call; the gate records all of them and holds none. "
+              "Tighten rules.json from `gargoyle audit --summary`, then restart the issuer and copy the new "
+              "record.json to the clients.")
+    elif not rules.exists():
         _write(rules, json.dumps(DEFAULT_RULES, indent=2) + "\n")
     _write(out / "issuer.env", _env_lines({
         "GARGOYLE_ISSUER_KEY_ID": "issuer-1", "GARGOYLE_ISSUER_KEY_HEX": issuer_hex,
@@ -360,6 +377,29 @@ def cmd_approvers(args) -> int:
     return 1
 
 
+def _audit_summary(report, raw) -> None:
+    """Calls by principal and tool with their outcomes, then who released
+    and which clients: a week of observe mode as a table, the input for
+    writing the hold and deny rules."""
+    from collections import Counter
+    counts: Dict[tuple, Counter] = {}
+    releases: Counter = Counter()
+    clients: Counter = Counter()
+    ats = [e.get("at") for e in raw if isinstance(e, dict) and isinstance(e.get("at"), str)]
+    for r in report:
+        counts.setdefault((r["principal"] or "?", r["tool"] or "?"), Counter())[r["kind"] or "?"] += 1
+        for who in r.get("released_by") or []:
+            releases[who] += 1
+        clients[r.get("client") or "(client unnamed)"] += 1
+    print("summary: %d call(s)%s" % (len(report), (", %s to %s" % (min(ats)[:19], max(ats)[:19])) if ats else ""))
+    print("  %-28s %-24s %7s %7s" % ("principal", "tool", "honored", "refused"))
+    for (principal, tool), c in sorted(counts.items(), key=lambda kv: (kv[0][0], -sum(kv[1].values()), kv[0][1])):
+        print("  %-28s %-24s %7d %7d" % (principal[:28], tool[:24], c.get("honored", 0), c.get("refused", 0)))
+    if releases:
+        print("  releases: " + ", ".join("%s %d" % (w, n) for w, n in releases.most_common()))
+    print("  clients: " + ", ".join("%s %d" % (w, n) for w, n in clients.most_common()))
+
+
 def cmd_audit(args) -> int:
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
     from gargoyle.execution import verify_chain
@@ -406,6 +446,8 @@ def cmd_audit(args) -> int:
               % (v["count"], v["honored"], v["refused"], failed, v["reason"], v["tail_sha256"][:16]))
         rc = 0 if v["accepted"] else 1
         entries = read_log(args.log)
+        if args.summary:
+            _audit_summary(v["entries"], entries)
         if args.witness and not Path(args.witness).exists():
             print("witness file not found: %s (copy the issuer's witness.jsonl here first)" % args.witness, file=sys.stderr)
             return 2
@@ -460,6 +502,8 @@ def main(argv=None) -> int:
     p.add_argument("--issuer-url", help="URL the client reaches the issuer at (default http://HOST:PORT)")
     p.add_argument("--client-python", help="the client's Python executable for the MCP entry (default: this one)")
     p.add_argument("--client-config-dir", help="where the client keeps middleware.env, record.json, audit.jsonl (default: --out)")
+    p.add_argument("--observe", action="store_true",
+                   help="observe mode: allow and record every call, hold none; tighten rules.json later from the audit")
     p.add_argument("--approvers", type=int, default=1, metavar="N",
                    help="how many approver keys to create (approver-1..N); a rule with \"approvals\": 2 then needs two of them")
     p.add_argument("--upstream", choices=["npx-filesystem", "python-fs"], default="npx-filesystem",
@@ -512,6 +556,7 @@ def main(argv=None) -> int:
     p.add_argument("--log", help="the middleware's audit.jsonl: verify every entry")
     p.add_argument("--witness", help="the issuer's witness.jsonl: reconcile the evidence against it")
     p.add_argument("--check-tree", metavar="DIR", help="verify every gated file under DIR is as the gate left it")
+    p.add_argument("--summary", action="store_true", help="after the rows: calls by principal and tool with outcomes, releases, clients")
     p.add_argument("--out", default="gargoyle-deploy")
     p.set_defaults(fn=cmd_audit)
     args = parser.parse_args(argv)

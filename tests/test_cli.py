@@ -108,8 +108,9 @@ def test_init_for_a_windows_client_and_audit_log_verification(tmp_path, monkeypa
     gate = _gate(state, params); assert not gate["executed"]
     _record(state, REFUSED, gate, params)
     assert len(log.read_text().splitlines()) == 4
-    assert main(["audit", "--log", str(log), "--out", str(out)]) == 0
+    assert main(["audit", "--log", str(log), "--out", str(out), "--summary"]) == 0
     out_text = capsys.readouterr().out
+    assert "summary:" in out_text and "principal" in out_text and "clients:" in out_text
     assert "4 entries (3 honored, 1 refused), 0 failed; chain EVIDENCE_VERIFIED" in out_text
     assert out_text.count(" ok ") == 4 and "refused  delete_file" in out_text
     assert "ENTRY_VERIFIED (DESTRUCTIVE_TOOL)" in out_text
@@ -143,3 +144,25 @@ def test_the_package_runs_as_a_module():
     import subprocess, sys
     r = subprocess.run([sys.executable, "-m", "gargoyle", "--help"], capture_output=True, text=True, timeout=60)
     assert r.returncode == 0 and "audit" in r.stdout
+
+
+def test_init_observe_allows_everything_and_records_it(tmp_path, capsys):
+    """Observe mode: the rules file allows every call, so the gate holds
+    nothing and refuses nothing while every call still gets a receipt and an
+    evidence entry. The default rules are not touched once someone edited them."""
+    from gargoyle.cli import DEFAULT_RULES, OBSERVE_RULES
+    from gargoyle.rules import RulesPolicy
+    out = tmp_path / "deploy"
+    assert main(["init", str(tmp_path / "project"), "--out", str(out), "--observe"]) == 0
+    assert "observe mode" in capsys.readouterr().out
+    assert json.loads((out / "rules.json").read_text()) == OBSERVE_RULES
+    policy = RulesPolicy(str(out / "rules.json"))
+    for tool in ("read_file", "write_file", "delete_file", "anything_else"):
+        d = policy.decide("mcp://x", {"tool": tool, "args": {}, "principal": "p"})
+        assert d.eligible and not d.requires_approval
+    assert policy.pin()["policy_sha256"] != RulesPolicy.__module__ and policy.pin()["policy_id"]
+    # A hand-edited rules file is left alone by a later --observe.
+    custom = {**DEFAULT_RULES, "rules": DEFAULT_RULES["rules"][:1]}
+    (out / "rules.json").write_text(json.dumps(custom))
+    assert main(["init", str(tmp_path / "project"), "--out", str(out), "--observe"]) == 0
+    assert json.loads((out / "rules.json").read_text()) == custom

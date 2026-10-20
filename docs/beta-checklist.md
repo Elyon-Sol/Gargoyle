@@ -13,6 +13,8 @@ console, a handful of workstations, files or Microsoft 365 behind the gate.
       the private PoC CA is for labs only.
 - [ ] Entra: the two app registrations (docs/entra-setup.md), the Approver app role
       assigned to the people who approve, `GARGOYLE_ISSUER_AUDIENCE` set as a list.
+- [ ] Or start in observe mode (`gargoyle init --observe`): a week of recording, then
+      the hold and deny rules from `gargoyle audit --summary` (guide 4.4c).
 - [ ] `rules.json` reviewed with the client: what is free, what is held, who approves
       what (`approvers` by UPN), what may be planned (`"plan": false` on sends), what
       is denied. Keep the first version small; widen later.
