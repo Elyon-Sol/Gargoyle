@@ -62,6 +62,15 @@ verifying itself for no external user; that is the failure mode to avoid.
    approver changes, rule changes under record following, audits with witness and
    approvers.json). The guide, entra-setup and beta-checklist are the raw material.
 
+**Third comparison (2026-10-20, docs/comparison-2026-10-20.md).** Scored from
+primary sources on a fixed 23-property set: Gargoyle 96%, EMILIA Protocol 87%, NOA
+83%, Signet 72%, Microsoft AGT 70%, ActionProxy 59%. The 2026-10-16 claim that nobody
+else had a keyed human grant verified at execution was wrong (EMILIA and NOA do). Left
+to Gargoyle alone: state-bound approval, undo proven by hashes, witness reconciliation,
+and directory identity on both ends. The stop rule above triggered and was not acted
+on; the next work is interoperation (run EMILIA's or NOA's vectors against an export)
+and one client in observe mode, not step 7 or any new primitive.
+
 ## Not on the roadmap
 
 - Rebuilding a canon, a ledger apparatus or governance rules.
