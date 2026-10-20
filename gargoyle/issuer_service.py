@@ -150,7 +150,20 @@ def build_issuer_app(
     registry = approver_registry if approver_registry is not None else ApproverRegistry(None)
     static_approvers = dict(approver_public_keys or {})
 
+    app.state.revoked_seen = set(registry.revoked_entries())
+
+    def _notice_revocations() -> None:
+        """An operator's `gargoyle approvers revoke` edits the file on the
+        host; the first read after it puts a `revoked` entry in the witness,
+        so the record shows who was trusted when. Revocations the service
+        made itself were witnessed as they happened."""
+        current = registry.revoked_entries()
+        for upn in sorted(set(current) - app.state.revoked_seen):
+            event("revoked", approver=upn, by=current[upn].get("revoked_by"), revoked_at=current[upn].get("revoked_at"))
+        app.state.revoked_seen = set(current)
+
     def approver_keys() -> Dict[str, Any]:
+        _notice_revocations()
         """Static keys from configuration plus every enrolled approver, by UPN."""
         return {**static_approvers, **registry.keys()}
 
@@ -384,21 +397,27 @@ def build_issuer_app(
         plan = app.state.pending_plans.get(arid) if isinstance(arid, str) else None
         if env is None and plan is None:
             return {"accepted": False, "reason": REF_ISSUER_UNKNOWN_HOLD}
+        def refused(reason: str) -> Dict[str, Any]:
+            # A release that did not happen is a decision too: a revoked or
+            # unknown key trying to release a hold belongs in the witness.
+            kid = grant.get("approver_key_id")
+            event("grant_refused", approval_request_id=arid, reason=reason, **({"approver": kid} if isinstance(kid, str) else {}))
+            return {"accepted": False, "reason": reason}
         trusted = approver_keys()
         if not trusted:
-            return {"accepted": False, "reason": REF_ISSUER_NO_APPROVER_TRUST}
+            return refused(REF_ISSUER_NO_APPROVER_TRUST)
         g = verify_grant(grant, expected_decision_sha256=env["decision_sha256"] if env else plan["plan_sha256"],
                          expected_approval_request_id=arid, approver_public_keys=trusted,
                          gate_key_id=key_id, now=now())
         if not g["accepted"]:
-            return {"accepted": False, "reason": g["reason"]}
+            return refused(g["reason"])
         # The receipt's (or plan's) own terms: distinct approvers, from the named set if any.
         terms = approval_terms(env) if env else _plan_terms(plan)
         have = list(app.state.grants.get(arid, []))
         if any(h["approver_key_id"] == grant["approver_key_id"] for h in have):
-            return {"accepted": False, "reason": REF_APPROVAL_DUPLICATE_APPROVER}
+            return refused(REF_APPROVAL_DUPLICATE_APPROVER)
         if terms["approvers"] is not None and grant["approver_key_id"] not in terms["approvers"]:
-            return {"accepted": False, "reason": REF_APPROVAL_APPROVER_NOT_ELIGIBLE}
+            return refused(REF_APPROVAL_APPROVER_NOT_ELIGIBLE)
         have.append(grant)
         app.state.grants[arid] = have                      # written back: the store persists on assignment
         event("granted", approval_request_id=arid, approver=grant["approver_key_id"], collected=len(have), required=terms["required"],
@@ -446,6 +465,7 @@ def build_issuer_app(
         """Public, like /record: the enrolled approvers' public keys by UPN,
         for the middleware and for audits. Static configured keys are not
         listed; they travel in config."""
+        _notice_revocations()
         return {"approvers": registry.public_hex()}
 
     @app.post("/approvers/enroll")
@@ -486,6 +506,7 @@ def build_issuer_app(
         gone = registry.revoke(upn, revoked_by=who["principal"], now=now())
         if gone:
             event("revoked", approver=upn, by=who["principal"])
+            app.state.revoked_seen.add(upn)
         return {"revoked": gone}
 
     @app.get("/me")
@@ -495,6 +516,7 @@ def build_issuer_app(
         its own key is the one on record)."""
         who = authenticate(authorization)
         upn = who["principal"]
+        _notice_revocations()
         return {"principal": upn, "may_approve": may_enroll(who, role=approver_role, groups=approver_groups) or upn in static_approvers,
                 "enrolled_public_key_hex": registry.public_hex().get(upn)}
 
@@ -540,6 +562,22 @@ def build_issuer_app(
         return {key_id: signing_key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw).hex()}
 
     return app
+
+
+def redact_access_log(logger_name: str = "uvicorn.access") -> None:
+    """The console returns from Microsoft as GET /approve?code=...; the code
+    is single-use and bound to the browser's PKCE verifier, and it still has
+    no place in an access log. Replace query strings on logged paths."""
+    import logging
+    import re
+
+    class _Redact(logging.Filter):
+        def filter(self, record: logging.LogRecord) -> bool:
+            if isinstance(record.args, tuple):
+                record.args = tuple(re.sub(r"\?.*", "?<redacted>", a) if isinstance(a, str) and a.startswith("/") and "?" in a else a
+                                    for a in record.args)
+            return True
+    logging.getLogger(logger_name).addFilter(_Redact())
 
 
 def app_from_env() -> FastAPI:

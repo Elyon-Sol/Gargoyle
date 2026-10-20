@@ -101,8 +101,16 @@ verifying itself for no external user; that is the failure mode to avoid.
   the holds one principal may have open (GARGOYLE_MAX_OPEN_HOLDS, default 20, receipts
   and plans together; REF_ISSUER_TOO_MANY_HOLDS, nothing stored; a decline, release or
   expiry frees a slot), so a runaway client cannot fill the approvers' queue. 0.16.1.dev0.
-  The live revocation exercise (enroll a second browser, revoke it, see its grant
-  refused) is still to run.
+  The live revocation exercise ran the same day: a fresh browser key enrolled
+  (replaced: true, witnessed with the object id), the operator revoked it on the VM,
+  and the release attempt from that browser was refused REF_APPROVAL_KEY_UNKNOWN at
+  the issuer with the hold left standing. It exposed three gaps, fixed in 0.16.2.dev0:
+  a refused release left no witness entry (now grant_refused, with key id and reason);
+  an operator's revocation left none (now revoked, with who and when, on the service's
+  next read of the file); and the verbose access log kept the Entra sign-in code from
+  the redirect (now redacted). One fact to state plainly, now in SPEC 8.3, README and
+  both guides: revocation retires a key, not a person; while the Approver role stands
+  the person re-enrolls on the next sign-in, so the role must go too.
 - 0.16 live (2026-10-20): the Windows client on 0.16.0.dev0 against the VM issuer on the
   same code. A free read, then a held write to notes.md; the approver's console, now an
   approvers-only queue, showed the card and the enrolled approver released it; the

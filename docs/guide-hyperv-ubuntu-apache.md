@@ -612,7 +612,7 @@ are persistent.
 | Rotate every key | re-run `gargoyle init` to a new `--out`, redistribute `middleware.env`, `record.json`, `approver-web.json`, update the unit's `--out` |
 | Client token expiry | 30 days by default (`--token-days`); re-run `init` or mint a new token before it lapses |
 | Second approver | `gargoyle init --approvers 2` for file keys, or Entra enrollment; a rule's `"approvals": 2` and `"approvers": [...]` set the threshold and who counts |
-| Revoke an approver | `gargoyle approvers revoke <upn> --out /opt/gargoyle/deploy` on the VM; takes effect without a restart. An approver retires their own key from the console's sign-in (`POST /approvers/revoke`) |
+| Revoke an approver | `gargoyle approvers revoke <upn> --out /opt/gargoyle/deploy` on the VM; takes effect without a restart and is witnessed on the service's next read of the file. An approver retires their own key from the console's sign-in (`POST /approvers/revoke`). Revocation retires the key, not the person: remove the Approver role in Entra as well, or the next sign-in enrolls a fresh key |
 | Backup | `/opt/gargoyle/deploy` and `/etc/ssl/gargoyle`, both private |
 
 ## Troubleshooting

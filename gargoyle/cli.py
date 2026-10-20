@@ -293,7 +293,7 @@ def cmd_remote(args) -> int:
 
 def cmd_issuer(args) -> int:
     import uvicorn
-    from gargoyle.issuer_service import app_from_env
+    from gargoyle.issuer_service import app_from_env, redact_access_log
 
     out = Path(args.out).resolve()
     os.environ.update(_read_env(out / "issuer.env"))
@@ -302,6 +302,7 @@ def cmd_issuer(args) -> int:
     os.environ.setdefault("GARGOYLE_WITNESS_PATH", str(out / "witness.jsonl"))       # the issuer's signed record, for reconciliation
     os.environ.setdefault("GARGOYLE_LOG_JSON", "1")
     app = app_from_env()
+    redact_access_log()                     # no sign-in codes in the access log
     # The middleware reads the policy pin from a file; write it next to the
     # config so the client-side entry finds it at the configured path.
     from gargoyle.rules import RulesPolicy

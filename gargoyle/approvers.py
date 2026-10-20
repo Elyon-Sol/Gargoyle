@@ -146,6 +146,13 @@ class ApproverRegistry:
             self._refresh()
             return {upn: e["public_key_hex"] for upn, e in self._approvers.items()}
 
+    def revoked_entries(self) -> Dict[str, Dict[str, Any]]:
+        """The revoked list with when and by whom, re-read from the file: the
+        service notices an operator's `gargoyle approvers revoke` here."""
+        with self._lock:
+            self._refresh()
+            return {upn: dict(e) for upn, e in self._revoked.items()}
+
     def revoked_hex(self) -> Dict[str, str]:
         """{upn: public_key_hex} of revoked approvers: for verifying the
         grants they signed while trusted, never for accepting new ones."""

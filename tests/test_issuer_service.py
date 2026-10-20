@@ -262,3 +262,34 @@ def test_open_holds_per_principal_are_capped():
     clock["now"] = NOW + timedelta(minutes=10)                                   # expiry frees the rest
     assert write(7, token(exp=NOW + timedelta(minutes=20), aud="gargoyle-issuer"))["issued"] is True
     assert c.get("/health").json()["max_open_holds"] == 2
+
+
+def test_a_refused_release_is_an_event_and_sign_in_codes_leave_the_access_log():
+    """A grant under an unknown or revoked key is refused and the refusal is
+    recorded (log and witness) with the key id and the reason; the live
+    revocation exercise of 2026-10-20 found it left no trace. And the Entra
+    redirect's one-time code is cut from uvicorn's access log."""
+    import logging
+    from gargoyle.approval import REF_APPROVAL_KEY_UNKNOWN
+    from gargoyle.issuer_service import redact_access_log
+    events = []
+    app = build_issuer_app(policy=ToolPolicy(), signing_key=issuer, key_id="issuer-1", idp_public_keys={"idp-1": idp.public_key()},
+                           approver_public_keys={"approver-alice": approver.public_key()}, audience="gargoyle-issuer",
+                           log_events=events.append, now=lambda: NOW)
+    c = TestClient(app)
+    env = c.post("/issue", json={"target_url": TARGET, "tool": "write_file", "args": {"path": "a.txt", "content": "x"}}, headers=auth()).json()["envelope"]
+    arid = env["approval_request_id"]
+    g = sign_grant(build_grant(decision_sha256=env["decision_sha256"], approval_request_id=arid, grant_id="g-9", not_after=NOW + timedelta(minutes=5)),
+                   Ed25519PrivateKey.generate(), "mallory@example.org")
+    assert c.post("/grants", json=g, headers=auth()).json() == {"accepted": False, "reason": REF_APPROVAL_KEY_UNKNOWN}
+    refused = [e for e in events if e["event"] == "grant_refused"]
+    assert refused == [{"event": "grant_refused", "at": NOW.isoformat(), "approval_request_id": arid,
+                        "approver": "mallory@example.org", "reason": REF_APPROVAL_KEY_UNKNOWN}]
+    assert c.get("/pending", headers=auth()).json()["pending"][0]["envelope"]["approval_request_id"] == arid   # the hold stands
+
+    redact_access_log("test.access")
+    rec = logging.LogRecord("test.access", logging.INFO, "", 0, '%s - "%s %s HTTP/%s" %d',
+                            ("1.2.3.4:1", "GET", "/approve?code=SECRET&state=s", "1.1", 200), None)
+    for f in logging.getLogger("test.access").filters:
+        f.filter(rec)
+    assert rec.args[2] == "/approve?<redacted>" and rec.args[1] == "GET"

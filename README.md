@@ -21,7 +21,7 @@ your MCP server and lets through only what both agreed to.
 
 [![PyPI](https://img.shields.io/pypi/v/gargoyle-receipts)](https://pypi.org/project/gargoyle-receipts/)
 
-Status: pre-release (`0.16.1.dev0`, on PyPI as `gargoyle-receipts`). The wire format is `gargoyle/3` and may
+Status: pre-release (`0.16.2.dev0`, on PyPI as `gargoyle-receipts`). The wire format is `gargoyle/3` and may
 still change before the first release; it is specified in [SPEC.md](SPEC.md).
 
 ## What a receipt gives you
@@ -257,7 +257,9 @@ person. An approver retires a lost or replaced key with
 anyone with `gargoyle approvers revoke <upn>` on the issuer's host, and
 the running service picks the change up without a restart. Revoked keys
 stay on file so earlier grants still audit; new ones are refused at the
-issuer and at every middleware on its next held call. Approvers, and
+issuer and at every middleware on its next held call. Revocation retires
+a key, not a person: while the Approver role stands, the person can sign
+in and enroll a fresh key, so remove the role too. Approvers, and
 only approvers, see the whole queue and the witness; everyone else sees
 their own holds. Then paste the server entry from
 `gargoyle-deploy/mcp-config.json` into your MCP client.

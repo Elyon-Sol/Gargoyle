@@ -169,3 +169,31 @@ def test_the_registry_picks_up_a_file_another_process_wrote(tmp_path):
     assert operator.revoke("dana@contoso.com", revoked_by="operator:root")
     os.utime(path, (time.time() + 2, time.time() + 2))     # make the change visible even on a coarse filesystem clock
     assert "dana@contoso.com" not in live and live.public_hex() == {} and live.revoked_hex() == {"dana@contoso.com": pub_hex(key)}
+
+
+def test_an_operators_revocation_on_the_host_reaches_the_witness(tmp_path):
+    """`gargoyle approvers revoke` edits the file; the service witnesses the
+    revocation (who, when) the first time it reads the file afterwards, and
+    only once. Its own revocations are witnessed as they happen, not again."""
+    import os
+    events = []
+    reg = ApproverRegistry(str(tmp_path / "approvers.json"))
+    app = build_issuer_app(policy=Hold(), signing_key=issuer, key_id="issuer-1", idp_public_keys={"idp-1": idp.public_key()},
+                           approver_registry=reg, log_events=events.append)
+    c = TestClient(app)
+    h = lambda t: {"Authorization": "Bearer " + t}
+    for who in ("dana@contoso.com", "lee@contoso.com"):
+        assert c.post("/approvers/enroll", json={"public_key_hex": pub_hex(Ed25519PrivateKey.generate())}, headers=h(token(who, roles=["Approver"]))).json()["enrolled"]
+    # The operator, in another process.
+    other = ApproverRegistry(str(tmp_path / "approvers.json"))
+    assert other.revoke("dana@contoso.com", revoked_by="operator:root")
+    st = os.stat(tmp_path / "approvers.json"); os.utime(tmp_path / "approvers.json", (st.st_atime, st.st_mtime + 2))
+    assert c.get("/approvers").json()["approvers"].keys() == {"lee@contoso.com"}
+    c.get("/approvers")
+    revoked = [e for e in events if e["event"] == "revoked"]
+    assert len(revoked) == 1 and revoked[0]["approver"] == "dana@contoso.com" and revoked[0]["by"] == "operator:root" and revoked[0]["revoked_at"]
+    # Lee revokes their own key through the service: one entry, by Lee.
+    assert c.post("/approvers/revoke", json={"upn": "lee@contoso.com"}, headers=h(token("lee@contoso.com", roles=["Approver"]))).json() == {"revoked": True}
+    c.get("/approvers")
+    revoked = [e for e in events if e["event"] == "revoked"]
+    assert [(e["approver"], e["by"]) for e in revoked] == [("dana@contoso.com", "operator:root"), ("lee@contoso.com", "lee@contoso.com")]
