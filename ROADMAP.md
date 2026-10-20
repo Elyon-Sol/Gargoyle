@@ -128,7 +128,11 @@ verifying itself for no external user; that is the failure mode to avoid.
   gives the verifier all of them, and a grant verifies with any key of its approver id
   (Python and TypeScript); the live service and middleware still trust only the
   current key. The lost key of 2026-10-19 was restored to the VM's history from the
-  handoff copy. Both pre-pilot items are done; the next step is the first client
+  handoff copy. Re-run on the client with 0.16.3 and the current approvers.json and
+  witness copied over: 55 entries (51 honored, 4 refused), 0 failed, EVIDENCE_VERIFIED;
+  witness 31 entries verified; reconciled 13 issued against 54 in evidence, 0 findings;
+  row 55 under the new key and rows 18 to 51 under the restored key of 2026-10-19 all
+  CHAIN_VERIFIED. Both pre-pilot items are done; the next step is the first client
   enrollment.
 - 0.16 live (2026-10-20): the Windows client on 0.16.0.dev0 against the VM issuer on the
   same code. A free read, then a held write to notes.md; the approver's console, now an
