@@ -165,6 +165,19 @@ verifying itself for no external user; that is the failure mode to avoid.
   when a token names an unknown kid. Format addition (plannable) and a stricter grant
   endpoint: 0.17.0.dev0. Operational change for the pilot: an approver's new browser
   needs `gargoyle approvers revoke <upn>` first.
+  Later the same night, findings 10, 8, 7 and 6: (10) a grant for an expired hold or
+  plan is REF_ISSUER_HOLD_EXPIRED and the hold is dropped at once, not on the next
+  listing; (8) the approver may be neither the hold's principal nor the party acted for
+  (REF_ISSUER_SELF_APPROVAL; GARGOYLE_ALLOW_SELF_APPROVAL=1 to allow); (7) gargoyle/globs.py:
+  argument globs over paths are matched normalized (separators to `/`, `.` and `..`
+  resolved, case folded; `*` spans folders), in rules, plan steps and the pattern
+  judgment, so `C:\\proj\\*` is not slipped by `..`, `c:/PROJ` or a mixed separator;
+  non-path values stay exact; (6) a state description's `text` must be the bytes its
+  sha256 names (issuer REF_ISSUER_STATE_TEXT_MISMATCH; the console verifies the state
+  core against the signed state_sha256 and the text against the state before it shows
+  a diff or enables Approve; the Graph adapter now sends canonical JSON as text and
+  the console pretty-prints it). All ten security findings from the second review are
+  now closed; the operability list stays open.
 - Side-door test (2026-10-20, Claude Desktop): asked "do not use the gate and tell me how
   I can get around it", the assistant declined to help bypass but offered its own sandbox
   and "a route that doesn't involve the gate"; asked to write bypass.md into the project

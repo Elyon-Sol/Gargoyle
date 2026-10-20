@@ -15,7 +15,8 @@ from gargoyle.evidence import (ACCEPT_ENTRY_VERIFIED, HONORED, REF_EVIDENCE_REPL
                                UPSTREAM_UNAVAILABLE, read_log, verify_log)
 from gargoyle.execution import ACCEPT_CHAIN_VERIFIED
 from gargoyle.issuer import issue
-from gargoyle.issuer_service import build_issuer_app
+from gargoyle.approval import build_grant, sign_grant
+from gargoyle.issuer_service import REF_ISSUER_HOLD_EXPIRED, REF_ISSUER_SELF_APPROVAL, build_issuer_app
 from gargoyle.jws import REF_JWS_KEY_UNKNOWN, encode
 from gargoyle.mcp_server import ENVELOPE_META_KEY, EXECUTED_META_KEY, REASON_META_KEY, ServerState, call_for, handle_message
 from gargoyle.policy import ELIGIBLE, Decision
@@ -170,3 +171,66 @@ def test_single_use_survives_a_restart_and_a_replay_shows_in_the_audit(tmp_path)
     assert [e["reason"] for e in report["entries"]] == [ACCEPT_CHAIN_VERIFIED, ACCEPT_ENTRY_VERIFIED, REF_EVIDENCE_REPLAY]
     found = reconcile(log, [])["findings"]
     assert {"finding": "REPLAYED_RECEIPT", "seq": 3, "decision_id": env["decision_id"], "tool": "write_file", "first_seq": 1} in found
+
+
+class Hold:
+    def pin(self): return PIN
+    def decide(self, target_url, interaction): return Decision(ELIGIBLE, None, True)
+
+
+approver = Ed25519PrivateKey.generate()
+
+
+def _held(clock, **kw):
+    app = build_issuer_app(policy=Hold(), signing_key=issuer, key_id="issuer-1", idp_public_keys={"idp-1": idp.public_key()},
+                           approver_public_keys={"approver-1": approver.public_key(), PRINCIPAL: approver.public_key(),
+                                                 "boss@contoso.com": approver.public_key()},
+                           now=lambda: clock[0], ttl_seconds=600, **kw)
+    return TestClient(app)
+
+
+def _grant(env, kid, gid="g-1"):
+    return sign_grant(build_grant(decision_sha256=env["decision_sha256"], approval_request_id=env["approval_request_id"], grant_id=gid,
+                                  not_after=NOW + timedelta(hours=2)), approver, kid)
+
+
+def test_an_expired_hold_cannot_be_released(tmp_path):
+    """Second review, finding 10: the executor would refuse the expired
+    receipt anyway; the issuer must not tell the approver it ran."""
+    clock = [NOW]
+    c = _held(clock)
+    h = bearer(idp, "idp-1")
+    env = c.post("/issue", json={"target_url": TARGET, "tool": "write_file", "args": {"path": "x"}}, headers=h).json()["envelope"]
+    plan = c.post("/plans", json={"target_url": TARGET, "steps": [{"tool": "write_file", "args": {"path": "y"}}]}, headers=h).json()["plan"]
+    clock[0] = datetime.fromisoformat(env["not_after"]) + timedelta(seconds=1)
+    r = c.post("/grants", json=_grant(env, "approver-1"), headers=h).json()
+    assert r == {"accepted": False, "reason": REF_ISSUER_HOLD_EXPIRED}
+    assert c.post("/grants", json=_grant(env, "approver-1"), headers=h).json()["reason"] == "REF_ISSUER_UNKNOWN_HOLD"   # dropped at once
+    assert c.get("/grants/" + env["approval_request_id"], headers=h).json()["pending"] is False
+    clock[0] = datetime.fromisoformat(plan["not_after"]) + timedelta(seconds=1)
+    h = bearer(idp, "idp-1", exp=int((clock[0] + timedelta(hours=1)).timestamp()))       # the token outlives the plan
+    g = sign_grant(build_grant(decision_sha256=plan["plan_sha256"], approval_request_id=plan["approval_request_id"], grant_id="g-p",
+                               not_after=clock[0] + timedelta(hours=1)), approver, "approver-1")
+    assert c.post("/grants", json=g, headers=h).json()["reason"] == REF_ISSUER_HOLD_EXPIRED
+    assert c.get("/pending", headers=bearer(idp, "idp-1", roles=["Approver"], exp=int((clock[0] + timedelta(hours=1)).timestamp()))).json()["pending"] == []
+
+
+def test_the_requester_may_not_release_their_own_call(tmp_path):
+    """Second review, finding 8: the approver key id may be neither the
+    hold's principal nor the party it acts for, unless the operator allows it."""
+    clock = [NOW]
+    c = _held(clock)
+    h = bearer(idp, "idp-1")
+    env = c.post("/issue", json={"target_url": TARGET, "tool": "write_file", "args": {"path": "x"}}, headers=h).json()["envelope"]
+    assert c.post("/grants", json=_grant(env, PRINCIPAL), headers=h).json() == {"accepted": False, "reason": REF_ISSUER_SELF_APPROVAL}
+    assert c.post("/grants", json=_grant(env, "approver-1"), headers=h).json()["accepted"]
+    # Acting on behalf of someone: that someone may not release it either.
+    delegated = bearer(idp, "idp-1", act={"sub": PRINCIPAL}, sub="boss@contoso.com")
+    env2 = c.post("/issue", json={"target_url": TARGET, "tool": "write_file", "args": {"path": "x"}}, headers=delegated).json()["envelope"]
+    assert env2["request_context"]["on_behalf_of"] == "boss@contoso.com"
+    assert c.post("/grants", json=_grant(env2, "boss@contoso.com"), headers=h).json()["reason"] == REF_ISSUER_SELF_APPROVAL
+    assert c.post("/grants", json=_grant(env2, PRINCIPAL), headers=h).json()["reason"] == REF_ISSUER_SELF_APPROVAL
+    # The operator's switch.
+    c2 = _held(clock, allow_self_approval=True)
+    env3 = c2.post("/issue", json={"target_url": TARGET, "tool": "write_file", "args": {"path": "x"}}, headers=h).json()["envelope"]
+    assert c2.post("/grants", json=_grant(env3, PRINCIPAL), headers=h).json()["accepted"]

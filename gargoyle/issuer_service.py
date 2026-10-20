@@ -53,7 +53,7 @@ STATIC = Path(__file__).resolve().parent / "static"
 from gargoyle.approval import (REF_APPROVAL_APPROVER_NOT_ELIGIBLE, REF_APPROVAL_DUPLICATE_APPROVER,
                                verify_grant)
 from gargoyle.envelope import approval_terms
-from gargoyle.state import state_sha256, valid_description
+from gargoyle.state import state_sha256, text_consistent, valid_description
 from gargoyle.holdstore import ENV_HOLDS_PATH, HoldStore
 from gargoyle.witness import WitnessLog
 from gargoyle.plans import (REF_PLAN_MALFORMED, REF_PLAN_STEP_NOT_PLANNABLE, REF_PLAN_STEP_REFUSED, build_plan,
@@ -81,6 +81,7 @@ ENV_RECEIPT_TTL = "GARGOYLE_RECEIPT_TTL_SECONDS"
 ENV_CONSOLE_CLIENT_ID = "GARGOYLE_ENTRA_CLIENT_ID"   # the public client app the console signs in with (User-Client-Flow)
 ENV_CONSOLE_SCOPE = "GARGOYLE_ENTRA_SCOPE"           # default api://<last audience>/access
 ENV_MAX_OPEN_HOLDS = "GARGOYLE_MAX_OPEN_HOLDS"       # holds one principal may have waiting at once
+ENV_ALLOW_SELF_APPROVAL = "GARGOYLE_ALLOW_SELF_APPROVAL"   # "1": a person may release their own call (default: refused)
 DEFAULT_MAX_OPEN_HOLDS = 20
 
 REF_ISSUER_UNAUTHENTICATED = "REF_ISSUER_UNAUTHENTICATED"
@@ -93,6 +94,9 @@ REF_ISSUER_FORBIDDEN = "REF_ISSUER_FORBIDDEN"               # authenticated, but
 REF_ISSUER_TOO_MANY_HOLDS = "REF_ISSUER_TOO_MANY_HOLDS"     # the principal already has the cap's worth of holds waiting
 REF_ISSUER_KEY_REVOKED = "REF_ISSUER_KEY_REVOKED"           # enrollment offered a key that was revoked; a new key is needed
 REF_ISSUER_KEY_ENROLLED = "REF_ISSUER_KEY_ENROLLED"          # another key is enrolled for this account; it must consent, or the operator revoke it
+REF_ISSUER_HOLD_EXPIRED = "REF_ISSUER_HOLD_EXPIRED"          # the hold's receipt or plan expired; nothing can release it now
+REF_ISSUER_SELF_APPROVAL = "REF_ISSUER_SELF_APPROVAL"        # the approver is the hold's requester (or the party acted for)
+REF_ISSUER_STATE_TEXT_MISMATCH = "REF_ISSUER_STATE_TEXT_MISMATCH"  # the state text is not the bytes the state hash names
 
 
 SUPERSEDE_PREFIX = b"gargoyle-enroll/1\n"
@@ -138,6 +142,7 @@ def build_issuer_app(
     tenant_key_ids: Optional[set] = None,
     max_open_holds: int = DEFAULT_MAX_OPEN_HOLDS,
     idp_key_refresh: Optional[Callable[[], Dict[str, Any]]] = None,
+    allow_self_approval: bool = False,
 ) -> FastAPI:
     """`on_hold(envelope, args)` is called once for every new hold (gargoyle.notify
     posts it to a webhook); it is notice, not admission, and its failure
@@ -312,6 +317,9 @@ def build_issuer_app(
             # the approver and seen by the policy.
             if not valid_description(state):
                 raise _refuse(400, REF_ISSUER_BAD_REQUEST)
+            if not text_consistent(state):
+                # The text shown to the approver must hash to the bound state.
+                raise _refuse(400, REF_ISSUER_STATE_TEXT_MISMATCH)
             interaction["state_sha256"] = state_sha256(state)
             interaction["state"] = {k: v for k, v in state.items() if k != "text"}
         if who["on_behalf_of"]:
@@ -440,8 +448,7 @@ def build_issuer_app(
         live = {}
         for arid, plan in list(app.state.pending_plans.items()):
             if datetime.fromisoformat(plan["not_after"]) <= current:
-                del app.state.pending_plans[arid]
-                app.state.grants.pop(arid, None)
+                _forget(arid)
             elif len(app.state.grants.get(arid, [])) < _plan_terms(plan)["required"]:
                 if not sees_all and plan.get("principal") != who["principal"]:
                     continue
@@ -450,10 +457,7 @@ def build_issuer_app(
                               "approvers": [g["approver_key_id"] for g in have]}
         for arid, env in list(app.state.pending.items()):
             if datetime.fromisoformat(env["not_after"]) <= current:
-                del app.state.pending[arid]           # an expired hold can never be released
-                app.state.pending_args.pop(arid, None)
-                app.state.pending_state.pop(arid, None)
-                app.state.grants.pop(arid, None)
+                _forget(arid)                         # an expired hold can never be released
             elif not _complete(arid):
                 if not sees_all and env.get("request_context", {}).get("principal") != who["principal"]:
                     continue
@@ -463,6 +467,14 @@ def build_issuer_app(
                               "collected": len(have), "required": approval_terms(env)["required"],
                               "approvers": [g["approver_key_id"] for g in have]}
         return {"pending": list(live.values())}
+
+    def _forget(arid: str) -> None:
+        """Drop a hold or plan and everything kept for it."""
+        app.state.pending.pop(arid, None)
+        app.state.pending_args.pop(arid, None)
+        app.state.pending_state.pop(arid, None)
+        app.state.pending_plans.pop(arid, None)
+        app.state.grants.pop(arid, None)
 
     def _complete(arid: str) -> bool:
         env = app.state.pending.get(arid)
@@ -489,6 +501,13 @@ def build_issuer_app(
             kid = grant.get("approver_key_id")
             event("grant_refused", approval_request_id=arid, reason=reason, **({"approver": kid} if isinstance(kid, str) else {}))
             return {"accepted": False, "reason": reason}
+        if datetime.fromisoformat((env or plan)["not_after"]) <= now():
+            # An expired hold can never be released: the executor refuses the
+            # receipt whatever the grant says, so accepting one here would
+            # only tell the approver that something ran. Drop it now, not on
+            # the next listing (second review, finding 10).
+            _forget(arid)
+            return refused(REF_ISSUER_HOLD_EXPIRED)
         trusted = approver_keys()
         if not trusted:
             return refused(REF_ISSUER_NO_APPROVER_TRUST)
@@ -499,6 +518,15 @@ def build_issuer_app(
             return refused(g["reason"])
         if not _enrolled_speaks_for(who, grant["approver_key_id"]):
             return refused(REF_ISSUER_NOT_AN_APPROVER)
+        if not allow_self_approval:
+            # Two people: the one asking and the one releasing. The approver
+            # key id (a UPN for an enrolled key) may be neither the hold's
+            # principal nor the party it acts for (second review, finding 8).
+            parties = {hold_owner(arid)}
+            if env is not None:
+                parties.add((env.get("request_context") or {}).get("on_behalf_of"))
+            if grant["approver_key_id"] in parties:
+                return refused(REF_ISSUER_SELF_APPROVAL)
         # The receipt's (or plan's) own terms: distinct approvers, from the named set if any.
         terms = approval_terms(env) if env else _plan_terms(plan)
         have = list(app.state.grants.get(arid, []))
@@ -740,6 +768,7 @@ def app_from_env() -> FastAPI:
         on_hold=notifier_from_env(os.environ),
         hold_store=HoldStore(os.environ.get(ENV_HOLDS_PATH) or None),
         max_open_holds=int(os.environ.get(ENV_MAX_OPEN_HOLDS, DEFAULT_MAX_OPEN_HOLDS)),
+        allow_self_approval=os.environ.get(ENV_ALLOW_SELF_APPROVAL, "").strip().lower() in ("1", "true", "yes"),
         witness=(WitnessLog(os.environ["GARGOYLE_WITNESS_PATH"], Ed25519PrivateKey.from_private_bytes(bytes.fromhex(required[ENV_ISSUER_KEY_HEX])),
                             required[ENV_ISSUER_KEY_ID]) if os.environ.get("GARGOYLE_WITNESS_PATH") else None),
         log_events=(lambda e: sys.stderr.write(json.dumps(e, sort_keys=True) + "\n")) if os.environ.get("GARGOYLE_LOG_JSON") else None,

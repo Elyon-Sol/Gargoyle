@@ -39,6 +39,8 @@ Any malformed file, or any error while deciding, is a refusal.
 
 import fnmatch
 import re
+
+from gargoyle.globs import comparable, glob_match, is_pathlike
 import hashlib
 import json
 from typing import Any, Dict, Mapping, Optional
@@ -115,7 +117,7 @@ def _args_match(args: Any, pattern: Dict[str, str]) -> bool:
         return False
     for key, glob in pattern.items():
         value = args.get(key)
-        if not isinstance(value, str) or not fnmatch.fnmatchcase(value, glob):
+        if not isinstance(value, str) or not glob_match(glob, value):
             return False
     return True
 
@@ -131,6 +133,7 @@ def _globs_may_overlap(a: str, b: str) -> bool:
     """Could one string match both globs? Sound over-approximation: a glob
     only matches strings that start with its literal prefix, so two globs
     whose literal prefixes disagree are disjoint; anything else may overlap."""
+    a, b = comparable(a, b) if (is_pathlike(a) or is_pathlike(b)) else (a, b)
     pa, wa = _literal_prefix(a)
     pb, wb = _literal_prefix(b)
     if not wa and not wb:
@@ -154,6 +157,7 @@ def _glob_covers(rule_glob: str, pattern: str) -> bool:
     and each literal between appears, in order, inside one of the pattern's
     literal pieces: every string the pattern admits carries those pieces in
     that order, whatever its wildcards expand to."""
+    rule_glob, pattern = comparable(rule_glob, pattern)
     if not _WILD.search(pattern):
         return fnmatch.fnmatchcase(pattern, rule_glob)
     if "?" in rule_glob or "[" in rule_glob or "*" not in rule_glob:

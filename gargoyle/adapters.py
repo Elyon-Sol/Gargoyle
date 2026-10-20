@@ -135,9 +135,10 @@ class GraphAdapter:
     @staticmethod
     def _desc(ref: str, obj: Any, summary: str, irreversible: bool = False) -> Tuple[Dict[str, Any], Optional[bytes]]:
         data = canonical_json(obj).encode("utf-8") if obj is not None else None
-        desc = describe(ref, data, with_text=False)
-        if data is not None:
-            desc["text"] = json.dumps(obj, indent=2, sort_keys=True)
+        # The text is the hashed bytes themselves (canonical JSON), so the
+        # console can verify it against the bound state before showing it;
+        # it pretty-prints JSON for display.
+        desc = describe(ref, data, with_text=True)
         desc["summary"] = summary
         if irreversible:
             desc["irreversible"] = True

@@ -240,7 +240,16 @@ restore the state (a sent message); neither is hashed, both are shown.
 The issuer records `state_sha256` in the receipt's `request_context`,
 hashed and signed, when the request carries a description; the reference
 issuing service accepts it as `state` beside `args` and shows it to the
-approver, with the proposed content rendered as a change against it. At
+approver, with the proposed content rendered as a change against it. A
+description may carry `text`, the target's current content, for that
+rendering; it is not hashed, so it is checked instead: the text must be
+the very bytes `sha256` and `size` name (UTF-8), else the reference
+service refuses the request (`REF_ISSUER_STATE_TEXT_MISMATCH`), and the
+reference console verifies on its own that the description's core hashes
+to the receipt's `state_sha256` and the text to the description's
+`sha256` before it shows a diff or enables approval. What the approver
+reads as the current content is therefore what the receipt binds, not
+the executor's word. At
 execution the executor recomputes the hash and refuses on any difference
 (step 4 above); after execution it records the state again in the
 execution receipt (section 13). What this proves: the human approved a
@@ -412,7 +421,14 @@ over `"gargoyle-enroll/1\n" + <new public key hex>` sent as
 `supersede_signature`, or after the operator revoked the current key;
 otherwise the enrollment is `REF_ISSUER_KEY_ENROLLED` (with an
 `enroll_refused` entry), and a sign-in alone never swaps the key holds
-are released with. The enrollment record
+are released with. Two more refusals at the grant endpoint: a grant for
+a hold whose receipt or plan has expired is `REF_ISSUER_HOLD_EXPIRED`,
+and the hold is dropped then and there (the executor would refuse the
+receipt anyway; accepting the grant would only tell the approver that
+something ran); and a grant whose approver key id is the hold's own
+principal, or the party it acts for, is `REF_ISSUER_SELF_APPROVAL`
+unless the operator allows self-approval (`GARGOYLE_ALLOW_SELF_APPROVAL`),
+since the point of a hold is a second person. The enrollment record
 keeps the directory's immutable object id and tenant id beside the UPN
 when the token carried them. An approver may revoke their own key
 (`POST /approvers/revoke`); the operator revokes any approver on the
@@ -1030,7 +1046,14 @@ is not plannable refuses it (`REF_PLAN_STEP_NOT_PLANNABLE`; the reference
 rules file says `"plan": false` on a hold to keep a tool individual, and
 sends should be). The
 plan is held when any step would be; its approval terms are the strictest
-over the steps. A grant for a plan is a section 8 grant whose
+over the steps. Argument globs, in plan steps and in the reference rules
+file alike, are `fnmatch` patterns over one string argument
+(`gargoyle.globs`); when either side looks like a path (a separator or a
+drive letter) both are normalized first: separators to `/`, `.` and `..`
+resolved, repeated separators collapsed, letter case folded, so
+`C:\\proj\\*` is not slipped by `C:\\proj\\..\\secrets\\x`, by
+`c:/PROJ/x` or by a mixed separator; `*` spans folders. Other values (a
+mail address, an id) match exactly as written. A grant for a plan is a section 8 grant whose
 `decision_sha256` is `plan_sha256` and whose `approval_request_id` is the
 plan's.
 

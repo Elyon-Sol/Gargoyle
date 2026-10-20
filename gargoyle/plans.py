@@ -38,6 +38,7 @@ from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 from gargoyle.approval import as_grant_list, verify_grant
+from gargoyle.globs import glob_match
 from gargoyle.envelope import approval_terms, args_sha256, canonical_json, valid_approval
 from gargoyle.verifier import not_after_valid
 
@@ -144,7 +145,7 @@ def step_matches(step: Dict[str, Any], tool: str, args: Any) -> bool:
         return False
     for key, glob in step["match"].items():
         value = args.get(key)
-        if not isinstance(value, str) or not fnmatch.fnmatchcase(value, glob):
+        if not isinstance(value, str) or not glob_match(glob, value):
             return False
     return True
 

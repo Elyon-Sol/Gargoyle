@@ -129,7 +129,9 @@ It writes, under `/opt/gargoyle/deploy`:
 ```
 
 First match wins. Rules may also carry `principals`, `on_behalf_of`,
-`groups`, `roles` and `args` globs. Any edit changes the policy pin: the
+`groups`, `roles` and `args` globs. Path globs are matched on a normalized
+form: `C:\\proj\\*` also covers `c:/PROJ/x` and is not slipped by
+`C:\\proj\\..\\x`; `*` spans folders. Any edit changes the policy pin: the
 issuer picks it up at once, and `record.json` on the Windows side must be
 refreshed (Part 5).
 
@@ -649,6 +651,7 @@ are persistent.
 | Rotate every key | re-run `gargoyle init` to a new `--out`, redistribute `middleware.env`, `record.json`, `approver-web.json`, update the unit's `--out` |
 | Client token expiry | 30 days by default (`--token-days`); re-run `init` or mint a new token before it lapses |
 | Second approver | `gargoyle init --approvers 2` for file keys, or Entra enrollment; a rule's `"approvals": 2` and `"approvers": [...]` set the threshold and who counts |
+| Approver is also a user | A person may not release their own call (`REF_ISSUER_SELF_APPROVAL`); give pilot users and approvers different accounts, or set `GARGOYLE_ALLOW_SELF_APPROVAL=1` on the issuer knowingly |
 | Revoke an approver | `gargoyle approvers revoke <upn> --out /opt/gargoyle/deploy` on the VM; takes effect without a restart and is witnessed on the service's next read of the file. An approver retires their own key from the console's sign-in (`POST /approvers/revoke`). Revocation retires the key, not the person: remove the Approver role in Entra as well, or the next sign-in enrolls a fresh key. Removing the role alone also works at once: a grant under an enrolled key is accepted only from that account with the role in today's token |
 | New browser for an approver | The console says a key is already on record. Run `gargoyle approvers revoke <upn> --out /opt/gargoyle/deploy`, then have the approver sign in from the new browser; a sign-in alone never replaces an enrolled key |
 | Backup | `/opt/gargoyle/deploy` and `/etc/ssl/gargoyle`, both private |

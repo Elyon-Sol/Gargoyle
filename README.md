@@ -123,7 +123,9 @@ two-method interface.
 **No engine.** `gargoyle.rules.RulesPolicy` decides from a JSON file:
 first matching rule wins, globs on tool name, principal, delegation,
 the caller's groups and roles, and string arguments, actions allow, hold
-or deny. The pin is the file's hash,
+or deny. Argument globs that look like paths are matched on a normalized
+form (separators, `..`, letter case), so a rule for one folder is not
+slipped by traversal or spelling; `*` spans folders. The pin is the file's hash,
 so an edit invalidates outstanding receipts exactly as an engine change
 does. This is what `gargoyle init` sets up.
 
@@ -368,6 +370,7 @@ cannot attach receipts work unchanged. Configuration is by environment:
 | issuer `GARGOYLE_ENTRA_TENANT` + `GARGOYLE_ISSUER_AUDIENCE` | trust the tenant's tokens; the audience is required with a tenant (the service will not start without it), and a directory token for any other tenant is `REF_IDENTITY_WRONG_TENANT` |
 | issuer `GARGOYLE_HOLDS_PATH` | SQLite file for holds, grants, declines and plans, so a restart loses nothing a person is acting on (`gargoyle issuer` sets `holds.sqlite` beside the keys); `GET /health` reports it |
 | issuer `GARGOYLE_MAX_OPEN_HOLDS` | how many held receipts and plans one principal may have waiting at once (default 20); the call over the cap is `REF_ISSUER_TOO_MANY_HOLDS` and nothing is stored |
+| issuer `GARGOYLE_ALLOW_SELF_APPROVAL` | `1` lets a person release their own call; by default the approver may be neither the hold's principal nor the party acted for (`REF_ISSUER_SELF_APPROVAL`). A grant for an expired hold is `REF_ISSUER_HOLD_EXPIRED` and the hold is dropped |
 | issuer `GARGOYLE_WITNESS_PATH` | the issuer's signed, hash-chained record of every decision (`gargoyle issuer` sets `witness.jsonl` beside the keys); `gargoyle audit --witness` reconciles a client's evidence against it, `--check-tree DIR` finds files changed outside the gate |
 | issuer `GARGOYLE_LOG_JSON` | one JSON line per decision on stderr: issued, refused, granted, declined, plan, enrolled |
 | `GARGOYLE_HOLD_WEBHOOK_URL`, `GARGOYLE_APPROVE_URL` | issuer: POST a notice of every new hold (Slack incoming-webhook shape, `text` plus the hold) with a link to the console; notice only, the grant still needs the approver's key |

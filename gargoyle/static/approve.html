@@ -52,7 +52,7 @@
   <div class="log" id="log"></div>
 </main>
 <script type="module">
-import { argsSha256, authorizeUrl, buildGrant, exchangeCode, generateApproverKey, importApproverKey, isoUtc, lineDiff, loadStoredKey,
+import { argsSha256, sha256Hex, canonicalJson, authorizeUrl, buildGrant, exchangeCode, generateApproverKey, importApproverKey, isoUtc, lineDiff, loadStoredKey,
          newGrantId, pkceChallenge, publicKeyHex, randomVerifier, signGrant, storeKey } from "./approve.js";
 
 const state = { token: null, key: null, keyId: null, ttl: 300, timer: null, seen: new Map() };
@@ -165,9 +165,10 @@ async function refresh() {
     const card = document.createElement("article"); card.className = "hold"; card.dataset.id = id;
     const rc = env.request_context;
     const bound = item.args !== null && item.args !== undefined ? (await argsSha256(item.args)) === rc.args_sha256 : false;
+    const st = await verifyState(item.state, rc);
     const expires = new Date(env.not_after);
     card.innerHTML = `
-      <h2>${esc(rc.tool)} <span class="badge ${bound ? "ok" : "bad"}">${bound ? "arguments match the receipt" : "ARGUMENTS DO NOT MATCH; do not approve"}</span></h2>
+      <h2>${esc(rc.tool)} <span class="badge ${bound ? "ok" : "bad"}">${bound ? "arguments match the receipt" : "ARGUMENTS DO NOT MATCH; do not approve"}</span>${st.present ? ` <span class="badge ${st.ok ? "ok" : "bad"}">${st.ok ? "state matches the receipt" : "STATE DOES NOT MATCH THE RECEIPT; do not approve"}</span>` : ""}</h2>
       <dl class="meta">
         <dt>requested by</dt><dd>${esc(rc.principal)}${rc.on_behalf_of ? " on behalf of " + esc(rc.on_behalf_of) : ""}</dd>
         <dt>target</dt><dd>${esc(env.target_url)}</dd>
@@ -177,10 +178,10 @@ async function refresh() {
         ${required > 1 ? `<dt>approvals</dt><dd class="progress">${progress}</dd>` : ""}
         ${env.approval?.approvers ? `<dt>eligible</dt><dd>${env.approval.approvers.map(esc).join(", ")}${eligible ? "" : ' <span class="badge bad">not you</span>'}</dd>` : ""}
       </dl>
-      ${stateBlock(item)}
+      ${stateBlock(item, st)}
       <pre>${esc(JSON.stringify(item.args, null, 2))}</pre>
       <div class="actions">
-        <button class="approve" ${bound && eligible && !mine ? "" : "disabled"}>Approve</button>
+        <button class="approve" ${bound && st.ok && eligible && !mine ? "" : "disabled"}>Approve</button>
         <button class="decline">Decline</button>
         <span class="result"></span>
       </div>`;
@@ -257,9 +258,28 @@ async function decline(card, id) {
 // the call would make to it. The receipt binds this state: if the file
 // moves before the run, the executor refuses, so what you see here is what
 // the call will act on.
-function stateBlock(item) {
+// The state is checked, not trusted: its core (ref, sha256, size) must hash
+// to the state_sha256 the issuer signed into the receipt, and the text the
+// executor sent must hash to that sha256, or the diff is not shown. A
+// workstation's executor could otherwise show one file and bind another.
+async function verifyState(st, rc) {
+  if (!st) return { present: false, ok: !rc.state_sha256, textOk: true };
+  const core = { ref: st.ref, sha256: st.sha256 ?? null, size: st.size ?? null };
+  let ok = false, textOk = false;
+  try {
+    ok = (await sha256Hex(canonicalJson(core))) === rc.state_sha256;
+    textOk = typeof st.text !== "string" || (core.sha256 !== null && (await sha256Hex(st.text)) === core.sha256);
+  } catch (err) { ok = false; textOk = false; }
+  return { present: true, ok, textOk };
+}
+
+function stateBlock(item, check) {
   const st = item.state; if (!st) return "";
   const args = item.args || {};
+  if (check && !check.textOk) {
+    const head0 = `changes <code>${esc(st.ref)}</code>`;
+    return `<div class="state"><strong>${head0}</strong><div class="note">the current content the executor sent does not hash to the bound state; it is not shown. The new content is below.</div></div>`;
+  }
   let head;
   if (st.summary) head = esc(st.summary) + (st.irreversible ? ' <span class="badge bad">cannot be undone</span>' : "");
   else if (st.sha256 === null || st.sha256 === undefined) head = `creates <code>${esc(st.ref)}</code> (does not exist yet)`;
@@ -271,7 +291,9 @@ function stateBlock(item) {
   } else if (st.sha256 !== null && st.sha256 !== undefined && typeof args.content === "string") {
     body = `<div class="note">current content is not text or is too large to show; the new content is below</div>`;
   } else if (typeof st.text === "string") {
-    body = `<details><summary>state now</summary><pre>${esc(st.text)}</pre></details>`;   // the object as it is; the proposed arguments follow
+    let shown = st.text;                                   // verified above; pretty-printed here for reading only
+    try { const obj = JSON.parse(st.text); if (obj && typeof obj === "object") shown = JSON.stringify(obj, null, 2); } catch (err) { /* not JSON */ }
+    body = `<details><summary>state now</summary><pre>${esc(shown)}</pre></details>`;   // the object as it is; the proposed arguments follow
   }
   return `<div class="state"><strong>${head}</strong>${body}</div>`;
 }

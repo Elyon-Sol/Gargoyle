@@ -55,6 +55,23 @@ def state_sha256(description: Dict[str, Any]) -> str:
     return hashlib.sha256(canonical_json(core).encode("utf-8")).hexdigest()
 
 
+def text_consistent(description: Dict[str, Any]) -> bool:
+    """A description's `text`, when present, must be the very bytes its
+    `sha256` and `size` name, so what an approver reads as the current
+    content is what the receipt binds. Without that the diff on the card
+    would be the executor's word alone (second review, finding 6)."""
+    if "text" not in description:
+        return True
+    if description.get("sha256") is None:
+        return False
+    try:
+        data = description["text"].encode("utf-8")
+    except (UnicodeEncodeError, AttributeError):
+        return False
+    return (hashlib.sha256(data).hexdigest() == description["sha256"]
+            and (description.get("size") is None or description["size"] == len(data)))
+
+
 def valid_description(d: Any) -> bool:
     return (isinstance(d, dict) and isinstance(d.get("ref"), str) and bool(d["ref"])
             and (d.get("sha256") is None or (isinstance(d["sha256"], str) and len(d["sha256"]) == 64))
