@@ -194,7 +194,7 @@
       <span class="badge"><b>Apache-2.0</b> open source</span>
       <span class="badge"><b>Ed25519</b> over RFC 8785 canonical JSON</span>
       <span class="badge"><b>Python</b> and <b>TypeScript</b>, one conformance suite</span>
-      <span class="badge"><b>Pre-release</b> <span class="sub">0.15 series, format gargoyle/3</span></span>
+      <span class="badge"><b>Pre-release</b> <span class="sub">0.16 series, format gargoyle/3</span></span>
       <span class="badge">Successor to <a href="/elyon-sol">Elyon-Sol</a></span>
     </div>
   </div>
@@ -273,7 +273,7 @@ gargoyle issuer                                  <span class="c"># the issuing s
 gargoyle login --tenant ... --client-id ... --scope ...   <span class="c"># optional: the user's own Entra identity</span>
 gargoyle audit --log audit.jsonl --witness witness.jsonl --check-tree /the/folder</pre>
     <p class="muted" style="margin-top:12px">The full single-instance build is in the repository's guide (Ubuntu on Hyper-V, Apache with TLS, a Windows 11 client). The specification is self-contained, with conformance vectors a second implementation reproduces byte for byte. The <a href="/report#sec-9">limits</a> are written down in the report.</p>
-    <div class="claimbox" style="margin-top:22px"><b>Where this stands.</b> Pre-release, version 0.15. One author. One live deployment, on the author's own tenant, with forty-five verified audit rows. No outside review has completed. The specification and the conformance vectors exist so that someone who trusts none of this can verify a chain for themselves; until someone has, every claim on this site is self-reported, and the <a href="/report#sec-9">threat model and limits</a> are the section to read first.</div>
+    <div class="claimbox" style="margin-top:22px"><b>Where this stands.</b> Pre-release, version 0.16. One author. One live deployment, on the author's own tenant, with forty-five verified audit rows. One outside review of the public repository has completed: a language model of the same family as the one that co-wrote the code, with repository access, ran the suites, verified the package against the tag and found the authorization and identity gaps fixed in 0.16. No human review has. The specification and the conformance vectors exist so that someone who trusts none of this can verify a chain for themselves; until someone has, every claim on this site is self-reported, and the <a href="/report#sec-9">threat model and limits</a> are the section to read first.</div>
   </div>
 </section>
 

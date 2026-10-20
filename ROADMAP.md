@@ -92,6 +92,32 @@ verifying itself for no external user; that is the failure mode to avoid.
   hold and the receipt, with a link to /approve from GARGOYLE_APPROVE_URL); posted in
   a thread, failures logged and ignored, the grant still only from the approver's
   key. 80 lines. All six roadmap steps are done.
+- First outside review (2026-10-20): a language model with access to the public
+  repository (a Claude model, so one that shares blind spots with the co-author) ran
+  both suites, matched the PyPI sdist and wheel to the tag, and read the issuer,
+  identity, rules, remote and replay code. Its verdict: well-designed, unproven alpha,
+  fit for a scoped supervised pilot, not for a multi-user beta as described. Findings
+  that held up and are fixed in 0.16.0.dev0: /pending, /witness and /decline were
+  open to any authenticated identity (now approvers see all, a requester sees and
+  cancels only their own, REF_ISSUER_FORBIDDEN); no approver revocation (now
+  POST /approvers/revoke for one's own key, `gargoyle approvers revoke` for the
+  operator, revoked keys kept for audits, the running service re-reads the file);
+  no tenant check on directory tokens and a silently optional audience (now
+  REF_IDENTITY_WRONG_TENANT against the resolved tenant id, and Entra mode refuses to
+  start without GARGOYLE_ISSUER_AUDIENCE; oid and tid recorded on enrollment and in
+  the witness); CI Linux-only with floors declared but untested and no lock file (now
+  Linux and Windows, floors, latest and lock; the first Windows run found four
+  CRLF and path-escaping faults in the tests themselves); no SECURITY.md; the guide
+  still said holds died with a restart; remote identity tokens minted for a year
+  (now 30 days) and Apache logging the capability URL (now excluded); the site and
+  README saying the whole chain verifies in two languages (now: the per-call chain
+  does, the evidence log and witness verify in Python). Noted and not changed: the
+  principal stays the UPN, with the object id recorded beside it rather than used as
+  the key, so rules and audit rows stay readable; the force-push the reviewer saw was
+  the removal of the review-packet commit at the author's request; ActionProxy's
+  absence from the public comparison table stands until it is scored from its
+  documents. Still open from the review: an independent human review of the
+  verifier, consumer and issuer, and the legal questions, which are counsel's.
 - Mandated, not named (2026-10-19): the gate's initialize answer carries MCP
   `instructions` in both modes (gate_instructions): every operation on the target goes
   through these tools, a wait is normal, a refusal is final, plans and undo exist, the
