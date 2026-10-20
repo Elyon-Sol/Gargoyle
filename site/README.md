@@ -9,24 +9,25 @@ GoDaddy (160.153.0.167) behind Cloudflare:
 - elyon-sol.html  the predecessor's page as published, with a superseded
                   banner and the retirement timeline
 
-The host runs WordPress in public_html, and WordPress answers the site root
-through index.php. Static files in public_html are served as themselves
-(https://elyon-sol.io/index.html already is), so the pages work once the
-root prefers index.html:
+The host is GoDaddy managed WordPress: nginx, no .htaccess, a root-owned
+index.php that answers the site root. Static files in /html are served as
+themselves, so the pages are plain uploads; the root is handed to
+index.html by a must-use plugin, wp-content/mu-plugins/zz-gargoyle-static-root.php
+(copy in this folder as zz-gargoyle-static-root.php), which serves
+/html/index.html for GET or HEAD of "/" or "/index.php" and nothing else.
+Delete that file to give the root back to WordPress.
 
-1. Upload the three files to public_html, replacing any older index.html.
-2. Add this line at the top of public_html/.htaccess, above the
-   "# BEGIN WordPress" block:
+Publishing, from a machine with the SFTP credentials (GoDaddy: Managed
+WordPress > Settings > SFTP/SSH):
 
-       DirectoryIndex index.html index.php
+    scp -O index.html report.html elyon-sol.html USER@HOST:/html/
+    ssh USER@HOST 'cd /html && wp cache flush'
 
-   WordPress stays reachable at its own paths (/elyon-sol/, /wp-admin/).
-3. If the Gargoyle HTML was pasted into the WordPress site editor's home
-   template, remove that block there; it is not needed and WordPress
-   rewrites its punctuation.
-4. Purge the Cloudflare cache for the zone (Caching > Configuration >
-   Purge Everything), then check https://elyon-sol.io/ shows the title
-   "Gargoyle - receipts and holds for agent tool calls".
+then purge the Cloudflare cache for the zone (Caching > Configuration >
+Purge Everything) and check https://elyon-sol.io/ shows the title
+"Gargoyle - receipts and holds for agent tool calls". The plugin sends
+Cache-Control max-age=600 on the root, but the platform overrides it with
+a 31-day value, so the purge is not optional. First publish: 2026-10-20.
 
 Open slot: a screenshot of the approval console with a held write's diff
 card, taken from the enrolled approver's browser. Place it as
