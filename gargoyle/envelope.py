@@ -208,7 +208,9 @@ def valid_principal(principal: Any) -> bool:
 def valid_approval(approval: Any) -> bool:
     """True iff `approval` is a well-formed receipt `approval` member:
     {"required": int >= 1, "approvers": [non-empty unique strings] optional}."""
-    if not isinstance(approval, dict) or not set(approval) <= {"required", "approvers"} or "required" not in approval:
+    if not isinstance(approval, dict) or not set(approval) <= {"required", "approvers", "plannable"} or "required" not in approval:
+        return False
+    if "plannable" in approval and not isinstance(approval["plannable"], bool):
         return False
     required = approval["required"]
     if isinstance(required, bool) or not isinstance(required, int) or required < 1:
@@ -320,6 +322,8 @@ def build_envelope(
         envelope["approval"] = {"required": approval["required"]}
         if "approvers" in approval:
             envelope["approval"]["approvers"] = sorted(approval["approvers"])
+        if approval.get("plannable") is False:
+            envelope["approval"]["plannable"] = False
     envelope["decision_sha256"] = decision_sha256_of(envelope)
     return envelope
 
@@ -329,8 +333,8 @@ def approval_terms(envelope: Dict[str, Any]) -> Dict[str, Any]:
     the receipt's `approval` member, or the default of one from anyone."""
     a = envelope.get("approval")
     if isinstance(a, dict):
-        return {"required": a["required"], "approvers": a.get("approvers")}
-    return {"required": 1, "approvers": None}
+        return {"required": a["required"], "approvers": a.get("approvers"), "plannable": a.get("plannable", True)}
+    return {"required": 1, "approvers": None, "plannable": True}
 
 
 def reassert(

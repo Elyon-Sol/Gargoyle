@@ -44,14 +44,15 @@ export function decisionSha256Of(envelope: Envelope): string {
 }
 
 /** The receipt's optional `approval` member (SPEC.md section 3). */
-export type ApprovalTerms = { required: number; approvers?: string[] };
+export type ApprovalTerms = { required: number; approvers?: string[]; plannable?: boolean };
 
 export function validApproval(approval: unknown): approval is ApprovalTerms {
   if (typeof approval !== "object" || approval === null || Array.isArray(approval)) return false;
   const a = approval as Record<string, Json>;
   const keys = Object.keys(a);
-  if (!keys.includes("required") || keys.some((k) => k !== "required" && k !== "approvers")) return false;
+  if (!keys.includes("required") || keys.some((k) => k !== "required" && k !== "approvers" && k !== "plannable")) return false;
   if (typeof a.required !== "number" || !Number.isInteger(a.required) || a.required < 1) return false;
+  if ("plannable" in a && typeof a.plannable !== "boolean") return false;
   if ("approvers" in a) {
     const list = a.approvers;
     if (!Array.isArray(list) || list.length === 0 || !list.every((x) => typeof x === "string" && x)) return false;

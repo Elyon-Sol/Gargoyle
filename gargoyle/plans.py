@@ -38,7 +38,7 @@ from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 from gargoyle.approval import as_grant_list, verify_grant
-from gargoyle.envelope import args_sha256, canonical_json, valid_approval
+from gargoyle.envelope import approval_terms, args_sha256, canonical_json, valid_approval
 from gargoyle.verifier import not_after_valid
 
 PLAN_VERSION = "gargoyle-plan/1"
@@ -55,6 +55,8 @@ REF_PLAN_STEP_CONSUMED = "REF_PLAN_STEP_CONSUMED"
 REF_PLAN_STEP_REFUSED = "REF_PLAN_STEP_REFUSED"              # issuer: the policy refused a step
 REF_PLAN_STEP_NOT_PLANNABLE = "REF_PLAN_STEP_NOT_PLANNABLE"  # issuer: the rule keeps that tool individual
 REF_PLAN_GRANTS = "REF_PLAN_GRANTS"                          # the grants do not release this plan (reason in detail)
+REF_PLAN_TERMS_WEAKER = "REF_PLAN_TERMS_WEAKER"              # the plan's grants do not meet the receipt's own approval terms
+REF_PLAN_RECEIPT_NOT_PLANNABLE = "REF_PLAN_RECEIPT_NOT_PLANNABLE"  # the receipt says this call is approved individually
 ACCEPT_PLAN_RELEASE = "PLAN_RELEASE"
 
 
@@ -176,6 +178,11 @@ def verify_plan_release(release: Any, envelope: Dict[str, Any], call: Dict[str, 
     if (plan["principal"] != rc.get("principal") or plan["target_url"] != envelope.get("target_url")
             or plan["policy"] != envelope.get("policy")):
         return {"accepted": False, "reason": REF_PLAN_BINDING_MISMATCH}
+    # The receipt's own terms come first: a call the policy keeps individual
+    # is never released by a plan, whatever the plan says.
+    env_terms = approval_terms(envelope)
+    if not env_terms.get("plannable", True):
+        return {"accepted": False, "reason": REF_PLAN_RECEIPT_NOT_PLANNABLE}
     i = release["step"]
     if i < 0 or i >= len(plan["steps"]):
         return {"accepted": False, "reason": REF_PLAN_NO_MATCHING_STEP}
@@ -202,7 +209,19 @@ def verify_plan_release(release: Any, envelope: Dict[str, Any], call: Dict[str, 
         seen.append(kid)
     if len(seen) < terms.get("required", 1):
         return {"accepted": False, "reason": REF_PLAN_GRANTS}
+    # And the receipt's own signed terms: the plan's grants must be at least
+    # as many, from the receipt's named approvers if it names any. A plan
+    # approved by one junior never releases a two-signature finance write.
+    if not grants_satisfy(env_terms, seen):
+        return {"accepted": False, "reason": REF_PLAN_TERMS_WEAKER}
     return {"accepted": True, "reason": ACCEPT_PLAN_RELEASE, "step": i}
+
+
+def grants_satisfy(terms: Dict[str, Any], approver_key_ids: Any) -> bool:
+    """Do these distinct approver ids meet `terms` ({"required", "approvers"})?"""
+    named = terms.get("approvers")
+    eligible = {k for k in approver_key_ids if named is None or k in named}
+    return len(eligible) >= int(terms.get("required", 1))
 
 
 def is_plan_release(grant: Any) -> bool:

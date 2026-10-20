@@ -61,11 +61,13 @@ class Decision:
     def approval(self) -> Optional[Dict[str, Any]]:
         """The receipt's `approval` member for this decision, or None when
         the default (one grant from any trusted approver) applies."""
-        if not self.requires_approval or (self.approvals_required == 1 and not self.approvers):
+        if not self.requires_approval or (self.approvals_required == 1 and not self.approvers and self.plannable):
             return None
         out: Dict[str, Any] = {"required": int(self.approvals_required)}
         if self.approvers:
             out["approvers"] = sorted(set(self.approvers))
+        if not self.plannable:
+            out["plannable"] = False     # signed into the receipt: no plan may release this call
         return out
 
     @property

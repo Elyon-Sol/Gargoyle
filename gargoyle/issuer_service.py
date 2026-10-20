@@ -250,15 +250,18 @@ def build_issuer_app(
             return {"issued": False, "reason": result.decision.reason}
         covered = False
         plan_id = body.get("plan_id")
-        if result.envelope["requires_approval"] and isinstance(plan_id, str):
-            # The executor says an approved plan covers this call. No card then:
-            # the executor enforces the plan (step single use, grants, expiry)
-            # and the console should not show a hold nobody needs to act on.
-            # A false claim costs nothing here: without a valid release the
-            # executor refuses the call.
-            from gargoyle.plans import match_step
+        if result.envelope["requires_approval"] and isinstance(plan_id, str) and result.decision.plannable:
+            # The executor says an approved plan covers this call. No card then,
+            # provided the plan's grants meet this receipt's own terms (as many
+            # signatures, from its named approvers): the executor enforces the
+            # same, so a hold here would be one nobody needs to act on. A call
+            # the policy keeps individual is never covered. A false claim costs
+            # nothing: without a valid release the executor refuses the call.
+            from gargoyle.plans import grants_satisfy, match_step
+            env_terms = approval_terms(result.envelope)
             for arid_p, plan in app.state.pending_plans.items():
-                if plan["plan_id"] == plan_id and _complete(arid_p) and match_step(plan, body["tool"], body["args"]) is not None:
+                if (plan["plan_id"] == plan_id and _complete(arid_p) and match_step(plan, body["tool"], body["args"]) is not None
+                        and grants_satisfy(env_terms, [g["approver_key_id"] for g in app.state.grants.get(arid_p, [])])):
                     covered = True
                     break
         if result.envelope["requires_approval"] and not covered and _open_holds(who["principal"]) >= max_open_holds:
@@ -312,7 +315,16 @@ def build_issuer_app(
             interaction = {"tool": s["tool"], "args": judged_args, "principal": who["principal"],
                            "groups": who.get("groups", []), "roles": who.get("roles", [])}
             try:
-                d = policy.decide(body["target_url"], interaction)
+                if "match" in step:
+                    # A pattern step is judged by the strictest rule any call
+                    # matching it could reach (gargoyle.rules.decide_rules_pattern).
+                    # A policy that cannot judge patterns keeps them out of plans.
+                    decide_pattern = getattr(policy, "decide_pattern", None)
+                    if decide_pattern is None:
+                        return {"issued": False, "reason": REF_PLAN_STEP_NOT_PLANNABLE, "step": len(norm)}
+                    d = decide_pattern(body["target_url"], interaction)
+                else:
+                    d = policy.decide(body["target_url"], interaction)
             except Exception:
                 return {"issued": False, "reason": REF_PLAN_STEP_REFUSED}
             if not d.eligible:

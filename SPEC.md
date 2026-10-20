@@ -117,9 +117,11 @@ required members, and a non-empty `on_behalf_of` if that key is present),
 `decision_sha256`, `target_url` and a boolean `requires_approval`, and, when
 that is true, a non-empty string `approval_request_id`. An `approval`
 member, when present, must sit on a flagged receipt and be an object with
-exactly `required` (an integer, at least 1, not a boolean) and optionally
+exactly `required` (an integer, at least 1, not a boolean), optionally
 `approvers` (a non-empty array of unique non-empty strings, no fewer than
-`required`), else the receipt is unusable. A receipt whose
+`required`) and optionally `plannable` (a boolean; `false` marks a call
+the policy approves individually, which no plan releases, section 17),
+else the receipt is unusable. A receipt whose
 `envelope_version` is not the one the verifier implements is refused
 `REF_VERIFY_VERSION_UNSUPPORTED` before anything else is read.
 
@@ -970,13 +972,25 @@ plan = {
 }
 ```
 
-**Issuing.** The issuer judges every step under the policy as a call
-(a step with exact arguments on those arguments; a pattern step with its
-patterns as the argument values, so a broad pattern fails a narrow
-rule). Any step refused refuses the plan (`REF_PLAN_STEP_REFUSED`); a
-step whose decision is not plannable refuses it
-(`REF_PLAN_STEP_NOT_PLANNABLE`; the reference rules file says `"plan":
-false` on a hold to keep a tool individual, and sends should be). The
+**Issuing.** The issuer judges every step under the policy. A step with
+exact arguments is judged as that call. A pattern step is judged over
+every call its patterns admit, by the policy's pattern judgment
+(`decide_pattern`): the reference rules policy walks the rules a matching
+call could reach, in order, until one whose argument globs cover the
+whole pattern catches the rest (the default counts when none does), and
+folds them to the strictest decision: any reachable deny refuses the
+step; the signatures required are the maximum; the named approvers are
+the intersection of the named sets; a reachable `"plan": false` rule, or
+an intersection too small for the count, makes the step not plannable.
+Reachability is judged soundly and over-strictly (two globs are taken to
+overlap unless their literal prefixes disagree; a rule covers a pattern
+only when every value the pattern admits provably matches it), so a plan
+is never weaker than a rule one of its calls could hit. A policy without
+pattern judgment (the OPA adapter) refuses pattern steps. Any step
+refused refuses the plan (`REF_PLAN_STEP_REFUSED`); a step whose decision
+is not plannable refuses it (`REF_PLAN_STEP_NOT_PLANNABLE`; the reference
+rules file says `"plan": false` on a hold to keep a tool individual, and
+sends should be). The
 plan is held when any step would be; its approval terms are the strictest
 over the steps. A grant for a plan is a section 8 grant whose
 `decision_sha256` is `plan_sha256` and whose `approval_request_id` is the
@@ -991,7 +1005,13 @@ receipt's principal, target and policy pin (`REF_PLAN_BINDING_MISMATCH`);
 the named step exists and matches the call's tool and arguments, and the
 arguments hash to the receipt's `args_sha256` (`REF_PLAN_NO_MATCHING_STEP`);
 the grants release the plan under its terms (a grant's own refusal, or
-`REF_PLAN_GRANTS`). The consumer then claims `plan_id:step` in the replay
+`REF_PLAN_GRANTS`); and the receipt's own terms are met as well: a
+receipt whose `approval` says `"plannable": false` is never released by a
+plan (`REF_PLAN_RECEIPT_NOT_PLANNABLE`), and the plan's distinct approvers
+must satisfy the receipt's `required` count, from its named `approvers`
+when it names any (`REF_PLAN_TERMS_WEAKER`), so a plan approved by one
+junior never releases a two-signature finance write. The consumer then
+claims `plan_id:step` in the replay
 store (`REF_PLAN_STEP_CONSUMED` on reuse) and the receipt's `decision_id`
 as always. The record carries the arguments so an auditor can re-run the
 match offline; `verify_chain` accepts a release record in place of grants.
@@ -1002,7 +1022,10 @@ executor (section 6.1) but the human did not see the state. That is the
 reason plans are a policy choice per tool, and why the evidence names the
 plan and step behind every released call. The reference issuing service
 opens no per-call hold for a call the executor reports as covered by an
-approved plan; a false report costs nothing, since the executor refuses
-without a valid release. The TypeScript port verifies per-call chains and
-does not yet verify plan releases.
+approved plan, provided the call is plannable and the plan's grants meet
+the receipt's own terms, as the executor will check; otherwise the call
+gets its own card. A false report costs nothing, since the executor
+refuses without a valid release. The TypeScript port verifies per-call
+chains and does not yet verify plan releases; it accepts the `plannable`
+member of a receipt's approval terms.
 

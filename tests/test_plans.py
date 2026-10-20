@@ -21,7 +21,7 @@ from gargoyle.jws import encode
 from gargoyle.mcp_server import EXECUTED_META_KEY, PLAN_TOOL, REASON_META_KEY, IssuerClient, ServerState, StdioUpstream, handle_message
 from gargoyle.plans import (ACCEPT_PLAN_RELEASE, REF_PLAN_BINDING_MISMATCH, REF_PLAN_EXPIRED, REF_PLAN_GRANTS,
                             REF_PLAN_NO_MATCHING_STEP, REF_PLAN_SIGNATURE_INVALID, REF_PLAN_STEP_CONSUMED,
-                            REF_PLAN_STEP_NOT_PLANNABLE, REF_PLAN_STEP_REFUSED, build_plan, match_step, sign_plan,
+                            REF_PLAN_RECEIPT_NOT_PLANNABLE, REF_PLAN_STEP_NOT_PLANNABLE, REF_PLAN_STEP_REFUSED, REF_PLAN_TERMS_WEAKER, build_plan, match_step, sign_plan,
                             verify_plan, verify_plan_release)
 from gargoyle.policy import ELIGIBLE, Decision, refuse
 from gargoyle.rules import RulesPolicy
@@ -185,3 +185,90 @@ def test_middleware_runs_a_planned_task_with_one_card(tmp_path):
         assert all(e["released_by"] == ["approver-1"] for e in writes)
     finally:
         up.close()
+
+
+def _finance_rules(tmp_path, plan=False):
+    doc = {"version": "t", "default": "deny", "rules": [
+        {"tools": ["read_*"], "action": "allow"},
+        {"tools": ["write_file"], "args": {"path": "C:\\\\finance\\\\*"}, "action": "hold", "approvals": 2, "approvers": ["cfo", "controller"], "plan": plan},
+        {"tools": ["write_file"], "action": "hold"},
+    ]}
+    p = tmp_path / ("finance-%s.json" % plan); p.write_text(json.dumps(doc)); return RulesPolicy(str(p))
+
+
+def test_pattern_steps_are_judged_by_the_strictest_rule_they_could_reach(tmp_path):
+    """A plan step with argument globs is judged over every call it admits,
+    not over the glob text as a literal value."""
+    from gargoyle.rules import _glob_covers
+    pol = _finance_rules(tmp_path)
+    base = {"principal": PRINCIPAL, "groups": [], "roles": []}
+    d = pol.decide_pattern(TARGET, {**base, "tool": "write_file", "args": {"path": "*"}})
+    assert d.requires_approval and not d.plannable                       # could reach the finance rule: individual
+    d = pol.decide_pattern(TARGET, {**base, "tool": "write_file", "args": {"path": "C:\\\\proj\\\\*.md"}})
+    assert d.requires_approval and d.plannable and d.approvals_required == 1 and d.approvers is None   # cannot reach C:\\finance\\*
+    d = pol.decide_pattern(TARGET, {**base, "tool": "write_file", "args": {"path": "C:\\\\*.md"}})
+    assert not d.plannable                                                # C:\\finance\\x.md is admitted: individual
+    d = _finance_rules(tmp_path, plan=True).decide_pattern(TARGET, {**base, "tool": "write_file", "args": {"path": "*"}})
+    assert d.plannable and d.approvals_required == 2 and d.approvers == ("cfo", "controller")   # folded to the strictest
+    assert not pol.decide_pattern(TARGET, {**base, "tool": "delete_file", "args": {"path": "*"}}).eligible   # default deny reachable
+    assert pol.decide_pattern(TARGET, {**base, "tool": "read_file", "args": {"path": "*"}}).eligible
+    assert not pol.decide_pattern(TARGET, {**base, "tool": "read_file", "args": {"path": "*"}}).requires_approval
+    # Glob containment is sound: True only when every value the pattern admits matches the rule.
+    assert _glob_covers("*proj*", "C:\\\\proj\\\\*.md") and _glob_covers("*", "anything*") and _glob_covers("C:\\\\proj\\\\*", "C:\\\\proj\\\\*.md")
+    assert _glob_covers("*.md", "C:\\\\*\\\\notes-*.md") and _glob_covers("a*b*c", "a?b*xc")
+    assert not _glob_covers("*proj*", "*") and not _glob_covers("*.md", "C:\\\\proj\\\\*") and not _glob_covers("C:\\\\proj\\\\*", "C:\\\\*")
+    assert not _glob_covers("*ab*", "*a*b*") and not _glob_covers("x", "x*") and _glob_covers("x", "x")
+
+
+def test_plan_release_never_outranks_the_receipts_own_terms():
+    """Second review, finding 1: a one-signature plan over `*` must not release
+    a call the policy holds for two named approvers, or keeps individual."""
+    plan = sign_plan(build_plan(plan_id="p-1", approval_request_id="r-1", target_url=TARGET, principal=PRINCIPAL, policy_pin=PIN,
+                                steps=[{"tool": "write_file", "match": {"path": "*"}}], not_after=NOW + timedelta(minutes=30)), issuer, "issuer-1")
+    args = {"path": "C:\\\\finance\\\\q3.xlsx", "content": "1"}
+    rel = {"plan": plan, "grants": [grant_for(plan)], "step": 0, "args": args}
+    call = {"tool": "write_file", "args": args, "principal": PRINCIPAL}
+    kw = dict(issuer_public_keys=ISSUER_KEYS, approver_public_keys=APPROVERS, now=NOW)
+
+    class Terms:
+        def __init__(self, *a): self.d = Decision(ELIGIBLE, None, True, *a)
+        def pin(self): return PIN
+        def decide(self, t, i): return self.d
+
+    def env(*terms): return issue(Terms(*terms), TARGET, call, signing_key=issuer, key_id="issuer-1", now=NOW).envelope
+    assert verify_plan_release(rel, env(1, None, True), call, **kw)["reason"] == ACCEPT_PLAN_RELEASE
+    assert verify_plan_release(rel, env(1, None, False), call, **kw)["reason"] == REF_PLAN_RECEIPT_NOT_PLANNABLE
+    assert verify_plan_release(rel, env(2, ("cfo", "controller"), True), call, **kw)["reason"] == REF_PLAN_TERMS_WEAKER
+    assert verify_plan_release(rel, env(1, ("cfo",), True), call, **kw)["reason"] == REF_PLAN_TERMS_WEAKER
+    assert verify_plan_release(rel, env(1, ("approver-1", "cfo"), True), call, **kw)["reason"] == ACCEPT_PLAN_RELEASE
+    assert env(1, None, False)["approval"] == {"required": 1, "plannable": False}     # the mark is signed into the receipt
+    c = Consumer(target_id=TARGET, pinned_public_keys=ISSUER_KEYS, record=PIN, approver_public_keys=APPROVERS)
+    assert c.check(env(2, ("cfo", "controller"), True), call, plan_release=rel, now=NOW).reason == REF_PLAN_TERMS_WEAKER
+    assert c.check(env(1, None, False), call, plan_release=rel, now=NOW).reason == REF_PLAN_RECEIPT_NOT_PLANNABLE
+
+
+def test_issuer_judges_patterns_and_covers_only_what_the_plans_grants_satisfy(tmp_path):
+    app = build_issuer_app(policy=_finance_rules(tmp_path), signing_key=issuer, key_id="issuer-1", idp_public_keys={"idp-1": idp.public_key()},
+                           approver_public_keys=APPROVERS)
+    c = TestClient(app); h = {"Authorization": "Bearer " + token()}
+    r = c.post("/plans", json={"target_url": TARGET, "steps": [{"tool": "write_file", "match": {"path": "*"}}]}, headers=h).json()
+    assert r["reason"] == REF_PLAN_STEP_NOT_PLANNABLE                     # `*` could reach the individual finance rule
+    r = c.post("/plans", json={"target_url": TARGET, "steps": [{"tool": "write_file", "match": {"path": "C:\\\\proj\\\\*"}}]}, headers=h).json()
+    assert r["issued"] and r["held"] and "approval" not in r["plan"]       # out of the finance rule's reach: plain hold
+    # Suppose a complete one-signature plan over `*` exists anyway: it covers a
+    # project write but not a finance write, which gets its own two-signature card.
+    wide = sign_plan(build_plan(plan_id="wide", approval_request_id="r-wide", target_url=TARGET, principal=PRINCIPAL, policy_pin=PIN,
+                                steps=[{"tool": "write_file", "match": {"path": "*"}}] * 2, not_after=NOW + timedelta(days=400)), issuer, "issuer-1")
+    app.state.pending_plans["r-wide"] = wide
+    app.state.grants["r-wide"] = [grant_for(wide)]
+    r = c.post("/issue", json={"target_url": TARGET, "tool": "write_file", "args": {"path": "C:\\\\proj\\\\a.md", "content": "x"}, "plan_id": "wide"}, headers=h).json()
+    def cards(): return [x for x in c.get("/pending", headers=h).json()["pending"] if "plan" not in x]
+    assert r["issued"] and r["envelope"]["requires_approval"] and cards() == []     # covered: no card of its own
+    r = c.post("/issue", json={"target_url": TARGET, "tool": "write_file", "args": {"path": "C:\\\\finance\\\\q3.xlsx", "content": "x"}, "plan_id": "wide"}, headers=h).json()
+    assert r["issued"] and r["envelope"]["approval"] == {"required": 2, "approvers": ["cfo", "controller"], "plannable": False}
+    assert len(cards()) == 1 and cards()[0]["required"] == 2
+    # A policy that cannot judge patterns keeps pattern steps out of plans; exact steps still work.
+    plain = TestClient(build_issuer_app(policy=Hold(), signing_key=issuer, key_id="issuer-1", idp_public_keys={"idp-1": idp.public_key()},
+                                        approver_public_keys=APPROVERS))
+    assert plain.post("/plans", json={"target_url": TARGET, "steps": [{"tool": "write_file", "match": {"path": "*"}}]}, headers=h).json()["reason"] == REF_PLAN_STEP_NOT_PLANNABLE
+    assert plain.post("/plans", json={"target_url": TARGET, "steps": [{"tool": "write_file", "args": {"path": "a"}}]}, headers=h).json()["issued"]

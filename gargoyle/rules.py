@@ -38,6 +38,7 @@ Any malformed file, or any error while deciding, is a refusal.
 """
 
 import fnmatch
+import re
 import hashlib
 import json
 from typing import Any, Dict, Mapping, Optional
@@ -119,6 +120,143 @@ def _args_match(args: Any, pattern: Dict[str, str]) -> bool:
     return True
 
 
+def _literal_prefix(glob: str):
+    for i, ch in enumerate(glob):
+        if ch in "*?[":
+            return glob[:i], True
+    return glob, False
+
+
+def _globs_may_overlap(a: str, b: str) -> bool:
+    """Could one string match both globs? Sound over-approximation: a glob
+    only matches strings that start with its literal prefix, so two globs
+    whose literal prefixes disagree are disjoint; anything else may overlap."""
+    pa, wa = _literal_prefix(a)
+    pb, wb = _literal_prefix(b)
+    if not wa and not wb:
+        return a == b
+    if not wa:
+        return fnmatch.fnmatchcase(a, b)
+    if not wb:
+        return fnmatch.fnmatchcase(b, a)
+    n = min(len(pa), len(pb))
+    return pa[:n] == pb[:n]
+
+
+_WILD = re.compile(r"\*|\?|\[[^\]]*\]")
+
+
+def _glob_covers(rule_glob: str, pattern: str) -> bool:
+    """Does every string matching `pattern` also match `rule_glob`? Sound
+    under-approximation (False when unsure). A rule glob made of literals and
+    `*` covers the pattern when its first literal is a prefix of the pattern's
+    literal prefix, its last literal a suffix of the pattern's literal suffix,
+    and each literal between appears, in order, inside one of the pattern's
+    literal pieces: every string the pattern admits carries those pieces in
+    that order, whatever its wildcards expand to."""
+    if not _WILD.search(pattern):
+        return fnmatch.fnmatchcase(pattern, rule_glob)
+    if "?" in rule_glob or "[" in rule_glob or "*" not in rule_glob:
+        return rule_glob == pattern
+    segments = rule_glob.split("*")
+    pieces = _WILD.split(pattern)
+    first, last, middle = segments[0], segments[-1], segments[1:-1]
+    if not pieces[0].startswith(first) or not pieces[-1].endswith(last):
+        return False
+    pi, off = 0, len(first)
+    for seg in middle:
+        if not seg:
+            continue
+        while pi < len(pieces):
+            at = pieces[pi].find(seg, off)
+            if at >= 0:
+                off = at + len(seg)
+                break
+            pi, off = pi + 1, 0
+        else:
+            return False
+    if pi == len(pieces) - 1 and off > len(pieces[-1]) - len(last):
+        return False
+    return True
+
+
+def _args_cover(pattern: Mapping[str, Any], rule_args: Dict[str, str]) -> bool:
+    """Does the rule match every call the pattern admits? Each rule key must
+    be constrained by the pattern and covered by the rule's glob."""
+    for key, glob in rule_args.items():
+        value = pattern.get(key)
+        if not isinstance(value, str) or not _glob_covers(glob, value):
+            return False
+    return True
+
+
+def _args_may_match(pattern: Mapping[str, Any], rule_args: Dict[str, str]) -> bool:
+    """Could some call matching `pattern` (argument globs) also match the
+    rule's argument globs? A key the pattern does not constrain may take any
+    value, so it may match."""
+    for key, glob in rule_args.items():
+        value = pattern.get(key)
+        if value is None:
+            continue
+        if not isinstance(value, str) or not _globs_may_overlap(value, glob):
+            return False
+    return True
+
+
+def decide_rules_pattern(doc: Dict[str, Any], interaction: Mapping[str, Any]) -> Decision:
+    """The strictest decision any call matching the pattern in
+    `interaction["args"]` could receive: for a plan step with argument
+    globs (gargoyle.plans). Every rule the pattern could reach counts, in
+    order, until a rule that matches every call the pattern admits catches
+    the rest; the default counts when no such rule does. Any deny refuses; the hold terms
+    are the maximum signatures required and the intersection of the named
+    approver sets; a non-plannable rule, or an empty intersection, makes the
+    step non-plannable. Sound and over-strict by design: a plan can never be
+    weaker than a rule one of its calls could hit."""
+    tool = interaction.get("tool")
+    pattern = interaction.get("args") if isinstance(interaction.get("args"), Mapping) else {}
+    reached = []
+    caught_all = False
+    for rule in doc["rules"]:
+        if not _any_match(tool, rule["tools"]):
+            continue
+        if "principals" in rule and not _any_match(interaction.get("principal"), rule["principals"]):
+            continue
+        if "on_behalf_of" in rule and not _any_match(interaction.get("on_behalf_of"), rule["on_behalf_of"]):
+            continue
+        if "groups" in rule and not _any_of_list(interaction.get("groups"), rule["groups"]):
+            continue
+        if "roles" in rule and not _any_of_list(interaction.get("roles"), rule["roles"]):
+            continue
+        if "args" in rule and not _args_may_match(pattern, rule["args"]):
+            continue
+        reached.append(rule)
+        if "args" not in rule or _args_cover(pattern, rule["args"]):
+            caught_all = True        # no call matching the pattern gets past this rule
+            break
+    if not caught_all:
+        default = doc.get("default", "deny")
+        if default == "deny":
+            return refuse(RULE_DENIED)
+        reached.append({"action": default})
+    for rule in reached:
+        if rule["action"] == "deny":
+            return refuse(rule.get("reason", RULE_DENIED))
+    holds = [r for r in reached if r["action"] == "hold"]
+    if not holds:
+        return Decision(ELIGIBLE)
+    plannable = all(r.get("plan", True) for r in holds)
+    required = max(int(r.get("approvals", 1)) for r in holds)
+    named = [set(r["approvers"]) for r in holds if "approvers" in r]
+    approvers = None
+    if named:
+        common = set.intersection(*named)
+        if len(common) < required:
+            plannable = False        # no one grant set could satisfy every rule the pattern reaches
+        approvers = tuple(sorted(common)) if common else None
+    return Decision(ELIGIBLE, None, True, required, approvers, plannable)
+
+
 def decide_rules(doc: Dict[str, Any], interaction: Mapping[str, Any]) -> Decision:
     """The decision for `interaction` under a validated rules document."""
     tool = interaction.get("tool")
@@ -174,5 +312,18 @@ class RulesPolicy:
             if validate_rules(doc) is not None:
                 return refuse(RULES_MALFORMED)
             return decide_rules(doc, interaction)
+        except Exception:
+            return refuse(RULES_INTERNAL)
+
+    def decide_pattern(self, target_url: str, interaction: Mapping[str, Any]) -> Decision:
+        """Judge a plan step whose args are globs: the strictest decision any
+        call matching them could receive (decide_rules_pattern)."""
+        try:
+            if not isinstance(interaction, Mapping):
+                return refuse(RULES_MALFORMED)
+            _, doc = self._load()
+            if validate_rules(doc) is not None:
+                return refuse(RULES_MALFORMED)
+            return decide_rules_pattern(doc, interaction)
         except Exception:
             return refuse(RULES_INTERNAL)

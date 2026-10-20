@@ -54,9 +54,9 @@ def grant(env, key, kid, gid=None):
 def test_the_terms_are_in_the_receipt_hashed_and_signed():
     env = receipt(2, ("alice", "bob"))
     assert env["approval"] == {"required": 2, "approvers": ["alice", "bob"]}
-    assert approval_terms(env) == {"required": 2, "approvers": ["alice", "bob"]}
+    assert approval_terms(env) == {"required": 2, "approvers": ["alice", "bob"], "plannable": True}
     plain = receipt(1)
-    assert "approval" not in plain and approval_terms(plain) == {"required": 1, "approvers": None}
+    assert "approval" not in plain and approval_terms(plain) == {"required": 1, "approvers": None, "plannable": True}
     ok = verify_envelope(env, CALL, TARGET, record_source=PIN, pinned_public_keys=ISSUER_KEYS, now=NOW)
     assert ok["accepted"]
     # Lowering the threshold breaks the signature; a malformed or misplaced member is unusable.
