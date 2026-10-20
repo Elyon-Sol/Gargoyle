@@ -110,6 +110,7 @@ REF_TARGET_LOGIN_REQUIRED = "REF_TARGET_LOGIN_REQUIRED"   # Entra login mode and
 REF_TARGET_ISSUER_UNAVAILABLE = "REF_TARGET_ISSUER_UNAVAILABLE"
 REF_TARGET_APPROVAL_TIMEOUT = "REF_TARGET_APPROVAL_TIMEOUT"
 REF_TARGET_APPROVAL_DECLINED = "REF_TARGET_APPROVAL_DECLINED"
+REF_TARGET_GATE_FILES = "REF_TARGET_GATE_FILES"       # the call would touch the gate's own folder (config, keys, evidence, snapshots)
 
 
 class IssuerClient:
@@ -195,6 +196,15 @@ class IssuerClient:
             return keys_from_hex(r.json().get("approvers", {})) if r.status_code == 200 else {}
         except Exception:
             return {}
+
+    def decline(self, approval_request_id: str) -> bool:
+        """Withdraw a hold this gate asked for (the hold's own principal may):
+        when the gate stops waiting, the card must not stay approvable."""
+        try:
+            r = self._post("/decline", {"approval_request_id": approval_request_id})
+            return r.status_code == 200 and bool(r.json().get("declined"))
+        except Exception:
+            return False
 
     def wait_for_grant(self, approval_request_id: str) -> Dict[str, Any]:
         """Poll until the hold has its grant (or, for a receipt that needs
@@ -403,6 +413,13 @@ class ServerState:
         self.upstream = upstream
         self.issuer_client = issuer_client
         self.evidence: Optional[EvidenceLog] = EvidenceLog(audit_log) if audit_log else None
+        # The gate's own folder (config, keys, evidence, snapshots, replay
+        # claims) is never a target: a call whose path arguments reach into
+        # it is refused before any receipt is asked for.
+        self.gate_dir: Optional[str] = None
+        if audit_log:
+            from gargoyle.globs import normalize_path
+            self.gate_dir = normalize_path(str(Path(audit_log).resolve().parent)).rstrip("/")
         if replay_cache is None and audit_log:
             # Single use has to outlive this process: the claims sit in a
             # SQLite file beside the evidence log (audit.replay.sqlite), so a
@@ -461,6 +478,8 @@ def _gate(state: ServerState, params: Dict[str, Any]) -> Dict[str, Any]:
     envelope = meta.get(ENVELOPE_META_KEY)
     grant = meta.get(GRANT_META_KEY)
     self_issued = False
+    if state.gate_dir is not None and _touches_gate_files(args, state.gate_dir):
+        return refused(REF_TARGET_GATE_FILES)
 
     if envelope is None and state.issuer_client is not None:
         # Self-issue: ask the issuing service, and wait for the human if it
@@ -483,8 +502,14 @@ def _gate(state: ServerState, params: Dict[str, Any]) -> Dict[str, Any]:
             # A scoped grant the human already signed may cover this call;
             # otherwise wait for a card of its own.
             if release is None:
-                waited = state.issuer_client.wait_for_grant(str(envelope.get("approval_request_id")))
+                arid = str(envelope.get("approval_request_id"))
+                waited = state.issuer_client.wait_for_grant(arid)
                 if waited["grant"] is None:
+                    if waited["reason"] == REF_TARGET_APPROVAL_TIMEOUT:
+                        # Nobody is waiting for this release any more: take
+                        # the card down, or an approval minutes later would
+                        # read as a change that happened.
+                        state.issuer_client.decline(arid)
                     return refused(waited["reason"], envelope)
                 grant = waited["grant"]
             else:
@@ -534,6 +559,38 @@ def _gate(state: ServerState, params: Dict[str, Any]) -> Dict[str, Any]:
     state.executed.append({"tool": name, "args": args})  # THE side effect
     return {"executed": True, "reason": verdict.reason, "envelope": envelope, "grant": grant,
             "self_issued": self_issued, "ref": gate_ref["ref"]}
+
+
+_GATE_FILE_GLOBS = ("*.env", "*.json", "*.jsonl", "*.jsonl.lock", "*.sqlite", "*.sqlite-*", "snapshots")
+
+
+def _touches_gate_files(args: Any, gate_dir: str) -> bool:
+    """Does any path-like string argument (at the top level or in a list)
+    name the gate's own folder, one of its files (env, json, the evidence
+    log and its lock, the replay claims) or anything under its snapshots?
+    Deeper subfolders are left alone: a deployment folder may hold the
+    project it serves."""
+    import fnmatch
+    from gargoyle.globs import is_pathlike, normalize_path
+    values = []
+    if isinstance(args, dict):
+        for v in args.values():
+            if isinstance(v, str):
+                values.append(v)
+            elif isinstance(v, list):
+                values.extend(x for x in v if isinstance(x, str))
+    for v in values:
+        if not is_pathlike(v):
+            continue
+        n = normalize_path(v)
+        if n == gate_dir:
+            return True
+        if n.startswith(gate_dir + "/"):
+            first = n[len(gate_dir) + 1:].split("/")[0]
+            direct = "/" not in n[len(gate_dir) + 1:]
+            if first == "snapshots" or (direct and any(fnmatch.fnmatchcase(first, g) for g in _GATE_FILE_GLOBS)):
+                return True
+    return False
 
 
 def _plan_release_for(state: ServerState, tool: str, args: Any) -> Optional[Dict[str, Any]]:

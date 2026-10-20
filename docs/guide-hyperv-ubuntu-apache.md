@@ -378,8 +378,13 @@ On the VM, add to `issuer.env` (or pass `--entra-tenant` and
 
 ```
 GARGOYLE_ENTRA_TENANT=<tenant id or yourclient.onmicrosoft.com>
-GARGOYLE_ISSUER_AUDIENCE=<issuer app client id>
+GARGOYLE_ISSUER_AUDIENCE=gargoyle-issuer,<issuer app client id>
 ```
+
+The audience is a comma-separated list: `gargoyle-issuer` is what the
+init-minted tokens carry, the client id is what Entra tokens carry, and
+both stay accepted while users move over (docs/entra-setup.md has the
+details and the v1/v2 token pitfalls).
 
 On each Windows client:
 
@@ -394,7 +399,9 @@ token to that user's cached Entra token, and the principal becomes their
 UPN; restart Claude Desktop or Claude Code. From then on each receipt,
 each card and each audit row names the person, rules can match their
 groups (`"groups": [...]` in rules.json), and disabling the account in
-Entra stops the next call. The pinned init key stays trusted beside the
+Entra stops new sign-ins at once and the next call once the cached access
+token expires (about an hour; revoke the user's sessions in Entra to cut
+that short). The pinned init key stays trusted beside the
 tenant's keys, so the approver console keeps working until approvers log
 in with Entra too.
 
@@ -650,7 +657,9 @@ are persistent.
 | Holds waiting | `https://gargoyle.lan/approve`, or `gargoyle approve --out /opt/gargoyle/deploy` on the VM |
 | Issuer restart | `sudo systemctl restart gargoyle`; holds, grants, declines and plans are in `holds.sqlite`, so a restart loses nothing a person is acting on (`GET /health` reports it) |
 | Rotate every key | re-run `gargoyle init` to a new `--out`, redistribute `middleware.env`, `record.json`, `approver-web.json`, update the unit's `--out` |
-| Client token expiry | 30 days by default (`--token-days`); re-run `init` or mint a new token before it lapses |
+| Client token expiry | 30 days by default (`--token-days`); `gargoyle tokens --out /opt/gargoyle/deploy` mints new client and approver tokens from the existing keys and rewrites the env files; copy `middleware.env` (and `approver-web.json` for file-key approvers) to the clients. Re-running `init` on an existing deployment refuses unless `--force`, which regenerates every key |
+| Where the gate's files live | `C:\gargoyle` (middleware.env, record.json, audit.jsonl, snapshots) stays outside the folder the gate serves. The gate refuses any call whose path reaches into its own folder (`REF_TARGET_GATE_FILES`) whatever the rules say |
+| Several clients | One deployment per client, nothing shared: its own `--out` (keys, rules, `approvers.json`, `holds.sqlite`, `witness.jsonl`), its own issuer port or virtual host, its own tenant settings and approvers. Never point two clients' gates at one issuer; the rules, the approver list and the witness are per client by construction |
 | Second approver | `gargoyle init --approvers 2` for file keys, or Entra enrollment; a rule's `"approvals": 2` and `"approvers": [...]` set the threshold and who counts |
 | Approver is also a user | A person may not release their own call (`REF_ISSUER_SELF_APPROVAL`); give pilot users and approvers different accounts, or set `GARGOYLE_ALLOW_SELF_APPROVAL=1` on the issuer knowingly |
 | Revoke an approver | `gargoyle approvers revoke <upn> --out /opt/gargoyle/deploy` on the VM; takes effect without a restart and is witnessed on the service's next read of the file. An approver retires their own key from the console's sign-in (`POST /approvers/revoke`). Revocation retires the key, not the person: remove the Approver role in Entra as well, or the next sign-in enrolls a fresh key. Removing the role alone also works at once: a grant under an enrolled key is accepted only from that account with the role in today's token |

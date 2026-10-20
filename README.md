@@ -65,7 +65,7 @@ Python 3.12 or later. A TypeScript verifier and consumer for Node 20+
 lives in [ts/](ts/) (`cd ts && npm install && npm test`); its suite
 recomputes the same conformance vectors byte for byte, so the two
 implementations cannot drift apart silently. Redis is optional (`.[redis]`) and only needed to
-share the replay cache and pending-approval set across executor replicas.
+share the replay cache and pending-approval set across replicas of the remote gate; a single gate keeps its replay claims in SQLite beside its evidence log.
 
 ## Issuing a receipt
 
@@ -250,6 +250,7 @@ hold and deny rules):
 
     gargoyle init /path/the/agent/may/touch     # keys, config, rules.json
     gargoyle init --observe /path/...           # or: allow and record everything, hold nothing, tighten later
+    gargoyle tokens --out gargoyle-deploy       # later: new client and approver tokens, same keys
     gargoyle issuer                             # the issuing service, on rules.json
     gargoyle approve --watch 2                  # where the approver sits (terminal)
 
@@ -421,7 +422,7 @@ on it.
 | `jws` | the receipt as a JWS any JWT library verifies |
 | `envelope` | receipt construction, hash region, signature region, currency check |
 | `verifier` | the pure target-side check and every refusal code |
-| `consumer` | `Consumer` (pin, keys, verify, claim, attest) and the reference HTTP target |
+| `consumer` | `Consumer` (pin, keys, verify, claim, attest) |
 | `execution` | execution receipts and the offline chain check |
 | `evidence` | the executor's hash-chained log of every decision, and its offline verifier |
 | `mcp_server` | the stdio MCP middleware (and demo executor), with self-issue mode |

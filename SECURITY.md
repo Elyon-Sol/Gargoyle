@@ -1,7 +1,10 @@
 # Security policy
 
-Gargoyle is pre-release software by one author, proven in one deployment,
-with no completed outside review. Treat every release as alpha. The
+Gargoyle is pre-release software by one author, proven in one deployment.
+It was reviewed twice on 2026-10-20 by outside, model-driven reviewers
+with repository access; their ten security findings are fixed as of
+0.17.0 and recorded in ROADMAP.md. No independent human review has been
+completed. Treat every release as alpha. The
 threat model and the limits of the design are in SPEC.md section 15.1
 and in the technical report's section 9; read those before deploying.
 

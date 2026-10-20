@@ -135,9 +135,9 @@ def test_flagged_call_times_out_without_a_grant():
     state = middleware(client, approval_timeout=0.0)
     assert gate_tool_call(state, call("write_file", {"path": "a.txt", "content": "x"})) == (False, REF_TARGET_APPROVAL_TIMEOUT)
     assert state.executed == []
-    # The hold is still pending at the issuer; a human can still grant it, and
-    # a later retry by the client will get a fresh receipt rather than this one.
-    assert len(client.get("/pending", headers={"Authorization": "Bearer " + token()}).json()["pending"]) == 1
+    # The gate declines the hold it gave up on, so no approver releases a call
+    # nobody is waiting for; a retry by the client opens a fresh hold.
+    assert client.get("/pending", headers={"Authorization": "Bearer " + token()}).json()["pending"] == []
 
 
 def test_declined_hold_stops_the_wait_at_once():

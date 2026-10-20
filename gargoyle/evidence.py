@@ -129,38 +129,77 @@ def build_entry(*, seq: int, prev_sha256: str, kind: str, tool: str, args: Any, 
 
 class EvidenceLog:
     """Appends entries to a JSON Lines file, continuing the chain found at
-    its tail. The file is read once, when the first entry is appended; a
-    file nobody else writes to is the operating assumption (one middleware
-    process, one log), as for any append-only log."""
+    its tail. Several gate processes may share one log (a Claude Code and
+    a Claude Desktop session on the same folder): each append takes an
+    exclusive lock on `<log>.lock`, re-reads the tail when the file grew
+    since this process last wrote, then writes, so the chain never forks.
+    The lock is advisory and per host, as for any append-only log on a
+    local disk."""
 
     def __init__(self, path: str) -> None:
         self.path = Path(path)
         self._seq: Optional[int] = None
         self._tail: str = GENESIS
+        self._size: int = -1          # the file size after our last write; another writer changes it
 
     def _load_tail(self) -> None:
         self._seq, self._tail = 0, GENESIS
         if not self.path.exists():
+            self._size = 0
             return
-        for line in self.path.read_text(encoding="utf-8").splitlines():
+        text = self.path.read_text(encoding="utf-8")
+        self._size = self.path.stat().st_size
+        for line in text.splitlines():
             if line.strip():
                 last = json.loads(line)
                 if last.get("evidence_version") in EVIDENCE_VERSIONS:
                     self._seq, self._tail = int(last["seq"]), str(last["entry_sha256"])
+
+    def _locked(self):
+        """An exclusive, blocking lock on the log's lock file (POSIX flock,
+        Windows byte-range lock), released on exit."""
+        import contextlib
+
+        @contextlib.contextmanager
+        def hold():
+            lock_path = self.path.with_name(self.path.name + ".lock")
+            with open(lock_path, "a+b") as lock:
+                try:
+                    import fcntl
+                    fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+                    unlock = lambda: fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+                except ImportError:                       # Windows
+                    import msvcrt
+                    lock.seek(0)
+                    while True:
+                        try:
+                            msvcrt.locking(lock.fileno(), msvcrt.LK_LOCK, 1)   # retries about ten seconds, then raises
+                            break
+                        except OSError:
+                            continue
+                    unlock = lambda: (lock.seek(0), msvcrt.locking(lock.fileno(), msvcrt.LK_UNLCK, 1))
+                try:
+                    yield
+                finally:
+                    unlock()
+        return hold()
 
     def append(self, kind: str, tool: str, args: Any, principal: str, reason: str, *,
                receipt: Any = None, grant: Any = None, execution: Any = None,
                client: Optional[str] = None, ref: Optional[str] = None) -> Dict[str, Any]:
         """Write one entry and return it. Raises OSError if the file cannot
         be written; the caller decides whether that stops the call."""
-        if self._seq is None:
-            self._load_tail()
-        entry = build_entry(seq=self._seq + 1, prev_sha256=self._tail, kind=kind, tool=tool, args=args,
-                            principal=principal, reason=reason, receipt=receipt, grant=grant, execution=execution,
-                            client=client, ref=ref)
-        with open(self.path, "a", encoding="utf-8") as f:
-            f.write(json.dumps(entry, sort_keys=True) + "\n")
-        self._seq, self._tail = entry["seq"], entry["entry_sha256"]
+        with self._locked():
+            current = self.path.stat().st_size if self.path.exists() else 0
+            if self._seq is None or current != self._size:
+                self._load_tail()                 # first write, or another process wrote since: continue its chain
+            entry = build_entry(seq=self._seq + 1, prev_sha256=self._tail, kind=kind, tool=tool, args=args,
+                                principal=principal, reason=reason, receipt=receipt, grant=grant, execution=execution,
+                                client=client, ref=ref)
+            with open(self.path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(entry, sort_keys=True) + "\n")
+            self._seq, self._tail = entry["seq"], entry["entry_sha256"]
+            self._size = self.path.stat().st_size
         return entry
 
 

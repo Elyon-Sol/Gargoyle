@@ -93,6 +93,27 @@ def _write(path: Path, text: str, private: bool = False) -> None:
     print("wrote", path)
 
 
+def _observe_rules(rules: Path) -> int:
+    """Switch a deployment's rules file to observe mode (allow and record
+    everything), leaving a hand-edited file alone."""
+    current = None
+    if rules.exists():
+        try:
+            current = json.loads(rules.read_text())
+        except ValueError as exc:
+            print("%s is not valid JSON (%s); fix or remove it before --observe" % (rules, exc), file=sys.stderr)
+            return 2
+    if current is None or current == DEFAULT_RULES:
+        _write(rules, json.dumps(OBSERVE_RULES, indent=2) + "\n")
+    elif current != OBSERVE_RULES:
+        print("rules.json was edited by hand and is left as it is; --observe changed nothing", file=sys.stderr)
+    print("observe mode: rules.json allows every call, destructive ones included; the gate records all of "
+          "them and holds none. Tighten rules.json from `gargoyle audit --summary`; the issuer applies the "
+          "change at once and clients that follow its record (GARGOYLE_MCP_RECORD_URL) pick the new pin up "
+          "within a minute. A client on a static record.json needs the new file.")
+    return 0
+
+
 def cmd_init(args) -> int:
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
     from cryptography.hazmat.primitives.serialization import Encoding, NoEncryption, PrivateFormat, PublicFormat
@@ -100,12 +121,26 @@ def cmd_init(args) -> int:
 
     out = Path(args.out).resolve()
     out.mkdir(parents=True, exist_ok=True)
+    if (out / "issuer.env").exists() and not args.force:
+        # A deployment lives here. Its keys and tokens are what every client
+        # and approver holds; regenerating them by accident strands them all.
+        if args.observe:
+            return _observe_rules(out / "rules.json")
+        print("%s already holds a deployment; its keys and tokens are kept. New tokens: `gargoyle tokens --out %s`. "
+              "Fresh keys: `gargoyle init --force` (every client and approver must then be re-provisioned), or a new --out."
+              % (out, out), file=sys.stderr)
+        return 2
     # A Windows path given on a Linux issuer host is the client's and is kept as typed.
     windows = re.match(r"^[A-Za-z]:[\\/]", args.directory) is not None
     allowed = args.directory if windows else str(Path(args.directory).resolve())
     sep = "\\" if windows else "/"
     client_dir = args.client_config_dir or str(out)
     client_python = args.client_python or sys.executable
+    from gargoyle.globs import normalize_path
+    if normalize_path(client_dir) == normalize_path(allowed) or normalize_path(client_dir).startswith(normalize_path(allowed).rstrip("/") + "/"):
+        print("note: the client config folder %s is inside the folder the gate serves (%s). The gate refuses calls into its "
+              "own files (REF_TARGET_GATE_FILES), but secrets are better kept out of the served tree: --client-config-dir."
+              % (client_dir, allowed), file=sys.stderr)
 
     def new_key():
         k = Ed25519PrivateKey.generate()
@@ -130,21 +165,9 @@ def cmd_init(args) -> int:
 
     rules = out / "rules.json"
     if args.observe:
-        current = None
-        if rules.exists():
-            try:
-                current = json.loads(rules.read_text())
-            except ValueError as exc:
-                print("%s is not valid JSON (%s); fix or remove it before --observe" % (rules, exc), file=sys.stderr)
-                return 2
-        if current is None or current == DEFAULT_RULES:
-            _write(rules, json.dumps(OBSERVE_RULES, indent=2) + "\n")
-        elif current != OBSERVE_RULES:
-            print("rules.json was edited by hand and is left as it is; --observe changed nothing", file=sys.stderr)
-        print("observe mode: rules.json allows every call, destructive ones included; the gate records all of "
-              "them and holds none. Tighten rules.json from `gargoyle audit --summary`; the issuer applies the "
-              "change at once and clients that follow its record (GARGOYLE_MCP_RECORD_URL) pick the new pin up "
-              "within a minute. A client on a static record.json needs the new file.")
+        rc = _observe_rules(rules)
+        if rc:
+            return rc
     elif not rules.exists():
         _write(rules, json.dumps(DEFAULT_RULES, indent=2) + "\n")
     _write(out / "issuer.env", _env_lines({
@@ -225,6 +248,58 @@ WantedBy=multi-user.target
     print("       paste mcp-config.json's server entry into your MCP client, restart it")
     print("       gargoyle approve --out %s --watch 2  (on the approver's machine)" % out)
     print("       or open %s/approve in a browser and load approver-web.json" % issuer_url)
+    return 0
+
+
+def cmd_tokens(args) -> int:
+    """New identity tokens from the deployment's existing identity key: the
+    client's shared token (unless the client signs in with Entra, whose
+    token renews itself) and every file-key approver's. Nothing else
+    changes, so clients keep their keys and the audit its trust."""
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    from gargoyle.jws import encode
+    out = Path(args.out).resolve()
+    issuer_env = out / "issuer.env"
+    if not issuer_env.exists():
+        print("%s holds no deployment (no issuer.env)" % out, file=sys.stderr)
+        return 2
+    env = _read_env(issuer_env)
+    idp_hex = env.get("GARGOYLE_IDP_KEY_HEX")
+    if not idp_hex:
+        print("issuer.env keeps no identity key (a deployment older than 0.9); make a fresh one with `gargoyle init` to a new --out", file=sys.stderr)
+        return 2
+    idp = Ed25519PrivateKey.from_private_bytes(bytes.fromhex(idp_hex))
+    kid = env.get("GARGOYLE_IDP_KEY_ID", "idp-1")
+    exp = int((datetime.now(timezone.utc) + timedelta(days=args.token_days)).timestamp())
+    mw = out / "middleware.env"
+    if mw.exists():
+        menv = _read_env(mw)
+        if "GARGOYLE_MCP_CLIENT_TOKEN" in menv:
+            menv["GARGOYLE_MCP_CLIENT_TOKEN"] = encode({"sub": menv.get("GARGOYLE_MCP_PRINCIPAL", PRINCIPAL), "aud": "gargoyle-issuer", "exp": exp}, idp, kid)
+            _write(mw, _env_lines(menv), private=True)
+            mcp = out / "mcp-config.json"
+            if mcp.exists():
+                doc = json.loads(mcp.read_text())
+                for server in doc.get("mcpServers", {}).values():
+                    if "GARGOYLE_MCP_CLIENT_TOKEN" in server.get("env", {}):
+                        server["env"]["GARGOYLE_MCP_CLIENT_TOKEN"] = menv["GARGOYLE_MCP_CLIENT_TOKEN"]
+                _write(mcp, json.dumps(doc, indent=2) + "\n", private=True)
+        else:
+            print("middleware.env signs in with Entra; that token renews itself and was left alone")
+    for env_path in sorted(out.glob("approver*.env")):
+        aenv = _read_env(env_path)
+        akid = aenv.get("GARGOYLE_APPROVER_KEY_ID")
+        if not akid:
+            continue
+        tok = encode({"sub": akid, "roles": [DEFAULT_APPROVER_ROLE], "aud": "gargoyle-issuer", "exp": exp}, idp, kid)
+        aenv["GARGOYLE_APPROVER_TOKEN"] = tok
+        _write(env_path, _env_lines(aenv), private=True)
+        web = out / env_path.name.replace("approver", "approver-web", 1).replace(".env", ".json")
+        if web.exists():
+            doc = json.loads(web.read_text())
+            doc["token"] = tok
+            _write(web, json.dumps(doc, indent=2) + "\n", private=True)
+    print("new tokens, valid %d days; copy middleware.env (and approver-web*.json) to the machines that use them and restart their MCP clients" % args.token_days)
     return 0
 
 
@@ -525,7 +600,13 @@ def main(argv=None) -> int:
                    help="the filesystem MCP server behind the gate: the official one via npx, or gargoyle.fs_server")
     p.add_argument("--entra-tenant", help="trust this Entra ID tenant's tokens at the issuer (users then run `gargoyle login`)")
     p.add_argument("--entra-audience", help="the issuer API app's client id or app id URI, required in Entra tokens")
+    p.add_argument("--force", action="store_true",
+                   help="regenerate keys and tokens in an existing --out (every client and approver must be re-provisioned)")
     p.set_defaults(fn=cmd_init)
+    p = sub.add_parser("tokens", help="mint new client and approver tokens from a deployment's existing keys")
+    p.add_argument("--out", default="gargoyle-deploy")
+    p.add_argument("--token-days", type=int, default=30)
+    p.set_defaults(fn=cmd_tokens)
     p = sub.add_parser("login", help="sign this workstation's user in with Entra ID (device code)")
     p.add_argument("--tenant", required=True, help="tenant id or domain")
     p.add_argument("--client-id", required=True, help="the public client app registration")

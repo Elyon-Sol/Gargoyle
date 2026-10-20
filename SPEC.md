@@ -672,7 +672,16 @@ The complete objects are the `threshold` member of
   the `X-Gargoyle-Envelope` header, or as the JWS of section 14. An HTTP
   consumer is not specified; the MCP middleware is the shipped consumer. A
   consumer with no configuration refuses every call
-  (`REF_TARGET_NOT_CONFIGURED`).
+  (`REF_TARGET_NOT_CONFIGURED`). The shipped middleware's own refusals,
+  beside the verifier's: `REF_TARGET_ISSUER_UNAVAILABLE` (the issuing
+  service did not answer), `REF_TARGET_APPROVAL_DECLINED` (a human declined
+  the hold), `REF_TARGET_APPROVAL_TIMEOUT` (the gate stopped waiting for a
+  release; it then declines the hold itself, so a card nobody is waiting
+  on cannot be approved into a change that never ran),
+  `REF_TARGET_LOGIN_REQUIRED` (section 13) and `REF_TARGET_GATE_FILES` (a
+  call whose path arguments reach into the gate's own folder: its
+  configuration, keys, evidence, snapshots and replay claims are never a
+  target, whatever the policy says).
 - MCP: the receipt rides in `tools/call` `params._meta["gargoyle/envelope"]`
   and a grant in `params._meta["gargoyle/grant"]`; the response `_meta`
   carries `gargoyle/executed` (boolean) and `gargoyle/reason`. A stdio

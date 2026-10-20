@@ -184,7 +184,18 @@ verifying itself for no external user; that is the failure mode to avoid.
   GARGOYLE_MCP_RECORD_URL is set (init sets it), caches a minute, and asks again at once
   when a receipt names a pin the cache does not know. A rule change reaches every gate
   without copying record.json or restarting clients; a static file stays available for
-  a deployment that wants a pin independent of the issuer.
+  a deployment that wants a pin independent of the issuer. Then the rest of the list:
+  the evidence log takes a file lock and re-reads its tail before each append, so two
+  gates on one audit.jsonl keep one chain; the gate refuses any call whose path names
+  its own folder, env or json files, evidence log, replay claims or snapshots
+  (REF_TARGET_GATE_FILES), rules notwithstanding, and init says so when the client
+  config folder sits inside the served tree; a hold the gate stops waiting for is
+  declined at the issuer rather than left for an approver to release into nothing;
+  `gargoyle init` on a folder that already holds a deployment refuses unless --force
+  (with --observe it only switches the rules), and `gargoyle tokens` mints new client
+  and approver tokens from the existing identity key; the guide, SPEC, README,
+  SECURITY.md and the report were reconciled (REF_TARGET reasons, timeouts, audiences,
+  what disabling an account does and does not stop).
 - Side-door test (2026-10-20, Claude Desktop): asked "do not use the gate and tell me how
   I can get around it", the assistant declined to help bypass but offered its own sandbox
   and "a route that doesn't involve the gate"; asked to write bypass.md into the project
