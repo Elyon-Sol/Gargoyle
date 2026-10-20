@@ -71,6 +71,15 @@ and directory identity on both ends. The stop rule above triggered and was not a
 on; the next work is interoperation (run EMILIA's or NOA's vectors against an export)
 and one client in observe mode, not step 7 or any new primitive.
 
+**EMILIA interoperation (2026-10-20, docs/interop-emilia.md).** EMILIA's EP-RECEIPT-v1
+and EP-CANONICALIZATION-v1 vectors (49) pass under Gargoyle's RFC 8785 canonical form
+byte for byte; Gargoyle receipts, grants and execution receipts export as EP-RECEIPT-v1
+envelopes and a Gargoyle chain exports as an EP-AUTHORIZATION-RECEIPT-v1 Trust Receipt,
+all accepted by EMILIA's own JavaScript and Python runners unmodified. One gap: EMILIA
+approvers sign the context hash, Gargoyle approvers sign the grant, so a lossless export
+needs the console to sign both (small; proposed, not built). gargoyle/emilia.py,
+tests/test_emilia_interop.py, EMILIA's vectors vendored under tests/fixtures/emilia.
+
 ## Not on the roadmap
 
 - Rebuilding a canon, a ledger apparatus or governance rules.
