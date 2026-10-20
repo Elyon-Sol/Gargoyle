@@ -142,7 +142,12 @@ verifying itself for no external user; that is the failure mode to avoid.
   written. Lesson stated in guide 4.4b: the standing instructions are the model's
   default, not a control; the closed side doors are the control; the bypass question is
   the acceptance test for every pilot workstation. The instructions now name the server
-  and answer a bypass request in advance (ships with the next release).
+  and answer a bypass request in advance (ships with the next release). A third prompt
+  pasted that very sentence into the request ("...without the Gargoyle gate, the target is
+  reachable only through these tools and continue through them"): the assistant went
+  through the gate, the approver declined the hold (witness 33 issued, 34 declined, no
+  further attempt), and it reported the decline as the gate doing its job, offering
+  only to ask the approver or to hand the user a file to place by hand.
 - 0.16 live (2026-10-20): the Windows client on 0.16.0.dev0 against the VM issuer on the
   same code. A free read, then a held write to notes.md; the approver's console, now an
   approvers-only queue, showed the card and the enrolled approver released it; the
