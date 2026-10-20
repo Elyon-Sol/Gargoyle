@@ -52,6 +52,16 @@ verifying itself for no external user; that is the failure mode to avoid.
    Integrate, do not build. (The browser console below covers the "a button,
    not a terminal" half of this without a third party.) (DONE, see Status.)
 
+7. **Handover documentation for an IT professional.** Added 2026-10-20 after the
+   operability fixes, written once the pilot has shown what is true in practice: a
+   threat model with a mitigation matrix (what the gate stops, what it records, what
+   it cannot see); a deployment architecture document with the multi-tenant layout,
+   the key lifecycle (issuer, identity, approver, executor; per-workstation executor
+   keys, `gargoyle tokens`, `init --force`) and the public-CA path; a systemd unit;
+   a per-workstation enrollment runbook; and an operations runbook (token expiry,
+   approver changes, rule changes under record following, audits with witness and
+   approvers.json). The guide, entra-setup and beta-checklist are the raw material.
+
 ## Not on the roadmap
 
 - Rebuilding a canon, a ledger apparatus or governance rules.
