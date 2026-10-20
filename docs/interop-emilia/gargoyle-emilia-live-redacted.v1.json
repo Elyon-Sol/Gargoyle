@@ -1,0 +1,91 @@
+{
+  "suite": "GARGOYLE EP-TRUST-RECEIPT-v1 live pilot export (redacted, re-signed under throwaway keys)",
+  "vectors": [
+    {
+      "id": "ep:receipt:gargoyle:c4ebd22e-7c5a-479b-ac09-bb3a96d0d8b1",
+      "expect": {
+        "valid": true
+      },
+      "trust_receipt": {
+        "receipt_id": "ep:receipt:gargoyle:c4ebd22e-7c5a-479b-ac09-bb3a96d0d8b1",
+        "action": {
+          "ep_version": "1.0",
+          "action_type": "mcp.tools/call",
+          "target": {
+            "system": "mcp://filesystem/C:\\pilot\\project",
+            "resource": "write_file"
+          },
+          "parameters": {
+            "args_sha256": "c5fcf2033df9d1e716ccd29267cba5b7c2a8772c63ed9ffa117796ae4c412ebe",
+            "state_sha256": "f247eb6c225c00e8dfd29a79a969ef073a1cdf86ffa8e18152274df1b2652c89"
+          },
+          "initiator": "requester@pilot.example",
+          "policy_id": "gargoyle.rules/1",
+          "requested_at": "2026-10-20T23:01:37.929113+00:00",
+          "gargoyle": {
+            "envelope_version": "gargoyle/3",
+            "decision_sha256": "cc7bf97e68418ad94a369875546bf11364516948c08ed1ac95c6dff10a92deae",
+            "decision_id": "c4ebd22e-7c5a-479b-ac09-bb3a96d0d8b1"
+          }
+        },
+        "action_hash": "sha256:64e0b217e2d10d2a9cb399ee98d3abf3444cf5b1ae0ade2871a463c575d903b8",
+        "contexts": [
+          {
+            "action_hash": "sha256:64e0b217e2d10d2a9cb399ee98d3abf3444cf5b1ae0ade2871a463c575d903b8",
+            "approver": "approver@pilot.example",
+            "approver_index": 1,
+            "audience": "mcp://filesystem/C:\\pilot\\project",
+            "authorization_instance": "xOvSLnxaR5usCbs6ltDYsQ",
+            "context_type": "ep.signoff.v1",
+            "ep_version": "1.0",
+            "expires_at": "2026-10-20T23:08:26+00:00",
+            "initiator": "requester@pilot.example",
+            "issued_at": "2026-10-20T23:01:37.929113+00:00",
+            "nonce": "ZdodMku6QUGGrRUzZS6Z8g",
+            "policy_hash": "sha256:19122a048ce139149e2384a25c8057a8dcc8d6ba194d82d9f9e7bc90b2b8bf8c",
+            "policy_id": "gargoyle.rules/1",
+            "required_approvals": 1
+          }
+        ],
+        "signoffs": [
+          {
+            "context_hash": "sha256:c684fd92d4064fbd01a57ca18b63aae055c6938ffc93d61977a4009d70191469",
+            "signature": "JJcxzVNVKasUx6ZDF6dgQmg7OTVhjIDnOH2G63UwvAUD7OoLRpUwLviPDPerA_Hslgpif08VkgNlQerD6oG8DQ",
+            "key_class": "B",
+            "approver_key_id": "approver@pilot.example",
+            "signed_at": "2026-10-20T23:03:28.111116+00:00"
+          }
+        ],
+        "consumption": {
+          "nonce": "xOvSLnxaR5usCbs6ltDYsQ",
+          "state": "COMMITTED",
+          "committed_at": "2026-10-20T23:03:28.102638+00:00"
+        },
+        "log_proof": {
+          "alg": "EP-MERKLE-v2",
+          "leaf_hash": "sha256:abdc083e6b72af93d49cd599bde0a96b12cc57c5545cc0c0741faa4be4ef31c1",
+          "leaf_index": 0,
+          "inclusion_path": [],
+          "checkpoint": {
+            "tree_size": 1,
+            "root_hash": "sha256:abdc083e6b72af93d49cd599bde0a96b12cc57c5545cc0c0741faa4be4ef31c1",
+            "log_key_id": "executor-1",
+            "merkle_alg": "EP-MERKLE-v2",
+            "log_signature": "-mYfE3Hyh-QZ6SppEdhNNrxNiEEHLfCwKYvLe04JyRoaWpWgs1dgdn2miiyqlthd6WOXmj7E62iuCjIS_g01CQ"
+          }
+        },
+        "approver_key_proofs": []
+      },
+      "verification": {
+        "approver_keys": {
+          "approver@pilot.example": {
+            "approver_id": "approver@pilot.example",
+            "public_key": "MCowBQYDK2VwAyEA51VFHQdULlkoSpx3zLqJdyZKdX-wpXK_kReH__wiImI",
+            "key_class": "B"
+          }
+        },
+        "log_public_key": "MCowBQYDK2VwAyEA0c8lET-qpG2oxw1igqvrbq-nqw4P141SI7lyIFBPiuQ"
+      }
+    }
+  ]
+}
