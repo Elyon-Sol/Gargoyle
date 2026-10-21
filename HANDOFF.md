@@ -28,7 +28,7 @@ Run: pip install -e ".[dev]" && python -m pytest
 pep.py (the HTTP gate), request_validator, authz_sidecar, governance_wiring,
 issuance_log, envelope_inspector, publisher, root_record_source, replay/receipt.py,
 CANON/*.md/pdf, STATE.md + archive, EVIDENCE/verification_ledger* + proofs,
-docs/ (all), POE/, deploy/, site/, scripts/, CLAUDE.md, the GR rules.
+docs/ (all), POE/, deploy/, scripts/, CLAUDE.md, the GR rules.
 Tests dropped: every file importing pep, authz_sidecar, publisher, root_record_source,
 replay, issuance_log, envelope_inspector, governance_wiring, request_validator.
 
