@@ -164,6 +164,7 @@ async function api(path, opts = {}) {
 async function refresh() {
   let pending;
   try { pending = (await api("pending")).pending; } catch (err) { log("issuer unreachable: " + err.message); return; }
+  await activity();                                        // before the empty return: an observe week is nothing but activity
   const holds = $("holds");
   if (!pending.length) { holds.innerHTML = '<div class="empty">Nothing waiting for you.</div>'; return; }
   const ids = new Set();
@@ -212,7 +213,6 @@ async function refresh() {
   }
   for (const [id, card] of state.seen) if (!ids.has(id) && !card.dataset.done) { card.remove(); state.seen.delete(id); }
   $("status").textContent = `approving as ${state.keyId} \u00b7 ${pending.length} waiting`;
-  await activity();
 }
 
 // ---- Activity: the issuer's witness, newest first, fetched incrementally (witness?after=<seq>) ----

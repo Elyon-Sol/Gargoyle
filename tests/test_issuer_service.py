@@ -160,6 +160,8 @@ def test_the_approval_console_is_served(client):
     # The console also shows the witness as it is written (an observe-mode
     # week has nothing to approve); it reads it incrementally.
     assert 'id="activity-rows"' in page.text and "witness?after=" in page.text
+    # ... and loads it even when nothing is pending, which is every refresh of an observe week.
+    assert page.text.index("await activity()") < page.text.index("Nothing waiting for you")
     js = client.get("/approve.js")
     assert js.status_code == 200 and "export async function signGrant" in js.text
     # The console needs no token to load; every data call it makes does.
