@@ -107,6 +107,13 @@ def test_honest_evidence_reconciles_and_tampering_is_found(tmp_path):
     assert c.get("/witness", headers=h).status_code == 403 and c.get("/witness", headers=h).json()["detail"]["reason"] == REF_ISSUER_FORBIDDEN
     approver_h = {"Authorization": "Bearer " + encode({"sub": "approver-1", "exp": int((datetime.now(timezone.utc) + timedelta(hours=1)).timestamp())}, idp, "idp-1")}
     assert len(c.get("/witness", headers=approver_h).json()["entries"]) == 4
+    # A console that polls asks for the lines past the last one it saw, and
+    # may cap a first page; the chain's tail comes back either way.
+    page = c.get("/witness?after=2", headers=approver_h).json()
+    assert [e["seq"] for e in page["entries"]] == [3, 4] and page["seq"] == 4
+    page = c.get("/witness?limit=1", headers=approver_h).json()
+    assert [e["seq"] for e in page["entries"]] == [4] and page["seq"] == 4
+    assert c.get("/witness?after=4", headers=approver_h).json() == {"entries": [], "seq": 4}
     # Evidence from before the witness began is information, not a finding.
     old = dict(evidence[0], at="2026-01-01T00:00:00+00:00", receipt=dict(evidence[0]["receipt"], decision_id="before-the-witness"))
     r = reconcile(evidence + [old], witness, principal=PRINCIPAL)      # beside the real rows, not in place of one

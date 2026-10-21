@@ -463,6 +463,47 @@ def cmd_approvers(args) -> int:
     return 1
 
 
+def cmd_witness(args) -> int:
+    """Print the issuer's witness log as a table an operator reads: when,
+    event, who, tool, outcome. A rendering of the file, not a verification
+    of it (`gargoyle audit --witness` does that). `--follow` keeps printing
+    as the issuer appends, which is how an observe-mode week is watched
+    from the issuer's own shell, with no sign-in."""
+    import time
+    from gargoyle.witness import describe, read_witness
+    path = Path(args.path)
+    if not path.exists():
+        print("%s does not exist; the issuer writes it where GARGOYLE_WITNESS_PATH points (the deployment folder)" % path, file=sys.stderr)
+        return 2
+    print("  %-19s %-14s %-30s %-22s %s" % ("at (UTC)", "event", "who", "tool", "outcome"))
+
+    def show(entry) -> None:
+        d = describe(entry)
+        print("  %-19s %-14s %-30s %-22s %s%s" % (d["at"][:19].replace("T", " "), d["event"][:14], d["who"][:30], d["tool"][:22], d["outcome"],
+                                                  ("  " + d["ref"]) if d["ref"] and args.refs else ""))
+
+    entries = read_witness(str(path))
+    shown = entries[-args.tail:] if args.tail > 0 else entries
+    for e in shown:
+        show(e)
+    if not args.follow:
+        return 0
+    seen = len(entries)
+    try:
+        while True:
+            time.sleep(args.interval)
+            entries = read_witness(str(path))
+            if len(entries) < seen:
+                print("  (the witness file was replaced; showing it from the start)")
+                seen = 0
+            for e in entries[seen:]:
+                show(e)
+            seen = len(entries)
+            sys.stdout.flush()
+    except KeyboardInterrupt:
+        return 0
+
+
 def _audit_summary(report, raw) -> None:
     """Calls by principal and tool with their outcomes, then who released
     and which clients: a week of observe mode as a table, the input for
@@ -683,6 +724,13 @@ def main(argv=None) -> int:
     p.add_argument("upn", nargs="?", help="the approver to revoke")
     p.add_argument("--out", default="gargoyle-deploy")
     p.set_defaults(fn=cmd_approvers)
+    p = sub.add_parser("witness", help="print the issuer's witness log as a table; --follow watches it grow")
+    p.add_argument("path", nargs="?", default="gargoyle-deploy/witness.jsonl", help="the issuer's witness.jsonl")
+    p.add_argument("--follow", "-f", action="store_true", help="keep printing new entries as the issuer writes them")
+    p.add_argument("--tail", "-n", type=int, default=0, metavar="N", help="start with the last N entries only")
+    p.add_argument("--interval", type=float, default=2.0, help="seconds between reads with --follow")
+    p.add_argument("--refs", action="store_true", help="also print the decision, plan or hold id of each row")
+    p.set_defaults(fn=cmd_witness)
     p = sub.add_parser("audit", help="verify a receipt chain offline, or a whole evidence log")
     p.add_argument("receipt", nargs="?"); p.add_argument("execution", nargs="?"); p.add_argument("grant", nargs="?")
     p.add_argument("--log", help="the middleware's audit.jsonl: verify every entry")

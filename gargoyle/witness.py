@@ -119,6 +119,44 @@ def verify_witness(entries: Iterable[Any], *, issuer_public_keys: Dict[str, Any]
             "count": len(report), "tail_sha256": tail, "entries": report}
 
 
+def describe(entry: Any) -> Dict[str, str]:
+    """One witness entry as the columns an operator reads: when, what
+    happened, who, which tool, and the outcome in words. The same reading
+    the approval console shows; `gargoyle witness` prints it."""
+    if not isinstance(entry, dict):
+        return {"at": "", "event": "malformed", "who": "", "tool": "", "outcome": "not a witness entry", "ref": ""}
+    ev = str(entry.get("event", "?"))
+    who = str(entry.get("principal") or entry.get("approver") or entry.get("by") or "")
+    tool = str(entry.get("tool") or ("plan (%s steps)" % entry.get("steps") if ev == "plan" else ""))
+    short = lambda k, n=12: (str(entry.get(k) or "")[:n])
+    if ev == "issued":
+        outcome = "covered by an approved plan" if entry.get("covered") else ("held for approval" if entry.get("held") else "allowed")
+        ref = short("decision_id", 40) or short("decision_sha256")
+    elif ev == "refused":
+        outcome, ref = "refused: %s" % entry.get("reason", "?"), ""
+    elif ev == "granted":
+        n, k = entry.get("collected"), entry.get("required")
+        outcome = "released" + (" (%s of %s)" % (n, k) if isinstance(k, int) and k > 1 else "")
+        ref = short("approval_request_id", 40)
+    elif ev == "grant_refused":
+        outcome, ref = "release refused: %s" % entry.get("reason", "?"), short("approval_request_id", 40)
+    elif ev == "declined":
+        outcome, ref = "declined", short("approval_request_id", 40)
+    elif ev == "plan":
+        outcome, ref = "held for approval" if entry.get("held") else "allowed", short("plan_id", 40)
+    elif ev == "started":
+        outcome, ref = "issuer restarted" if entry.get("resumed") else "witness began", ""
+    elif ev == "enrolled":
+        outcome, ref = "approver key replaced" if entry.get("replaced") else "approver key enrolled", ""
+    elif ev == "enroll_refused":
+        outcome, ref = "enrolment refused: %s" % entry.get("reason", "?"), ""
+    elif ev == "revoked":
+        outcome, ref = "approver key revoked by %s" % (entry.get("by") or "the operator"), ""
+    else:
+        outcome, ref = ev, ""
+    return {"at": str(entry.get("at", "")), "event": ev, "who": who, "tool": tool, "outcome": outcome, "ref": ref}
+
+
 def read_witness(path: str) -> List[Any]:
     out: List[Any] = []
     for line in Path(path).read_text(encoding="utf-8").splitlines():

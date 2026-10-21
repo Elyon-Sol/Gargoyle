@@ -171,3 +171,30 @@ def test_init_observe_allows_everything_and_records_it(tmp_path, capsys):
     (out / "rules.json").write_text("{not json")
     assert main(["init", str(tmp_path / "project"), "--out", str(out), "--observe"]) == 2
     assert (out / "rules.json").read_text() == "{not json"
+
+
+
+def test_witness_command_renders_the_issuers_log(tmp_path, capsys):
+    """`gargoyle witness` prints the witness file as a table an operator
+    reads on the issuer's host: when, event, who, tool, outcome. It is the
+    rendering the console's Activity table gives, with no sign-in."""
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    from gargoyle.witness import WitnessLog, describe
+    w = WitnessLog(str(tmp_path / "witness.jsonl"), Ed25519PrivateKey.generate(), "issuer-1")
+    w.record("issued", principal="ann@contoso.com", tool="read_file", held=False, decision_id="d-1", args_sha256="a" * 64)
+    w.record("issued", principal="ann@contoso.com", tool="write_file", held=True, decision_id="d-2", approval_request_id="r-2", args_sha256="b" * 64)
+    w.record("granted", approval_request_id="r-2", approver="dana@contoso.com", collected=1, required=1)
+    w.record("refused", principal="bob@contoso.com", tool="delete_file", reason="REF_POLICY_DENIED")
+    assert main(["witness", str(tmp_path / "witness.jsonl")]) == 0
+    out = capsys.readouterr().out.splitlines()
+    assert out[0].split()[:3] == ["at", "(UTC)", "event"]
+    assert "witness began" in out[1]
+    assert "ann@contoso.com" in out[2] and "read_file" in out[2] and out[2].rstrip().endswith("allowed")
+    assert "write_file" in out[3] and "held for approval" in out[3]
+    assert "dana@contoso.com" in out[4] and "released" in out[4]
+    assert "bob@contoso.com" in out[5] and "refused: REF_POLICY_DENIED" in out[5]
+    assert main(["witness", str(tmp_path / "witness.jsonl"), "--tail", "1"]) == 0
+    assert len(capsys.readouterr().out.splitlines()) == 2
+    assert main(["witness", str(tmp_path / "missing.jsonl")]) == 2
+    assert "does not exist" in capsys.readouterr().err
+    assert describe("not a dict")["event"] == "malformed" and describe({"event": "something_new"})["outcome"] == "something_new"

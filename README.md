@@ -273,11 +273,14 @@ hold and deny rules):
     gargoyle emilia --log audit.jsonl           # export approved calls as EMILIA Trust Receipts (docs/interop-emilia.md)
     gargoyle issuer                             # the issuing service, on rules.json
     gargoyle approve --watch 2                  # where the approver sits (terminal)
+    gargoyle witness --follow                   # the issuer's witness as a table, on its host (what an observe week records)
 
 or approve in a browser: open the issuer's `/approve` page and load
 `approver-web.json`, or, with Entra configured, sign in with Microsoft;
 the page shows each held call with its full arguments, checked against
-the receipt, and signs the grant locally with WebCrypto. The key never
+the receipt, and signs the grant locally with WebCrypto; below the holds
+it shows the witness as **Activity** (who asked, which tool, what the
+policy did), which is the whole picture during an observe-mode week. The key never
 leaves the browser, and with Entra it is generated there, non-exportable,
 and enrolled under the approver's UPN, so grants and audits name the
 person. An approver retires a lost or replaced key with

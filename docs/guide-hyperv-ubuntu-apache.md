@@ -343,6 +343,19 @@ the issuer applies it at once and the clients follow its signed record,
 so receipts under the old pin die at once, which is the intended effect. Observe mode records the hash
 of each call's arguments, never the arguments themselves.
 
+Two ways to watch the week as it happens, both read the issuer's witness
+(the signed record the client evidence is later reconciled against). On
+the issuer's host, with no sign-in:
+
+    gargoyle witness /opt/gargoyle/deploy/witness.jsonl --follow --tail 50
+
+prints one line per entry (time, event, who, tool, outcome) and keeps
+printing as the issuer writes. In a browser, the `/approve` console shows
+the same rows under **Activity**, newest first, with a filter box; it
+polls `/witness?after=<seq>` every few seconds and shows the entries to
+approvers only, because they name every user. Neither view verifies the
+chain; `gargoyle audit --witness` does, at the end of the week.
+
 **4.5 Claude Desktop instead of Claude Code.** The GUI app speaks MCP the
 same way. `gargoyle init` already writes the entry in Desktop's shape
 (`mcp-config.json`); use the full path to `python.exe` as the command,

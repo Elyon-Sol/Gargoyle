@@ -30,6 +30,18 @@
   .actions { display:flex; gap:12px; align-items:center; }
   .empty { color:var(--muted); text-align:center; padding:48px 0; }
   .log { font-size:13px; color:var(--muted); margin-top:16px; }
+  .activity { margin-top:32px; }
+  .activity h2 { font-size:16px; margin:0 0 8px; display:flex; gap:12px; align-items:baseline; flex-wrap:wrap; }
+  .activity h2 .count { font-weight:normal; color:var(--muted); font-size:13px; }
+  .activity input { font:inherit; font-size:13px; padding:4px 8px; border:1px solid var(--line); border-radius:6px; background:var(--card); color:var(--ink); min-width:220px; }
+  .activity .wrap { background:var(--card); border:1px solid var(--line); border-radius:10px; overflow:auto; max-height:60vh; }
+  .activity table { border-collapse:collapse; width:100%; font-size:13px; }
+  .activity th, .activity td { text-align:left; padding:6px 10px; border-bottom:1px solid var(--line); white-space:nowrap; vertical-align:top; }
+  .activity th { position:sticky; top:0; background:var(--card); color:var(--muted); font-weight:600; }
+  .activity td.who { max-width:260px; overflow:hidden; text-overflow:ellipsis; }
+  .activity tr.held td.outcome { color:var(--warn); } .activity tr.refused td.outcome, .activity tr.declined td.outcome, .activity tr.grant_refused td.outcome { color:var(--bad); }
+  .activity tr.granted td.outcome { color:var(--ok); } .activity tr.started td, .activity tr.enrolled td, .activity tr.revoked td, .activity tr.enroll_refused td { color:var(--muted); }
+  .activity tr.hidden { display:none; }
 </style>
 </head>
 <body>
@@ -49,13 +61,19 @@
     <div style="margin-top:10px"><input type="file" id="file" accept=".json,application/json"></div>
   </section>
   <section id="holds"><div class="empty">Load the approver file to see holds.</div></section>
+  <section class="activity" id="activity" style="display:none">
+    <h2>Activity <span class="count" id="activity-count"></span> <input id="activity-filter" type="search" placeholder="filter by user, tool or outcome"></h2>
+    <div class="note" style="margin-bottom:8px">The issuer's witness as it is written: every receipt it issued, every hold released or declined, every restart. Who asked, which tool, and what the policy did. Arguments are never recorded here, only their hash.</div>
+    <div class="wrap"><table><thead><tr><th>when</th><th>who</th><th>tool</th><th>outcome</th><th>event</th></tr></thead><tbody id="activity-rows"></tbody></table></div>
+  </section>
   <div class="log" id="log"></div>
 </main>
 <script type="module">
 import { argsSha256, sha256Hex, canonicalJson, authorizeUrl, buildGrant, earlier, emiliaContext, emiliaSignoff, exchangeCode, generateApproverKey, importApproverKey, isoUtc, lineDiff, loadStoredKey,
          newGrantId, pkceChallenge, publicKeyHex, randomVerifier, signGrant, storeKey } from "./approve.js";
 
-const state = { token: null, key: null, keyId: null, ttl: 300, timer: null, seen: new Map() };
+const state = { token: null, key: null, keyId: null, ttl: 300, timer: null, seen: new Map(), witnessSeq: 0, witnessOff: false, rows: 0 };
+const ACTIVITY_ROWS = 2000;                                  // kept in the page; older rows drop off the bottom
 const $ = (id) => document.getElementById(id);
 const log = (m) => { $("log").textContent = new Date().toLocaleTimeString() + "  " + m; };
 
@@ -194,7 +212,60 @@ async function refresh() {
   }
   for (const [id, card] of state.seen) if (!ids.has(id) && !card.dataset.done) { card.remove(); state.seen.delete(id); }
   $("status").textContent = `approving as ${state.keyId} \u00b7 ${pending.length} waiting`;
+  await activity();
 }
+
+// ---- Activity: the issuer's witness, newest first, fetched incrementally (witness?after=<seq>) ----
+// An observe-mode week has nothing to approve; this is what the gate recorded meanwhile.
+async function activity() {
+  if (state.witnessOff) return;
+  let res;
+  try { res = await api(`witness?after=${state.witnessSeq}&limit=${ACTIVITY_ROWS}`); }
+  catch (err) {
+    if (err.status === 403) { state.witnessOff = true; log("the witness is shown to approvers only; this identity is not one"); }
+    return;
+  }
+  $("activity").style.display = "";
+  const rows = $("activity-rows"), filter = $("activity-filter").value.trim().toLowerCase();
+  for (const e of res.entries) {
+    const d = describeEntry(e);
+    const tr = document.createElement("tr"); tr.className = e.event; tr.dataset.seq = e.seq;
+    const when = e.at ? new Date(e.at) : null;
+    tr.innerHTML = `<td title="${esc(e.at || "")}">${when ? esc(when.toLocaleString()) : ""}</td><td class="who" title="${esc(d.who)}">${esc(d.who)}</td><td>${esc(d.tool)}</td><td class="outcome" title="${esc(d.ref)}">${esc(d.outcome)}</td><td>${esc(e.event)}</td>`;
+    tr.dataset.text = `${d.who} ${d.tool} ${d.outcome} ${e.event}`.toLowerCase();
+    if (filter && !tr.dataset.text.includes(filter)) tr.classList.add("hidden");
+    rows.prepend(tr); state.rows++;
+    if (typeof e.seq === "number" && e.seq > state.witnessSeq) state.witnessSeq = e.seq;
+  }
+  while (rows.children.length > ACTIVITY_ROWS) rows.lastElementChild.remove();
+  if (res.seq > state.witnessSeq) state.witnessSeq = res.seq;   // a first page that was cut by `limit`: do not refetch the older lines
+  $("activity-count").textContent = `${rows.children.length} entries shown` + (res.seq > rows.children.length ? ` of ${res.seq}` : "");
+}
+
+// The same reading as gargoyle.witness.describe (Python); keep the two in step.
+function describeEntry(e) {
+  const who = e.principal || e.approver || e.by || "";
+  const tool = e.tool || (e.event === "plan" ? `plan (${e.steps} steps)` : "");
+  let outcome = e.event, ref = "";
+  switch (e.event) {
+    case "issued": outcome = e.covered ? "covered by an approved plan" : e.held ? "held for approval" : "allowed"; ref = e.decision_id || e.decision_sha256 || ""; break;
+    case "refused": outcome = `refused: ${e.reason ?? "?"}`; break;
+    case "granted": outcome = "released" + (e.required > 1 ? ` (${e.collected} of ${e.required})` : ""); ref = e.approval_request_id || ""; break;
+    case "grant_refused": outcome = `release refused: ${e.reason ?? "?"}`; ref = e.approval_request_id || ""; break;
+    case "declined": outcome = "declined"; ref = e.approval_request_id || ""; break;
+    case "plan": outcome = e.held ? "held for approval" : "allowed"; ref = e.plan_id || ""; break;
+    case "started": outcome = e.resumed ? "issuer restarted" : "witness began"; break;
+    case "enrolled": outcome = e.replaced ? "approver key replaced" : "approver key enrolled"; break;
+    case "enroll_refused": outcome = `enrolment refused: ${e.reason ?? "?"}`; break;
+    case "revoked": outcome = `approver key revoked by ${e.by || "the operator"}`; break;
+  }
+  return { who, tool, outcome, ref };
+}
+
+$("activity-filter").addEventListener("input", () => {
+  const filter = $("activity-filter").value.trim().toLowerCase();
+  for (const tr of $("activity-rows").children) tr.classList.toggle("hidden", !!filter && !tr.dataset.text.includes(filter));
+});
 
 // A scoped grant: one card for a bounded plan. The approver signs the
 // plan's hash; each later matching call runs without a card of its own.

@@ -661,12 +661,21 @@ def build_issuer_app(
                 "enrolled_public_key_hex": registry.public_hex().get(upn)}
 
     @app.get("/witness")
-    async def witness_entries(authorization: Optional[str] = Header(default=None)):
+    async def witness_entries(authorization: Optional[str] = Header(default=None), after: int = 0, limit: int = 0):
         """The issuer's signed witness log, for reconciliation with a client's
-        evidence. It names every user's decisions, so it is for approvers."""
+        evidence. It names every user's decisions, so it is for approvers.
+        `after=<seq>` returns only the entries past that sequence number and
+        `limit=<n>` at most the last n of those, so a console that polls
+        gets the new lines, not the week; `seq` is the chain's tail."""
         if not is_approver(authenticate(authorization)):
             raise _refuse(403, REF_ISSUER_FORBIDDEN)
-        return {"entries": list(witness.entries) if witness is not None else []}
+        entries = list(witness.entries) if witness is not None else []
+        tail = entries[-1]["seq"] if entries else 0
+        if after > 0:
+            entries = [e for e in entries if e["seq"] > after]
+        if limit > 0:
+            entries = entries[-limit:]
+        return {"entries": entries, "seq": tail}
 
     @app.get("/health")
     async def health():
