@@ -501,6 +501,23 @@ def cmd_approvers(args) -> int:
     return 1
 
 
+def _zone_label(t: datetime) -> str:
+    """A short name for t's zone: the abbreviation where the platform gives
+    one (EDT), "UTC" at zero offset, else the offset (Windows names zones
+    in words: "Coordinated Universal Time", "Eastern Daylight Time")."""
+    off = t.utcoffset()
+    if off is None or off.total_seconds() == 0:
+        return "UTC"
+    name = t.tzname() or ""
+    if name and " " not in name and len(name) <= 6:
+        return name
+    words = [w for w in name.split() if w[0].isupper()]
+    if 2 <= len(words) <= 4:
+        return "".join(w[0] for w in words)        # Eastern Daylight Time -> EDT
+    secs = int(off.total_seconds())
+    return "UTC%s%02d:%02d" % ("+" if secs >= 0 else "-", abs(secs) // 3600, abs(secs) % 3600 // 60)
+
+
 def cmd_witness(args) -> int:
     """Print the issuer's witness log as a table an operator reads: when,
     event, who, tool, outcome. A rendering of the file, not a verification
@@ -516,7 +533,7 @@ def cmd_witness(args) -> int:
     # The file holds UTC; the table shows this machine's local time (the
     # console shows the browser's), named in the header. --utc keeps the
     # file's own clock, for comparing against an audit.
-    zone = "UTC" if args.utc else (datetime.now().astimezone().tzname() or "local")
+    zone = "UTC" if args.utc else _zone_label(datetime.now().astimezone())
     print("  %-19s %-14s %-30s %-22s %s" % ("at (%s)" % zone, "event", "who", "tool", "outcome"))
 
     def when(iso: str) -> str:
