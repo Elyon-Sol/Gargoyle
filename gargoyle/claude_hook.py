@@ -273,7 +273,10 @@ def run_hook(argv, stdin=None, stdout=None, *, environ: Optional[Dict[str, str]]
     args = p.parse_args(argv)
     stdin = stdin or sys.stdin
     stdout = stdout or sys.stdout
-    env: Dict[str, str] = dict(os.environ if environ is None else environ)
+    # The real run loads middleware.env into this process's own environment:
+    # settings such as REQUESTS_CA_BUNDLE are read by the HTTP library at
+    # request time, not at construction.
+    env: Dict[str, str] = os.environ if environ is None else environ    # type: ignore[assignment]
     try:
         if args.env:
             load_env_file(args.env, env)
