@@ -187,7 +187,10 @@ def test_witness_command_renders_the_issuers_log(tmp_path, capsys):
     w.record("refused", principal="bob@contoso.com", tool="delete_file", reason="REF_POLICY_DENIED")
     assert main(["witness", str(tmp_path / "witness.jsonl")]) == 0
     out = capsys.readouterr().out.splitlines()
-    assert out[0].split()[:3] == ["at", "(UTC)", "event"]
+    assert out[0].split()[0] == "at" and out[0].split()[2] == "event"      # the zone is this machine's
+    assert main(["witness", str(tmp_path / "witness.jsonl"), "--utc"]) == 0
+    utc = capsys.readouterr().out.splitlines()
+    assert utc[0].split()[:3] == ["at", "(UTC)", "event"]
     assert "witness began" in out[1]
     assert "ann@contoso.com" in out[2] and "read_file" in out[2] and out[2].rstrip().endswith("allowed")
     assert "write_file" in out[3] and "held for approval" in out[3]

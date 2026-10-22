@@ -511,8 +511,8 @@ def _zone_label(t: datetime) -> str:
     name = t.tzname() or ""
     if name and " " not in name and len(name) <= 6:
         return name
-    words = [w for w in name.split() if w[0].isupper()]
-    if 2 <= len(words) <= 4:
+    words = name.split()
+    if 2 <= len(words) <= 4 and all(w.isalpha() and w[0].isupper() for w in words):
         return "".join(w[0] for w in words)        # Eastern Daylight Time -> EDT
     secs = int(off.total_seconds())
     return "UTC%s%02d:%02d" % ("+" if secs >= 0 else "-", abs(secs) // 3600, abs(secs) % 3600 // 60)
