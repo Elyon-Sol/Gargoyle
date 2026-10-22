@@ -513,11 +513,24 @@ def cmd_witness(args) -> int:
     if not path.exists():
         print("%s does not exist; the issuer writes it where GARGOYLE_WITNESS_PATH points (the deployment folder)" % path, file=sys.stderr)
         return 2
-    print("  %-19s %-14s %-30s %-22s %s" % ("at (UTC)", "event", "who", "tool", "outcome"))
+    # The file holds UTC; the table shows this machine's local time (the
+    # console shows the browser's), named in the header. --utc keeps the
+    # file's own clock, for comparing against an audit.
+    zone = "UTC" if args.utc else (datetime.now().astimezone().tzname() or "local")
+    print("  %-19s %-14s %-30s %-22s %s" % ("at (%s)" % zone, "event", "who", "tool", "outcome"))
+
+    def when(iso: str) -> str:
+        try:
+            t = datetime.fromisoformat(iso)
+        except ValueError:
+            return iso[:19].replace("T", " ")
+        if t.tzinfo is None:
+            t = t.replace(tzinfo=timezone.utc)
+        return (t.astimezone(timezone.utc) if args.utc else t.astimezone()).strftime("%Y-%m-%d %H:%M:%S")
 
     def show(entry) -> None:
         d = describe(entry)
-        print("  %-19s %-14s %-30s %-22s %s%s" % (d["at"][:19].replace("T", " "), d["event"][:14], d["who"][:30], d["tool"][:22], d["outcome"],
+        print("  %-19s %-14s %-30s %-22s %s%s" % (when(d["at"]), d["event"][:14], d["who"][:30], d["tool"][:22], d["outcome"],
                                                   ("  " + d["ref"]) if d["ref"] and args.refs else ""))
 
     entries = read_witness(str(path))
@@ -775,6 +788,7 @@ def main(argv=None) -> int:
     p.add_argument("--tail", "-n", type=int, default=0, metavar="N", help="start with the last N entries only")
     p.add_argument("--interval", type=float, default=2.0, help="seconds between reads with --follow")
     p.add_argument("--refs", action="store_true", help="also print the decision, plan or hold id of each row")
+    p.add_argument("--utc", action="store_true", help="show the file's UTC clock instead of this machine's local time")
     p.set_defaults(fn=cmd_witness)
     p = sub.add_parser("audit", help="verify a receipt chain offline, or a whole evidence log")
     p.add_argument("receipt", nargs="?"); p.add_argument("execution", nargs="?"); p.add_argument("grant", nargs="?")
