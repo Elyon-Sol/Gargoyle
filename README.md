@@ -315,6 +315,23 @@ and `gargoyle audit` verifies them later offline.
 and through the alternative with OPA in Docker for sites that run a policy
 engine.
 
+### Claude Code's own tools: the hook
+
+Claude Code's Bash, Edit, Write and the MCP tools it calls directly do not
+pass through an MCP server the gate can front. They do pass through
+Claude Code's hooks, and `gargoyle hook` is one:
+
+    gargoyle init /path/the/agent/works/in --client claude-code   # rules for Write/Edit/Bash, claude-settings.json
+    gargoyle hook --env middleware.env [--final]                  # the hook command (PreToolUse, PostToolUse)
+
+Same issuer, receipts, holds, approvers and evidence log as the MCP gate;
+the approver sees the shell command or the file content, a held Write is
+bound to the file's state, the refusal reaches Claude by name. Deploy the
+hook from managed settings for a fleet. It covers Claude Code only, and it
+is evidence rather than containment where the user owns the workstation.
+[docs/claude-code-hook.md](docs/claude-code-hook.md) has the setup and the
+limits.
+
 ## Scoped grants
 
 One card per held call is right for a mailbox rule and wrong for a long
@@ -449,6 +466,7 @@ on it.
 | `execution` | execution receipts and the offline chain check |
 | `evidence` | the executor's hash-chained log of every decision, and its offline verifier |
 | `mcp_server` | the stdio MCP middleware (and demo executor), with self-issue mode |
+| `claude_hook` | the same gate as a Claude Code hook over its own tools (Bash, Edit, Write, direct MCP calls) |
 | `fs_server` | a small Python filesystem MCP server, for clients without Node |
 | `issuer_service` | the HTTP issuing service: identity in, receipts out, holds and grants |
 | `replay_cache`, `pending_store` | single use for receipts and holds; in memory, SQLite beside the audit log (the middleware's default) or Redis |

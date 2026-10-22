@@ -579,3 +579,19 @@ outside.
   rollout: a `gargoyle login` that acquires the middleware's token from Entra by
   device-code flow (MSAL) instead of the init-minted token, and approver roles in
   the receipt (step 4) so a finance hold needs a finance approver.
+- Claude Code hook (2026-10-22): the alpha's first finding was that a Claude
+  Desktop user on Microsoft 365 connectors gives the gate nothing to stand in
+  front of; the buyer who can use it runs Claude Code against systems of their
+  own under an audit obligation, and Claude Code's native tools (Bash, Edit,
+  Write) never reach an MCP server. gargoyle/claude_hook.py puts the existing
+  gate behind Claude Code's PreToolUse/PostToolUse hooks: `gargoyle init
+  --client claude-code` writes rules for Claude Code's tool names and the
+  hook entries (claude-settings.json); `gargoyle hook --env middleware.env`
+  decides one call per process (about 150 ms), waits inside the hook for a
+  grant, attests the execution receipt from the PostToolUse event, and records
+  a call Claude Code's own prompt refused after the gate allowed it as
+  REF_HOOK_NOT_RUN. Live on the reference VM with `claude -p`: Write and Bash
+  held and released, `rm` refused by rule and reported by Claude verbatim,
+  evidence log 4 entries 0 failed. Docs: docs/claude-code-hook.md. Not covered:
+  Claude Desktop, claude.ai, hosted connectors; and the hook is evidence, not
+  containment, on a workstation the user administers.

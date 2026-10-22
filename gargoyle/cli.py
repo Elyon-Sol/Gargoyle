@@ -14,6 +14,9 @@ policy engine, a container runtime, or any client changes.
     gargoyle remote --out DIR [--upstream-url URL | -- <command>]   the gate as an HTTPS MCP
                                                         server, for hosted connectors
     gargoyle remote-token --out DIR --principal UPN     a capability URL for one person
+    gargoyle init DIR --client claude-code              the gate as a Claude Code hook over its
+                                                        own tools (claude-settings.json)
+    gargoyle hook --env middleware.env [--final]        the hook command itself
     gargoyle audit <receipt.json> <execution.json> [grant.json]
     gargoyle audit --log audit.jsonl            verify the middleware's evidence log
 
@@ -72,6 +75,18 @@ DEFAULT_RULES = {
     ],
 }
 
+CLAUDE_CODE_RULES = {
+    # Claude Code's own tools through the hook (gargoyle.claude_hook). Reads,
+    # searches and planning tools are free; anything that changes a file or
+    # runs a command waits for a named approver. MCP tools Claude Code calls
+    # directly pass through the same hook: name them here per server.
+    "version": "1",
+    "default": "allow",
+    "rules": [
+        {"tools": ["Write", "Edit", "MultiEdit", "NotebookEdit", "Bash", "PowerShell"], "action": "hold"},
+    ],
+}
+
 
 def _env_lines(d):
     return "".join("%s=%s\n" % kv for kv in d.items())
@@ -103,7 +118,7 @@ def _observe_rules(rules: Path) -> int:
         except ValueError as exc:
             print("%s is not valid JSON (%s); fix or remove it before --observe" % (rules, exc), file=sys.stderr)
             return 2
-    if current is None or current == DEFAULT_RULES:
+    if current is None or current in (DEFAULT_RULES, CLAUDE_CODE_RULES):
         _write(rules, json.dumps(OBSERVE_RULES, indent=2) + "\n")
     elif current != OBSERVE_RULES:
         print("rules.json was edited by hand and is left as it is; --observe changed nothing", file=sys.stderr)
@@ -136,6 +151,7 @@ def cmd_init(args) -> int:
     sep = "\\" if windows else "/"
     client_dir = args.client_config_dir or str(out)
     client_python = args.client_python or sys.executable
+    claude_code = getattr(args, "client", "mcp") == "claude-code"
     from gargoyle.globs import normalize_path
     if normalize_path(client_dir) == normalize_path(allowed) or normalize_path(client_dir).startswith(normalize_path(allowed).rstrip("/") + "/"):
         print("note: the client config folder %s is inside the folder the gate serves (%s). The gate refuses calls into its "
@@ -169,7 +185,7 @@ def cmd_init(args) -> int:
         if rc:
             return rc
     elif not rules.exists():
-        _write(rules, json.dumps(DEFAULT_RULES, indent=2) + "\n")
+        _write(rules, json.dumps(CLAUDE_CODE_RULES if claude_code else DEFAULT_RULES, indent=2) + "\n")
     _write(out / "issuer.env", _env_lines({
         "GARGOYLE_ISSUER_KEY_ID": "issuer-1", "GARGOYLE_ISSUER_KEY_HEX": issuer_hex,
         "GARGOYLE_IDP_KEY_ID": "idp-1", "GARGOYLE_IDP_PUBLIC_KEY_HEX": idp_pub, "GARGOYLE_IDP_KEY_HEX": idp_hex,
@@ -181,7 +197,7 @@ def cmd_init(args) -> int:
     }), private=True)
     middleware_env = {
         "GARGOYLE_MCP_GATE_KEY_ID": "issuer-1", "GARGOYLE_MCP_GATE_PUBLIC_KEY_HEX": issuer_pub,
-        "GARGOYLE_MCP_TARGET_ID": "mcp://filesystem/" + allowed, "GARGOYLE_MCP_PRINCIPAL": PRINCIPAL,
+        "GARGOYLE_MCP_TARGET_ID": ("claude-code://" if claude_code else "mcp://filesystem/") + allowed, "GARGOYLE_MCP_PRINCIPAL": PRINCIPAL,
         "GARGOYLE_MCP_RECORD_PATH": client_dir + sep + "record.json",
         "GARGOYLE_MCP_RECORD_URL": issuer_url + "/record",       # follow the issuer's signed pin; the file is the offline fallback
         "GARGOYLE_MCP_APPROVER_KEY_ID": approver_ids, "GARGOYLE_MCP_APPROVER_PUBLIC_KEY_HEX": approver_pubs,
@@ -237,18 +253,40 @@ WantedBy=multi-user.target
     CustomLog ${APACHE_LOG_DIR}/gargoyle-access.log combined env=!gargoyle_capability_url
 </VirtualHost>
 """ % {"host": (args.issuer_url or "gargoyle.example").replace("https://", "").replace("http://", "").split("/")[0].split(":")[0], "port": args.port})
-    upstream = (["npx", "-y", "@modelcontextprotocol/server-filesystem", allowed] if args.upstream == "npx-filesystem"
-                else [client_python, "-m", "gargoyle.fs_server", allowed])
-    _write(out / "mcp-config.json", json.dumps({"mcpServers": {"filesystem-gargoyle": {
-        "command": client_python,
-        "args": ["-m", "gargoyle.mcp_server", "--", *upstream],
-        "env": middleware_env,
-    }}}, indent=2) + "\n", private=True)
+    if claude_code:
+        # The hook reads middleware.env itself, so the settings entry carries
+        # no secrets and can go into a project, user or managed settings file.
+        fwd = lambda s_: s_.replace("\\", "/")
+        hook = '"%s" -m gargoyle hook --env "%s"' % (fwd(client_python), fwd(client_dir + sep + "middleware.env"))
+        wait = int(middleware_env["GARGOYLE_MCP_APPROVAL_TIMEOUT_SECONDS"]) + 30
+        _write(out / "claude-settings.json", json.dumps({"hooks": {
+            "PreToolUse": [{"hooks": [{"type": "command", "command": hook, "timeout": wait}]}],
+            "PostToolUse": [{"hooks": [{"type": "command", "command": hook, "timeout": 60}]}],
+            "PostToolUseFailure": [{"hooks": [{"type": "command", "command": hook, "timeout": 60}]}],
+            "PermissionDenied": [{"hooks": [{"type": "command", "command": hook, "timeout": 60}]}],
+        }}, indent=2) + "\n")
+    else:
+        upstream = (["npx", "-y", "@modelcontextprotocol/server-filesystem", allowed] if args.upstream == "npx-filesystem"
+                    else [client_python, "-m", "gargoyle.fs_server", allowed])
+        _write(out / "mcp-config.json", json.dumps({"mcpServers": {"filesystem-gargoyle": {
+            "command": client_python,
+            "args": ["-m", "gargoyle.mcp_server", "--", *upstream],
+            "env": middleware_env,
+        }}}, indent=2) + "\n", private=True)
     print("\nnext:  gargoyle issuer --out %s        (keeps running; writes record.json on start)" % out)
-    print("       paste mcp-config.json's server entry into your MCP client, restart it")
+    if claude_code:
+        print("       copy middleware.env (and record.json) to %s on the workstation" % client_dir)
+        print("       merge claude-settings.json's hooks into the workstation's settings (managed settings for a fleet)")
+    else:
+        print("       paste mcp-config.json's server entry into your MCP client, restart it")
     print("       gargoyle approve --out %s --watch 2  (on the approver's machine)" % out)
     print("       or open %s/approve in a browser and load approver-web.json" % issuer_url)
     return 0
+
+
+def cmd_hook(args) -> int:
+    from gargoyle.claude_hook import run_hook
+    return run_hook((["--env", args.env] if args.env else []) + (["--final"] if args.final else []))
 
 
 def cmd_tokens(args) -> int:
@@ -679,7 +717,14 @@ def main(argv=None) -> int:
     p.add_argument("--entra-audience", help="the issuer API app's client id or app id URI, required in Entra tokens")
     p.add_argument("--force", action="store_true",
                    help="regenerate keys and tokens in an existing --out (every client and approver must be re-provisioned)")
+    p.add_argument("--client", choices=["mcp", "claude-code"], default="mcp",
+                   help="mcp: the gate fronts a filesystem MCP server (mcp-config.json); claude-code: the gate is a Claude Code "
+                        "hook over its own tools (claude-settings.json, rules for Write/Edit/Bash)")
     p.set_defaults(fn=cmd_init)
+    p = sub.add_parser("hook", help="run as a Claude Code PreToolUse/PostToolUse hook (event on stdin, decision on stdout)")
+    p.add_argument("--env", help="the workstation's middleware.env")
+    p.add_argument("--final", action="store_true", help="an allowed call also skips Claude Code's own permission prompt")
+    p.set_defaults(fn=cmd_hook)
     p = sub.add_parser("tokens", help="mint new client and approver tokens from a deployment's existing keys")
     p.add_argument("--out", default="gargoyle-deploy")
     p.add_argument("--token-days", type=int, default=30)
