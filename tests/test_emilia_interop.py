@@ -35,44 +35,15 @@ def test_emilia_receipt_vectors_verify_under_gargoyles_canonical_form():
         assert result["valid"] == v["expect"]["valid"], (v["id"], result)
 
 
-def _depth(value, n=0):
-    if isinstance(value, dict):
-        return max([n + 1] + [_depth(x, n + 1) for x in value.values()])
-    if isinstance(value, list):
-        return max([n + 1] + [_depth(x, n + 1) for x in value])
-    return n
-
-
-def _lone_surrogate(value):
-    if isinstance(value, str):
-        return any(0xD800 <= ord(c) <= 0xDFFF for c in value)
-    if isinstance(value, list):
-        return any(_lone_surrogate(x) for x in value)
-    if isinstance(value, dict):
-        return any(_lone_surrogate(k) or _lone_surrogate(x) for k, x in value.items())
-    return False
-
-
-def _dup_hook(pairs):
-    if len({k for k, _ in pairs}) != len(pairs):
-        raise ValueError("duplicate member")
-    return dict(pairs)
-
-
 def test_emilia_canonicalization_vectors_match_rfc8785_canonical_json():
     """EMILIA's strict gate (duplicate names, lone surrogates, depth over 64,
-    I-JSON profile) and then SHA-256 over Gargoyle's RFC 8785 bytes."""
+    I-JSON profile) and then SHA-256 over Gargoyle's RFC 8785 bytes; the gate
+    lives in gargoyle.emilia_runner, the module EMILIA's harness invokes."""
+    from gargoyle.emilia_runner import run_canonicalization
     vectors = json.loads((FIX / "canonicalization.v1.json").read_text(encoding="utf-8"))["vectors"]
     assert len(vectors) == 35
     for v in vectors:
-        spec = v["canonicalization"]
-        try:
-            obj = json.loads(spec["input_json"], object_pairs_hook=_dup_hook)
-            ok = not _lone_surrogate(obj) and _depth(obj) <= 64 and emilia.in_profile(obj)
-        except (ValueError, RecursionError):
-            ok = False
-        digest = hashlib.sha256(canonical_json(obj).encode()).hexdigest() if ok else None
-        assert (digest is not None and digest == spec.get("expected_digest")) == v["expect"]["valid"], (v["id"], spec.get("note"))
+        assert run_canonicalization(v["canonicalization"]) == v["expect"]["valid"], (v["id"], v["canonicalization"].get("note"))
 
 
 def _chain():
