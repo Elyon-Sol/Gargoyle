@@ -104,6 +104,11 @@ counterpart and travel only in the `gargoyle` member of the Action Object.
 - gargoyle/static/approve.js: emiliaAction, emiliaContext, emiliaSignoff;
   approve.html signs the member on every receipt approval.
 - gargoyle/cli.py: `gargoyle emilia`.
+- gargoyle/emilia_runner.py: `python -m gargoyle.emilia_runner VECTORS.json`,
+  the runner EMILIA's harness can invoke. It reads one EMILIA suite file and
+  prints their result rows (`[{"id", "valid"}]`) for the two suites Gargoyle
+  implements, EP-RECEIPT-v1 and EP-CANONICALIZATION-v1; any other suite is a
+  refusal (exit 2), never a row that says false.
 - tests/fixtures/emilia/: EMILIA's receipts.v1.json and canonicalization.v1.json
   (Apache-2.0, attributed), run on every test run.
 - tests/test_emilia_interop.py: the vectors against Gargoyle; the exports'
