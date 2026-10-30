@@ -9,14 +9,24 @@ same gate behind an HTTP endpoint so those paths go through it too:
     POST /mcp/{token}      JSON-RPC in, JSON-RPC out (MCP Streamable HTTP)
     DELETE /mcp/{token}    end the session named by Mcp-Session-Id
 
-`token` is a capability URL segment that names the workstation user: the
-operator mints one per person (`gargoyle remote-token`), mapping it to the
-principal the receipts will name and to the identity token the gate
-presents to the issuer for that person. The hosted connector cannot carry
-the user's own Entra token (that lives on the workstation), so in this
-mode the gate's operator vouches for the user-to-URL mapping, as an API
-key does. Treat the URL as a credential. Device-bound identity remains the
-stdio mode's property.
+Two ways a session gets its person:
+
+    POST /mcp              Authorization: Bearer <gate token> from the OAuth
+                           sign-in (gargoyle.oauth_broker): the user signed in
+                           with Entra in their browser, and the gate presents
+                           their own directory token to the issuer. The
+                           receipt's principal is the token's UPN. A request
+                           with no usable bearer is answered 401 with the
+                           resource metadata URL, which is how the client
+                           finds the sign-in.
+
+`token` in the first form is a capability URL segment that names the
+workstation user: the operator mints one per person (`gargoyle
+remote-token`), mapping it to the principal the receipts will name and to
+the identity token the gate presents to the issuer for that person. In
+this mode the gate's operator vouches for the user-to-URL mapping, as an
+API key does. Treat the URL as a credential; prefer OAuth where the
+tenant is Entra. Device-bound identity remains the stdio mode's property.
 
 The upstream is one shared server: a stdio process started once, or a
 remote MCP server reached over Streamable HTTP (HttpUpstream), with an
@@ -144,15 +154,19 @@ def build_remote_app(
     approval_timeout: float = 300.0,
     poll_seconds: float = 2.0,
     sleep=None,
+    oauth: Any = None,
 ):
     """The FastAPI app. `config` is config_from_env()'s result minus the
     principal (each token supplies one). `upstream` is a StdioUpstream or
-    HttpUpstream already running; the gate initializes it once here."""
+    HttpUpstream already running; the gate initializes it once here.
+    `oauth` is a gargoyle.oauth_broker.OAuthGate: it installs the sign-in
+    routes and authenticates bearers on /mcp."""
     from fastapi import FastAPI, Header, Request, Response
 
     app = FastAPI(title="Gargoyle remote gate")
     replay = InMemoryReplayCache()
     sessions: Dict[str, ServerState] = {}
+    owners: Dict[str, str] = {}                 # MCP session id -> the credential that opened it
     lock = threading.Lock()
     shared_evidence = None
     shared_snapshots = None
@@ -173,7 +187,7 @@ def build_remote_app(
     upstream_init["instructions"] = gate_instructions(config.get("target_id", "the gated target"), upstream_init.get("instructions"),
                                                       _os.environ.get("GARGOYLE_MCP_INSTRUCTIONS") or None)
 
-    def new_state(principal: str, issuer_token: str) -> ServerState:
+    def new_state(principal: str, issuer_token: Any) -> ServerState:
         nonlocal shared_evidence, shared_snapshots
         ic = None
         if issuer_url:
@@ -207,12 +221,7 @@ def build_remote_app(
             return None
         return handle_message(st, msg)
 
-    @app.post("/mcp/{token}")
-    async def mcp_post(token: str, request: Request,
-                       mcp_session_id: Optional[str] = Header(default=None, alias=SESSION_HEADER)):
-        who = tokens.lookup(token)
-        if who is None:
-            return Response(status_code=401, content="unknown token")
+    async def serve(owner: str, principal: str, issuer_token: Any, request: Request, mcp_session_id: Optional[str]) -> Response:
         try:
             body = await request.json()
         except Exception:
@@ -224,7 +233,12 @@ def build_remote_app(
                 if not is_init:
                     return Response(status_code=404, content="no such session; initialize first")
                 mcp_session_id = uuid.uuid4().hex
-                sessions[mcp_session_id] = new_state(who["principal"], who["issuer_token"])
+                sessions[mcp_session_id] = new_state(principal, issuer_token)
+                owners[mcp_session_id] = owner
+            elif owners.get(mcp_session_id) != owner:
+                # A session belongs to the credential that opened it; another
+                # bearer naming it gets nothing, not even its existence.
+                return Response(status_code=404, content="no such session; initialize first")
             st = sessions[mcp_session_id]
         replies = [r for r in (handle_one(st, m) for m in messages if isinstance(m, dict)) if r is not None]
         headers = {SESSION_HEADER: mcp_session_id, PROTOCOL_HEADER: PROTOCOL_VERSION}
@@ -232,6 +246,48 @@ def build_remote_app(
             return Response(status_code=202, headers=headers)
         payload = replies[0] if not isinstance(body, list) else replies
         return Response(content=json.dumps(payload), media_type="application/json", headers=headers)
+
+    def end(owner: str, mcp_session_id: Optional[str]) -> Response:
+        with lock:
+            if mcp_session_id and owners.get(mcp_session_id) == owner:
+                sessions.pop(mcp_session_id, None)
+                owners.pop(mcp_session_id, None)
+        return Response(status_code=200)
+
+    if oauth is not None:
+        oauth.install(app)
+
+        def unauthorized() -> Response:
+            return Response(status_code=401, content="sign in", headers={"WWW-Authenticate": oauth.www_authenticate()})
+
+        @app.post("/mcp")
+        async def mcp_oauth_post(request: Request, mcp_session_id: Optional[str] = Header(default=None, alias=SESSION_HEADER)):
+            who = oauth.authenticate(request.headers.get("authorization"))
+            if who is None:
+                return unauthorized()
+            key, principal, source = who
+            return await serve("oauth:" + key, principal, source, request, mcp_session_id)
+
+        @app.get("/mcp")
+        async def mcp_oauth_get(request: Request):
+            if oauth.authenticate(request.headers.get("authorization")) is None:
+                return unauthorized()
+            return Response(status_code=405, content="no server-initiated stream")
+
+        @app.delete("/mcp")
+        async def mcp_oauth_delete(request: Request, mcp_session_id: Optional[str] = Header(default=None, alias=SESSION_HEADER)):
+            who = oauth.authenticate(request.headers.get("authorization"))
+            if who is None:
+                return unauthorized()
+            return end("oauth:" + who[0], mcp_session_id)
+
+    @app.post("/mcp/{token}")
+    async def mcp_post(token: str, request: Request,
+                       mcp_session_id: Optional[str] = Header(default=None, alias=SESSION_HEADER)):
+        who = tokens.lookup(token)
+        if who is None:
+            return Response(status_code=401, content="unknown token")
+        return await serve("cap:" + token, who["principal"], who["issuer_token"], request, mcp_session_id)
 
     @app.get("/mcp/{token}")
     async def mcp_get(token: str):
@@ -241,9 +297,7 @@ def build_remote_app(
     async def mcp_delete(token: str, mcp_session_id: Optional[str] = Header(default=None, alias=SESSION_HEADER)):
         if tokens.lookup(token) is None:
             return Response(status_code=401)
-        with lock:
-            sessions.pop(mcp_session_id or "", None)
-        return Response(status_code=200)
+        return end("cap:" + token, mcp_session_id)
 
     app.state.sessions = sessions
     return app

@@ -82,6 +82,8 @@ console, a handful of workstations, files or Microsoft 365 behind the gate.
 ## What this beta cannot promise yet
 
 - One issuer process. A second instance is not safe for single use yet.
-- Capability URLs for hosted connectors are credentials; OAuth is not built.
+- Hosted connectors sign in with Entra through the gate (`GARGOYLE_OAUTH_BASE_URL`);
+  the upstream still runs under its own identity, not the user's (no on-behalf-of yet).
+  Without Entra, capability URLs are credentials.
 - Approver authority rests on the issuer's operator (spec section 8.3).
 - Microsoft 365 adapters have not run against a real tenant.

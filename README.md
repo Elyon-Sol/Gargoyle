@@ -372,10 +372,19 @@ server (`--upstream-url`), so those paths go through it too:
     gargoyle remote-token --out gargoyle-deploy --principal dana@contoso.com --url https://gargoyle.lan:8444
     gargoyle remote --out gargoyle-deploy --port 8444 --ssl-certfile ... --ssl-keyfile ... -- python -m gargoyle.fs_server /srv/shared
 
-Each person gets a capability URL (`/mcp/<token>`) that names them on
-every receipt; the operator vouches for that mapping, as with an API key,
-because a hosted connector cannot carry the user's own Entra token.
-Treat the URL as a credential. All sessions share one upstream, one replay
+With Entra, the connector signs the user in: set
+`GARGOYLE_OAUTH_BASE_URL` (and the gate's own app registration,
+`GARGOYLE_OAUTH_ENTRA_CLIENT_ID` / `_CLIENT_SECRET`) and the gate is the
+OAuth authorization server the hosted client expects (metadata, dynamic
+registration, code flow with PKCE) while the sign-in itself happens at
+the tenant, under its MFA and Conditional Access. The gate then presents
+the user's own Entra token to the issuer, refreshed silently, and the
+receipt's principal is their UPN; the session ends when the tenant
+refuses the refresh (`gargoyle.oauth_broker`, docs/guide-production-entra.md).
+Without a directory, each person gets a capability URL (`/mcp/<token>`)
+from `gargoyle remote-token` that names them on every receipt; the
+operator vouches for that mapping, as with an API key, so treat the URL
+as a credential. All sessions share one upstream, one replay
 cache, one evidence log and one snapshot store, so single use and undo
 hold across users. Device-bound identity remains the stdio mode's
 property.
@@ -406,6 +415,7 @@ cannot attach receipts work unchanged. Configuration is by environment:
 | `GARGOYLE_MCP_ISSUER_URL`, `GARGOYLE_MCP_CLIENT_TOKEN` | self-issue mode: the issuing service and the identity token (whose subject is this server's principal) to obtain receipts with; `GARGOYLE_MCP_APPROVAL_TIMEOUT_SECONDS` and `GARGOYLE_MCP_POLL_SECONDS` tune the wait for a grant |
 | issuer `GARGOYLE_ISSUER_AUDIENCE` | the `aud` an identity token must carry; a comma-separated list accepts several, so init-minted tokens (`gargoyle-issuer`) and a tenant's tokens (the issuer app's client id) work side by side |
 | `GARGOYLE_MCP_ENTRA_TENANT`, `_CLIENT_ID`, `_SCOPE`, `_TOKEN_CACHE` | instead of a fixed client token: the user's own Entra ID token, written by `gargoyle login` (device code, MSAL cache, silent refresh); the principal is their UPN. No usable token refuses `REF_TARGET_LOGIN_REQUIRED` |
+| remote gate `GARGOYLE_OAUTH_BASE_URL`, `_ENTRA_CLIENT_ID`, `_ENTRA_CLIENT_SECRET` (`_ENTRA_TENANT`, `_ENTRA_SCOPE`, `_REDIRECT_ALLOW`, `_ACCESS_TTL`) | the hosted connector signs the user in with Entra through the gate (RFC 8414/9728 metadata, RFC 7591 registration limited to the allowed callbacks, code flow with PKCE); the gate holds the user's Entra token for the issuer and refreshes it; sessions in `oauth-state.json` beside the gate's keys |
 | issuer `GARGOYLE_ENTRA_CLIENT_ID`, `GARGOYLE_ENTRA_SCOPE` | lets the console sign approvers in with Entra (code flow with PKCE, no library); the browser generates a non-exportable key and enrolls it under the UPN |
 | issuer `GARGOYLE_APPROVERS_PATH`, `GARGOYLE_APPROVER_ROLE`, `GARGOYLE_APPROVER_GROUPS` | where enrolled approvers persist (default `approvers.json` beside the keys, with a `revoked` list; `gargoyle approvers list|revoke`) and which Entra app role (default `Approver`) or groups may enroll, see every hold and the witness |
 | issuer `GARGOYLE_ENTRA_TENANT` + `GARGOYLE_ISSUER_AUDIENCE` | trust the tenant's tokens; the audience is required with a tenant (the service will not start without it), and a directory token for any other tenant is `REF_IDENTITY_WRONG_TENANT` |

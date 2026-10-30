@@ -601,7 +601,7 @@ when those are closed, not when the connector is green.
 | Claude Code | `.mcp.json` (stdio) | deny Edit, Write, MultiEdit, NotebookEdit and Bash in the project's `.claude/settings.json` (Part 4.3); no other filesystem MCP server in the config |
 | Claude Desktop | `claude_desktop_config.json` (stdio) or a custom connector (remote mode) | Filesystem extension off; browser and computer-use features off for supervised users; no second connector to the same data; "always allow" on the gated tools so the only prompts are the cards |
 | claude.ai in the browser | custom connector to the remote gate only | the user must not also have a direct Microsoft 365 or Drive connector to the same data; Projects and memory hold copies of what was read, which is outside the gate |
-| ChatGPT | custom connector (remote mode); choose "no authentication" for a capability URL or OAuth when built | code interpreter's file access and any direct connector to the same data; Actions in custom GPTs that reach the data by API |
+| ChatGPT | custom connector (remote mode); OAuth through the gate (add its callback to `GARGOYLE_OAUTH_REDIRECT_ALLOW`) or "no authentication" with a capability URL | code interpreter's file access and any direct connector to the same data; Actions in custom GPTs that reach the data by API |
 | Microsoft 365 Copilot and Copilot Studio | MCP connector (remote mode) | Copilot's own Graph access is the side door: the gate only covers calls that go through the connector, so for Graph the policy must live in Entra app permissions as well |
 | Cursor, VS Code Copilot, Gemini CLI | MCP config (stdio or remote) | the editor itself writes files with no tool call; the gate covers the agent's actions, not the keyboard |
 | Custom applications | the Python or TypeScript consumer as a library, or the remote gate | whatever the application's own code can do without asking |
@@ -610,8 +610,9 @@ Two rules hold across all of them. The model's willingness to respect the
 gate is welcome and never relied on: Claude declined to work around an
 unreachable issuer during the PoC, and the design would be the same if it
 had not. And a hosted client reaches the remote gate from the vendor's
-servers, so that port faces the internet (Part 7); the capability URL is
-the credential until OAuth is in place.
+servers, so that port faces the internet (Part 7); with Entra the user
+signs in through the gate (docs/guide-production-entra.md Part 4), and
+without a directory the capability URL is the credential.
 
 ## Part 9: Microsoft 365 through a Graph MCP server
 

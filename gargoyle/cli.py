@@ -415,17 +415,24 @@ def cmd_remote(args) -> int:
         if upstream is None:
             raise SystemExit("give --upstream-url URL or `-- <command>` for the server to front")
     tokens = TokenMap(str(out / "remote-tokens.json"))
+    from gargoyle.oauth_broker import gate_from_env
+    ienv = _read_env(out / "issuer.env") if (out / "issuer.env").exists() else {}
+    oauth = gate_from_env(os.environ, str(out), issuer_env=ienv)     # None unless GARGOYLE_OAUTH_BASE_URL is set
     app = build_remote_app(config, tokens, upstream=upstream, issuer_url=env.get("GARGOYLE_MCP_ISSUER_URL"),
                            audit_log=env.get("GARGOYLE_MCP_AUDIT_LOG") or str(out / "remote-audit.jsonl"),
                            state_probe=args.state_probe, snapshot_dir=env.get("GARGOYLE_MCP_SNAPSHOT_DIR"),
                            adapter_spec=args.adapter_spec or env.get("GARGOYLE_MCP_ADAPTER_SPEC"),
-                           approval_timeout=float(env.get("GARGOYLE_MCP_APPROVAL_TIMEOUT_SECONDS", "300")))
+                           approval_timeout=float(env.get("GARGOYLE_MCP_APPROVAL_TIMEOUT_SECONDS", "300")),
+                           oauth=oauth)
     tls = {}
     if args.ssl_certfile or args.ssl_keyfile:
         if not (args.ssl_certfile and args.ssl_keyfile):
             raise SystemExit("--ssl-certfile and --ssl-keyfile go together")
         tls = {"ssl_certfile": args.ssl_certfile, "ssl_keyfile": args.ssl_keyfile}
     print("remote gate on %s://%s:%d/mcp/<token>" % ("https" if tls else "http", args.host, args.port), file=sys.stderr)
+    if oauth is not None:
+        print("OAuth sign-in with Entra tenant %s: connector URL %s, metadata %s"
+              % (oauth.broker.tenant, oauth.resource, oauth.resource_metadata_url), file=sys.stderr)
     try:
         uvicorn.run(app, host=args.host, port=args.port, log_level="info" if args.verbose else "warning", **tls)
     finally:
@@ -776,7 +783,8 @@ def main(argv=None) -> int:
     p.add_argument("--out", default="gargoyle-deploy")
     p.add_argument("--watch", type=float, metavar="SECONDS"); p.add_argument("--yes", action="store_true")
     p.set_defaults(fn=cmd_approve)
-    p = sub.add_parser("remote", help="run the gate as an HTTPS MCP server for hosted connectors")
+    p = sub.add_parser("remote", help="run the gate as an HTTPS MCP server for hosted connectors "
+                                      "(set GARGOYLE_OAUTH_BASE_URL for Entra sign-in; see gargoyle.oauth_broker)")
     p.add_argument("--out", default="gargoyle-deploy")
     p.add_argument("--host", default="127.0.0.1"); p.add_argument("--port", type=int, default=8444)
     p.add_argument("--ssl-certfile"); p.add_argument("--ssl-keyfile")
