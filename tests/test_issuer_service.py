@@ -196,6 +196,10 @@ def test_holds_grants_and_declines_survive_a_restart(tmp_path):
     g = sign_grant(build_grant(decision_sha256=env["decision_sha256"], approval_request_id=arid, grant_id="g-1",
                                not_after=NOW + timedelta(minutes=10)), approver, "approver-alice")
     assert c2.post("/grants", json=g, headers=auth()).json()["accepted"]
+    # A released hold stays in the store for the gate to collect, but it is
+    # no longer waiting on anyone: health counts what /pending lists.
+    assert c2.get("/pending", headers=auth()).json()["pending"] == []
+    assert c2.get("/health").json()["pending_receipts"] == 0
     c3 = TestClient(app_on(path))                                   # restart again: the grant is still there
     assert c3.get("/grants/" + arid, headers=auth()).json()["grant"]["approver_key_id"] == "approver-alice"
     assert c3.post("/decline", json={"approval_request_id": arid}, headers=auth()).json()["declined"] is True

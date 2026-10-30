@@ -289,3 +289,26 @@ def test_a_second_key_needs_the_first_keys_consent_or_the_operators_revocation(t
     assert reg.revoke("dana@contoso.com", revoked_by="operator")
     assert c.post("/approvers/enroll", json={"public_key_hex": pub_hex(k3)}, headers=h(dana)).json()["enrolled"]
     assert c.get("/approvers").json()["approvers"]["dana@contoso.com"] == pub_hex(k3)
+
+
+def test_every_operator_revoke_is_witnessed_not_only_the_first(tmp_path):
+    """2026-10-30: an approver revoked on the host, re-enrolled and revoked
+    again produced one `revoked` event, then silence. The service now marks
+    revocations by key, so each one is noticed on the next read."""
+    events = []
+    reg = ApproverRegistry(str(tmp_path / "approvers.json"))
+    app = build_issuer_app(policy=Hold(), signing_key=issuer, key_id="issuer-1", idp_public_keys={"idp-1": idp.public_key()},
+                           approver_registry=reg, log_events=events.append,
+                           console_entra={"tenant": "t", "client_id": "c", "scope": "api://a/access"})
+    c = TestClient(app)
+    h = lambda t: {"Authorization": "Bearer " + t}
+    dana = lambda: h(token("dana@contoso.com", roles=["Approver"]))
+    operator = ApproverRegistry(str(tmp_path / "approvers.json"))      # `gargoyle approvers revoke` on the host
+    for n in range(3):
+        k = Ed25519PrivateKey.generate()
+        assert c.post("/approvers/enroll", json={"public_key_hex": pub_hex(k)}, headers=dana()).json()["enrolled"] is True
+        assert operator.revoke("dana@contoso.com", revoked_by="operator:root")
+        c.get("/me", headers=dana())                                   # any read after the edit notices it
+    revoked = [e for e in events if e.get("event") == "revoked"]
+    assert len(revoked) == 3 and all(e["approver"] == "dana@contoso.com" and e["by"] == "operator:root" for e in revoked)
+    assert len([e for e in events if e.get("event") == "enrolled"]) == 3
