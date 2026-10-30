@@ -28,7 +28,8 @@ the state is that file. Any executor can supply its own probe.
 """
 
 import hashlib
-import os
+import ntpath
+import posixpath
 import re
 from typing import Any, Callable, Dict, Optional
 
@@ -69,8 +70,17 @@ def resolve_path_args(tool: str, args: Any, root: Optional[str]):
             continue
         if out is None:
             out = dict(args)
-        out[key] = os.path.normpath(os.path.join(root, value))
+        out[key] = _join_under(root, value)
     return (out if out is not None else args), None
+
+
+def _join_under(root: str, value: str) -> str:
+    """root + value in the root's own flavour: a POSIX root gives a POSIX
+    path and a Windows root a Windows one, whatever platform the gate runs
+    on, because the root describes the upstream, not the gate."""
+    if root.startswith("/"):
+        return posixpath.normpath(posixpath.join(root, value.replace("\\", "/")))
+    return ntpath.normpath(ntpath.join(root, value))
 TEXT_LIMIT = 65536
 
 

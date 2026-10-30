@@ -193,6 +193,9 @@ def test_resolve_path_args_makes_one_path_for_everyone():
     assert resolve_path_args("write_file", untouched, root)[0] is untouched
     for absolute in ("C:\\x\\y.txt", "D:/x", "\\\\server\\share\\f"):
         assert resolve_path_args("write_file", {"path": absolute}, root) == ({"path": absolute}, None)
+    # The join follows the root's flavour, whatever platform the gate runs on.
+    assert resolve_path_args("write_file", {"path": "sub\\f.txt"}, root) == ({"path": "/srv/shared/sub/f.txt"}, None)
+    assert resolve_path_args("write_file", {"path": "sub/f.txt"}, "C:\\share") == ({"path": "C:\\share\\sub\\f.txt"}, None)
     # Without a root: state-bound tools refuse a relative path, others pass through unchanged.
     assert resolve_path_args("write_file", {"path": "hello.txt"}, None) == ({"path": "hello.txt"}, REF_TARGET_RELATIVE_PATH)
     assert resolve_path_args("edit_file", {"path": "hello.txt"}, None)[1] == REF_TARGET_RELATIVE_PATH
