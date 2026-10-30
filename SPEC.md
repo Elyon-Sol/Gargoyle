@@ -750,13 +750,18 @@ The complete objects are the `threshold` member of
 
 **Remote transport.** The reference middleware also runs as a Streamable
 HTTP MCP server (`gargoyle remote`) in front of a local or remote MCP
-server. There the executor identifies the caller by a capability URL
-segment the operator minted for one person, mapped to an identity token
-the issuer trusts for that principal; the hosted MCP client cannot carry
-the person's own token. The operator thereby vouches for the mapping, as
-for an API key, and the receipt's `principal` is that person. All
-sessions of one gate process share one replay store (section 7), so a
-receipt is single-use across them.
+server. There the executor identifies the caller in one of two ways.
+With a directory, the gate is the OAuth authorization server the hosted
+client talks to and sends the person's browser to the directory to sign
+in; the gate then holds the person's own identity token (refreshed
+through the directory) and presents it to the issuer, so the receipt's
+`principal` is the subject the directory named and the session ends when
+the directory refuses a refresh. Without one, a capability URL segment
+the operator minted for one person is mapped to an identity token the
+issuer trusts for that principal; the operator thereby vouches for the
+mapping, as for an API key. In both cases the receipt names the person,
+not the gate. All sessions of one gate process share one replay store
+(section 7), so a receipt is single-use across them.
 
 **Identity at the client.** A middleware may present a per-user token
 obtained from an identity provider (the reference `gargoyle login` uses

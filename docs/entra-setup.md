@@ -179,6 +179,52 @@ enrolled public keys are published at `/approvers` for the middleware and
 are read from `approvers.json` by `gargoyle audit`. The file loader stays
 for sites that prefer key files.
 
+## 8. Hosted connectors sign users in through the gate
+
+The stdio middleware carries the user's token from `gargoyle login`. A
+hosted connector (claude.ai, Claude Desktop's custom connectors) cannot,
+so the remote gate signs the user in itself: it is the OAuth
+authorization server the connector talks to, and it sends the browser to
+the tenant for the actual sign-in. One more registration:
+
+1. **App registrations**, **New registration**: name `Gargoyle-Gate`,
+   single tenant, platform **Web**, redirect URI
+   `https://<gate host>/<upstream>/oauth/callback` (one per gate, e.g.
+   `https://gate.yourorg.example/graph/oauth/callback`). **Register**.
+   Copy the **Application (client) ID**: `GATE_APP_ID`.
+2. **Certificates & secrets**, **New client secret**, choose the longest
+   expiry your policy allows and calendar it. Copy the value once.
+3. **API permissions**, **Add a permission**, **My APIs**,
+   **Gargoyle-Issuer-API**, delegated **access**, then **Grant admin
+   consent**. Also keep **openid**, **profile** and **offline_access**
+   (Microsoft Graph, delegated); the gate asks for them so Entra returns
+   a refresh token.
+4. **Enterprise applications**, **Gargoyle-Gate**, **Properties**,
+   **Assignment required: Yes**; **Users and groups**: the governed users.
+   This list, not anything on the gate, decides who can connect.
+5. Conditional Access for Gargoyle-Gate as for any app: MFA, sign-in
+   frequency.
+
+On the gate host, in the gate's environment (`gate.env` in the production
+guide):
+
+```
+GARGOYLE_OAUTH_BASE_URL=https://gate.yourorg.example/graph
+GARGOYLE_OAUTH_ENTRA_CLIENT_ID=GATE_APP_ID
+GARGOYLE_OAUTH_ENTRA_CLIENT_SECRET=<the secret>
+```
+
+The tenant and the scope (`api://ISSUER_APP_ID/access`) are read from the
+issuer's `issuer.env` beside the gate's `--out`; `GARGOYLE_OAUTH_ENTRA_TENANT`
+and `GARGOYLE_OAUTH_ENTRA_SCOPE` override them. The connector URL is then
+`https://gate.yourorg.example/graph/mcp` for everyone; the first call
+answers 401 with the metadata URL, the client registers itself (only
+Claude's callbacks are accepted unless `GARGOYLE_OAUTH_REDIRECT_ALLOW`
+adds others), the user signs in at Microsoft, and every receipt names
+the UPN from their token. The issuer verifies that token exactly as it
+verifies a `gargoyle login` token: `GARGOYLE_ENTRA_TENANT` and the
+audience list must include `ISSUER_APP_ID`.
+
 ## Troubleshooting
 
 | Symptom | Cause | Fix |
