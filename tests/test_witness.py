@@ -166,6 +166,28 @@ def test_audit_command_reports_reconciliation_and_tree(tmp_path, capsys):
     assert "CHANGED_OUTSIDE_GATE" in capsys.readouterr().out
 
 
+def test_relative_path_write_binds_the_real_file(tmp_path, capsys):
+    """2026-10-30 in the field: a client sent "hello.txt"; the gate bound an
+    absent file beside itself, the upstream overwrote the real one, and the
+    tree check called it a change outside the gate. With the root known,
+    the receipt, the snapshot and the tree check all name the real file."""
+    root = tmp_path / "root"; root.mkdir(); (root / "hello.txt").write_text("one\n", encoding="utf-8", newline="\n")
+    state, up, c, h, w = _rig(tmp_path, root)
+    state.state_root = str(root)
+    try:
+        r = call(state, 2, "write_file", {"path": "hello.txt", "content": "one\ntwo\n"})
+        assert r["_meta"][EXECUTED_META_KEY]
+    finally:
+        up.close()
+    assert (root / "hello.txt").read_text(encoding="utf-8") == "one\ntwo\n"
+    e = read_log(str(tmp_path / "audit.jsonl"))[0]
+    assert e["ref"] == str(root / "hello.txt")
+    assert e["execution"]["pre_state_sha256"] != e["execution"]["post_state_sha256"]
+    from gargoyle.reconcile import check_tree
+    t = check_tree(read_log(str(tmp_path / "audit.jsonl")), str(root))
+    assert t["checked"] == 1 and t["findings"] == []
+
+
 def test_audit_names_a_missing_witness_or_folder_plainly(tmp_path, capsys):
     from gargoyle.cli import main
     log = tmp_path / "audit.jsonl"; log.write_text("")

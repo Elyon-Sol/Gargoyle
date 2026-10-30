@@ -104,7 +104,7 @@ def _call(env, args, msg_id):
 
 
 def _gate(tmp_path, *replies, replay_cache=None):
-    state = ServerState(_config(), replay_cache=replay_cache, upstream=Upstream(*replies), audit_log=str(tmp_path / "audit.jsonl"))
+    state = ServerState(_config(), replay_cache=replay_cache, upstream=Upstream(*replies), audit_log=str(tmp_path / "audit.jsonl"), state_root="/gargoyle-test-root")
     state.initialized = True
     return state
 
@@ -117,14 +117,14 @@ def test_every_path_after_the_claim_leaves_evidence(tmp_path, capsys):
     unreachable upstream all spend the receipt, so all are entries, with a
     verdict that says the work was not done."""
     state = _gate(tmp_path, TOOL_FAILED, RPC_ERROR, RuntimeError("gone"), OK)
-    envs = [_receipt({"path": "f%d" % i}) for i in range(4)]
-    r1 = handle_message(state, _call(envs[0], {"path": "f0"}, 1))
+    envs = [_receipt({"path": "/gargoyle-test-root/f%d" % i}) for i in range(4)]
+    r1 = handle_message(state, _call(envs[0], {"path": "/gargoyle-test-root/f0"}, 1))
     assert r1["result"]["isError"] is True and r1["result"]["_meta"][EXECUTED_META_KEY] is True
-    r2 = handle_message(state, _call(envs[1], {"path": "f1"}, 2))
+    r2 = handle_message(state, _call(envs[1], {"path": "/gargoyle-test-root/f1"}, 2))
     assert r2["error"]["code"] == -32000
-    r3 = handle_message(state, _call(envs[2], {"path": "f2"}, 3))
+    r3 = handle_message(state, _call(envs[2], {"path": "/gargoyle-test-root/f2"}, 3))
     assert "upstream unavailable" in r3["error"]["message"]
-    r4 = handle_message(state, _call(envs[3], {"path": "f3"}, 4))
+    r4 = handle_message(state, _call(envs[3], {"path": "/gargoyle-test-root/f3"}, 4))
     assert r4["result"]["isError"] is False
     log = read_log(str(tmp_path / "audit.jsonl"))
     assert [e["kind"] for e in log] == [HONORED] * 4
@@ -136,7 +136,7 @@ def test_every_path_after_the_claim_leaves_evidence(tmp_path, capsys):
     out = capsys.readouterr().out
     assert "failed" in out and "%-24s %7d %7d %7d" % ("write_file", 1, 3, 0) in out
     # The spent receipts are spent: a retry of the failed one is a replay.
-    again = handle_message(state, _call(envs[0], {"path": "f0"}, 5))
+    again = handle_message(state, _call(envs[0], {"path": "/gargoyle-test-root/f0"}, 5))
     assert again["result"]["_meta"][REASON_META_KEY] == REF_VERIFY_REPLAY
 
 
@@ -155,7 +155,7 @@ def test_single_use_survives_a_restart_and_a_replay_shows_in_the_audit(tmp_path)
     """Second review, finding 4: the claims live beside the log, so a restarted
     gate refuses a receipt it honored; a gate that lost its cache is caught by
     verification and reconciliation."""
-    env, args = _receipt({"path": "f"}), {"path": "f"}
+    env, args = _receipt({"path": "/gargoyle-test-root/f"}), {"path": "/gargoyle-test-root/f"}
     s1 = _gate(tmp_path, OK)
     assert handle_message(s1, _call(env, args, 1))["result"]["isError"] is False
     assert (tmp_path / "audit.replay.sqlite").exists()

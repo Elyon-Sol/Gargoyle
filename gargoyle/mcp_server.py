@@ -101,6 +101,7 @@ ENV_APPROVAL_TIMEOUT = "GARGOYLE_MCP_APPROVAL_TIMEOUT_SECONDS"
 ENV_POLL_SECONDS = "GARGOYLE_MCP_POLL_SECONDS"
 ENV_AUDIT_LOG = "GARGOYLE_MCP_AUDIT_LOG"
 ENV_STATE_PROBE = "GARGOYLE_MCP_STATE_PROBE"
+ENV_STATE_ROOT = "GARGOYLE_MCP_STATE_ROOT"     # the upstream's root: relative path arguments are resolved against it (default: the path in a mcp://filesystem/ target id)
 ENV_ADAPTER_SPEC = "GARGOYLE_MCP_ADAPTER_SPEC"    # with GARGOYLE_MCP_STATE_PROBE=graph: the tool mapping JSON
 ENV_INSTRUCTIONS = "GARGOYLE_MCP_INSTRUCTIONS"   # override the standing instructions the gate gives the model (default: gate_instructions())
 ENV_SNAPSHOT_DIR = "GARGOYLE_MCP_SNAPSHOT_DIR"   # where pre-change snapshots live (default: snapshots/ beside the audit log); "none" disables undo   # "filesystem" (default): bind held calls to the target file's state; "none" to disable
@@ -399,10 +400,15 @@ class ServerState:
         state_probe: Any = "filesystem",
         snapshot_dir: Optional[str] = None,
         adapter_spec: Optional[str] = None,
+        state_root: Optional[str] = None,
     ) -> None:
         from gargoyle.adapters import adapter_from_name
         from gargoyle.revert import SnapshotStore
         self.config = config
+        # Relative path arguments are resolved against the upstream's root
+        # (gargoyle.state.resolve_path_args). Configured, or taken from a
+        # filesystem target id, which init writes as mcp://filesystem/<root>.
+        self.state_root: Optional[str] = state_root or _root_from_target((config or {}).get("target_id"))
         # The adapter describes, explains and undoes what a tool changes
         # (gargoyle.adapters): files on this host by default, a Graph server by spec.
         self.adapter = adapter_from_name(state_probe, upstream, adapter_spec)
@@ -478,6 +484,15 @@ def _gate(state: ServerState, params: Dict[str, Any]) -> Dict[str, Any]:
     envelope = meta.get(ENVELOPE_META_KEY)
     grant = meta.get(GRANT_META_KEY)
     self_issued = False
+    from gargoyle.adapters import FilesystemAdapter
+    if isinstance(state.adapter, FilesystemAdapter):
+        # One path for everyone: the rules, the gate-folder check, the state
+        # probe and the upstream must all look at the same file.
+        from gargoyle.state import resolve_path_args
+        args, why = resolve_path_args(name, args, state.state_root)
+        if why is not None:
+            return refused(why)
+        params["arguments"] = args
     if state.gate_dir is not None and _touches_gate_files(args, state.gate_dir):
         return refused(REF_TARGET_GATE_FILES)
 
@@ -562,6 +577,17 @@ def _gate(state: ServerState, params: Dict[str, Any]) -> Dict[str, Any]:
 
 
 _GATE_FILE_GLOBS = ("*.env", "*.json", "*.jsonl", "*.jsonl.lock", "*.sqlite", "*.sqlite-*", "snapshots")
+
+
+def _root_from_target(target_id: Any) -> Optional[str]:
+    """mcp://filesystem/<absolute root> -> <absolute root>; else None."""
+    prefix = "mcp://filesystem/"
+    if isinstance(target_id, str) and target_id.startswith(prefix):
+        from gargoyle.state import is_absolute_path
+        rest = target_id[len(prefix):]
+        if rest and is_absolute_path(rest):
+            return rest
+    return None
 
 
 def _touches_gate_files(args: Any, gate_dir: str) -> bool:
@@ -992,7 +1018,8 @@ if __name__ == "__main__":
         serve_stdio(ServerState(config_from_env(), upstream=_upstream, issuer_client=issuer_client_from_env(),
                                 audit_log=_os.environ.get(ENV_AUDIT_LOG) or None,
                                 state_probe=_os.environ.get(ENV_STATE_PROBE) or "filesystem",
-                                adapter_spec=_os.environ.get(ENV_ADAPTER_SPEC) or None))
+                                adapter_spec=_os.environ.get(ENV_ADAPTER_SPEC) or None,
+                                state_root=_os.environ.get(ENV_STATE_ROOT) or None))
     finally:
         if _upstream is not None:
             _upstream.close()
