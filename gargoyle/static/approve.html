@@ -121,8 +121,11 @@ async function entraReady() {
         // Another browser's key is on record for this account. A sign-in
         // alone must not swap it: approve from that browser, or have the
         // operator revoke that key; then this browser enrolls.
-        $("entra-note").textContent = `${me.principal} already has an approver key enrolled in another browser; approve there, or ask the operator to run: gargoyle approvers revoke ${me.principal}`;
-        log("not enrolled: another key is on record for this account");
+        // Name both keys and where this page runs, so "another browser" can be
+        // told apart from a different address or a profile that dropped its storage.
+        const onRecord = (me.enrolled_public_key_hex || "").slice(0, 16), here = mine.slice(0, 16);
+        $("entra-note").textContent = `${me.principal} already has an approver key enrolled in another browser (key ${onRecord}…; this browser at ${location.origin} holds ${here}…); approve there, or ask the operator to run: gargoyle approvers revoke ${me.principal}`;
+        log(`not enrolled: key ${onRecord}… is on record for this account; this browser's is ${here}…`);
         return;
       }
       // This browser's key was revoked. A revoked key stays revoked: make a new one and enroll that.

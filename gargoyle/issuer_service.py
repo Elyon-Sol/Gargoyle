@@ -189,7 +189,13 @@ def build_issuer_app(
     registry = approver_registry if approver_registry is not None else ApproverRegistry(None)
     static_approvers = dict(approver_public_keys or {})
 
-    app.state.revoked_seen = set(registry.revoked_entries())
+    def _revoked_marks(entries: Dict[str, Dict[str, Any]]):
+        # One mark per revocation, not per account: an account revoked,
+        # re-enrolled and revoked again is two events (2026-10-30: the
+        # second and third operator revokes of one approver went unwitnessed).
+        return {(upn, e.get("public_key_hex"), e.get("revoked_at")) for upn, e in entries.items()}
+
+    app.state.revoked_seen = _revoked_marks(registry.revoked_entries())
 
     def _notice_revocations() -> None:
         """An operator's `gargoyle approvers revoke` edits the file on the
@@ -197,9 +203,10 @@ def build_issuer_app(
         so the record shows who was trusted when. Revocations the service
         made itself were witnessed as they happened."""
         current = registry.revoked_entries()
-        for upn in sorted(set(current) - app.state.revoked_seen):
+        marks = _revoked_marks(current)
+        for upn, _key, _at in sorted(marks - app.state.revoked_seen, key=lambda m: (m[0], m[2] or "")):
             event("revoked", approver=upn, by=current[upn].get("revoked_by"), revoked_at=current[upn].get("revoked_at"))
-        app.state.revoked_seen = set(current)
+        app.state.revoked_seen = marks
 
     def approver_keys() -> Dict[str, Any]:
         _notice_revocations()
@@ -646,7 +653,7 @@ def build_issuer_app(
         gone = registry.revoke(upn, revoked_by=who["principal"], now=now())
         if gone:
             event("revoked", approver=upn, by=who["principal"])
-            app.state.revoked_seen.add(upn)
+            app.state.revoked_seen = _revoked_marks(registry.revoked_entries())   # witnessed here, not again on the next read
         return {"revoked": gone}
 
     @app.get("/me")
@@ -681,8 +688,13 @@ def build_issuer_app(
     async def health():
         """Public, for a monitor: the service is up, which policy it runs,
         how much is waiting, and since when. No secrets."""
+        # Live holds only, as /pending lists them: a completed hold stays in
+        # the store until the gate collects its grant or it expires, and a
+        # monitor must not read that as work waiting for an approver.
+        current = now()
+        live = lambda items: sum(1 for arid, item in items if datetime.fromisoformat(item["not_after"]) > current and not _complete(arid))
         return {"ok": True, "policy": policy.pin(), "issuer_key_id": key_id,
-                "pending_receipts": len(app.state.pending), "pending_plans": len(app.state.pending_plans),
+                "pending_receipts": live(list(app.state.pending.items())), "pending_plans": live(list(app.state.pending_plans.items())),
                 "max_open_holds": max_open_holds,
                 "enrolled_approvers": len(registry.public_hex()), "static_approvers": len(static_approvers),
                 "entra": bool(console_entra), "persistent": store.path != ":memory:", "started_at": app.state.started_at}
