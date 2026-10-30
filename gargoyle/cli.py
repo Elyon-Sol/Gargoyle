@@ -704,7 +704,9 @@ def cmd_audit(args) -> int:
             w = verify_witness(read_witness(args.witness), issuer_public_keys=trust["issuer_public_keys"])
             print("witness: %d entries, %s, tail %s" % (w["count"], w["reason"], w["tail_sha256"][:16]))
             principal = next((e.get("principal") for e in entries if isinstance(e, dict) and e.get("principal")), None)
-            r = reconcile(entries, read_witness(args.witness), principal=principal)
+            target = next((e["receipt"].get("target_url") for e in entries
+                           if isinstance(e, dict) and isinstance(e.get("receipt"), dict) and e["receipt"].get("target_url")), None)
+            r = reconcile(entries, read_witness(args.witness), principal=principal, target_url=target)
             older = [f for f in r["findings"] if f["finding"] == "PREDATES_WITNESS"]
             for f in r["findings"]:
                 if f["finding"] == "PREDATES_WITNESS":
@@ -714,7 +716,9 @@ def cmd_audit(args) -> int:
                 print("  note: %d honored row(s) predate the witness (started %s) and cannot be vouched for either way: seq %s"
                       % (len(older), (r.get("horizon") or "?")[:19], ", ".join(str(f["seq"]) for f in older[:12]) + (" ..." if len(older) > 12 else "")))
             hard = len(r["findings"]) - len(older)
-            print("reconciled: %d issued by the issuer, %d in evidence, %d finding(s)" % (r["issued"], r["evidence_with_receipt"], hard))
+            print("reconciled: %d issued by the issuer, %d in evidence, %d finding(s)%s"
+                  % (r["issued"], r["evidence_with_receipt"], hard,
+                     " (%d issued for other targets, not this gate's)" % r["issued_elsewhere"] if r.get("issued_elsewhere") else ""))
             rc = rc or (0 if (w["accepted"] and r["accepted"]) else 1)
         if args.check_tree:
             # Every file the gate wrote must still be as the gate left it.

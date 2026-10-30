@@ -41,11 +41,12 @@ Run as a stdio MCP server:  python3 -m gargoyle.mcp_server
 
 import json
 import subprocess
+import os
 import sys
 from pathlib import Path
 import threading
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from gargoyle.consumer import REF_TARGET_NOT_CONFIGURED, Consumer
 from gargoyle.evidence import HONORED, REFUSED, EvidenceLog, TOOL_ERROR, UPSTREAM_ERROR, UPSTREAM_UNAVAILABLE
@@ -1011,9 +1012,51 @@ def upstream_from_argv(argv: List[str]) -> Optional[StdioUpstream]:
     return StdioUpstream(command) if command else None
 
 
+def load_env_file(path: str, environ: Optional[Dict[str, str]] = None) -> Dict[str, str]:
+    """`KEY=VALUE` lines (blank lines and `#` comments skipped) into the
+    environment, without overriding a variable the process already has:
+    the operator's explicit setting wins over the file. Returns what was
+    set. This is how a managed MCP entry (Claude Code's managed-mcp.json,
+    readable by every local user) names the gate's settings without
+    carrying the executor key: `--env C:\\gargoyle\\middleware.env`."""
+    env = os.environ if environ is None else environ
+    applied: Dict[str, str] = {}
+    with open(path, "r", encoding="utf-8-sig") as f:        # a BOM, if a Windows editor left one, is not part of the first key
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            key = key.strip()
+            if key and key not in env:
+                env[key] = value.strip()
+                applied[key] = value.strip()
+    return applied
+
+
+def main_args(argv: List[str]) -> Tuple[Optional[str], List[str]]:
+    """The gate's own options, which come before `--`: `--env FILE`.
+    Returns (env file or None, the argv to hand to upstream_from_argv)."""
+    own = argv[:argv.index("--")] if "--" in argv else list(argv)
+    rest = argv[len(own):]
+    env_path = None
+    i = 0
+    while i < len(own):
+        if own[i] == "--env" and i + 1 < len(own):
+            env_path, i = own[i + 1], i + 2
+        elif own[i].startswith("--env="):
+            env_path, i = own[i][len("--env="):], i + 1
+        else:
+            raise SystemExit("gargoyle.mcp_server: unknown option %s (usage: python -m gargoyle.mcp_server [--env FILE] -- <upstream command>)" % own[i])
+    return env_path, rest
+
+
 if __name__ == "__main__":
     import os as _os
-    _upstream = upstream_from_argv(sys.argv[1:])
+    _env_path, _rest = main_args(sys.argv[1:])
+    if _env_path:
+        load_env_file(_env_path)
+    _upstream = upstream_from_argv(_rest)
     try:
         serve_stdio(ServerState(config_from_env(), upstream=_upstream, issuer_client=issuer_client_from_env(),
                                 audit_log=_os.environ.get(ENV_AUDIT_LOG) or None,

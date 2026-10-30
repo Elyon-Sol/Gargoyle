@@ -33,7 +33,7 @@ into a settings file Claude Code reads:
 |---|---|---|
 | this project | `.claude/settings.json` | anyone with write access to the repo |
 | this user | `~/.claude/settings.json` | the user |
-| the whole machine (managed) | `managed-settings.json` under the OS's Claude Code policy folder (`/etc/claude-code/`, `/Library/Application Support/ClaudeCode/`, `C:\ProgramData\ClaudeCode\`) | an administrator; `allowManagedHooksOnly` then also blocks hooks added elsewhere |
+| the whole machine (managed) | `managed-settings.json` under the OS's Claude Code policy folder (`/etc/claude-code/`, `/Library/Application Support/ClaudeCode/`, `C:\Program Files\ClaudeCode\`) | an administrator; `allowManagedHooksOnly` then also blocks hooks added elsewhere |
 
 The entry is the same in each:
 
