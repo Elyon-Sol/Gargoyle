@@ -26,11 +26,15 @@ def _parse(ts: Any) -> Optional[datetime]:
 
 
 def reconcile(evidence: Iterable[Any], witness: Iterable[Any], *, principal: Optional[str] = None,
-              window_seconds: float = 5.0) -> Dict[str, Any]:
+              target_url: Optional[str] = None, window_seconds: float = 5.0) -> Dict[str, Any]:
     """Compare verified evidence entries with verified witness entries.
     `principal` limits MISSING_EVIDENCE to receipts issued to that
     principal (the evidence log is one executor's); None means every
-    principal in the witness."""
+    principal in the witness. `target_url` likewise limits it to receipts
+    the issuer issued for that target: one issuer may serve several gates,
+    each with its own evidence log, and a witness entry that names another
+    target is another gate's business (counted in "issued_elsewhere").
+    Entries from an issuer too old to name the target are still reported."""
     issued: Dict[str, Dict[str, Any]] = {}
     granted: Dict[str, List[Dict[str, Any]]] = {}
     plan_granted: Dict[str, List[Dict[str, Any]]] = {}
@@ -87,16 +91,20 @@ def reconcile(evidence: Iterable[Any], witness: Iterable[Any], *, principal: Opt
             at_e, at_w = _parse(e.get("at")), _parse(w.get("at"))
             if at_e and at_w and (at_w - at_e).total_seconds() > window_seconds:
                 findings.append({"finding": "EVIDENCE_BEFORE_ISSUE", "seq": e.get("seq"), "decision_id": did})
+    elsewhere = 0
     for did, w in issued.items():
         if did in seen_decisions:
             continue
         if principal is not None and w.get("principal") != principal:
             continue
+        if target_url is not None and isinstance(w.get("target_url"), str) and w["target_url"] != target_url:
+            elsewhere += 1
+            continue
         findings.append({"finding": "MISSING_EVIDENCE", "decision_id": did, "tool": w.get("tool"), "principal": w.get("principal"),
                          "held": bool(w.get("held")), "at": w.get("at")})
     hard = [f for f in findings if f["finding"] != "PREDATES_WITNESS"]
     return {"accepted": not hard, "findings": findings, "horizon": horizon.isoformat() if horizon else None,
-            "issued": len(issued), "evidence_with_receipt": len(seen_decisions)}
+            "issued": len(issued), "evidence_with_receipt": len(seen_decisions), "issued_elsewhere": elsewhere}
 
 
 def check_tree(evidence: Iterable[Any], root: str) -> Dict[str, Any]:

@@ -398,6 +398,10 @@ forwarded only when `params._meta["gargoyle/envelope"]` carries a valid
 receipt for that tool, those arguments and the principal the server serves
 (and `params._meta["gargoyle/grant"]` a grant, when the receipt is
 flagged); a refused call is answered here and never reaches the upstream.
+`--env FILE` before the `--` reads the settings below from a `KEY=VALUE`
+file (variables already in the environment win), so an MCP entry that every
+local user can read, such as Claude Code's managed `managed-mcp.json`, names
+`middleware.env` instead of carrying the executor key.
 Without an upstream command it runs a built-in demo executor. With
 `GARGOYLE_MCP_ISSUER_URL` and `GARGOYLE_MCP_CLIENT_TOKEN` it obtains a
 receipt from the issuing service for any call that carries none, and

@@ -207,3 +207,27 @@ def test_audit_names_a_missing_witness_or_folder_plainly(tmp_path, capsys):
     # The issuer creates the witness file at start, before any decision.
     w = WitnessLog(str(tmp_path / "fresh" / "witness.jsonl"), issuer, "issuer-1")
     assert (tmp_path / "fresh" / "witness.jsonl").exists() and [e["event"] for e in w.entries] == ["started"]
+
+
+def test_reconciliation_is_scoped_to_the_evidence_logs_target(tmp_path):
+    """One issuer can serve several gates. The witness names the target of
+    each issued receipt, and an audit of one gate's log does not report the
+    other gates' receipts as missing evidence."""
+    root = tmp_path / "root"; root.mkdir(); (root / "n.md").write_text("one\n", encoding="utf-8", newline="\n")
+    state, up, c, h, w = _rig(tmp_path, root)
+    try:
+        assert call(state, 2, "read_file", {"path": str(root / "n.md")})["_meta"][EXECUTED_META_KEY]
+    finally:
+        up.close()
+    evidence = read_log(str(tmp_path / "audit.jsonl")); witness = read_witness(str(tmp_path / "witness.jsonl"))
+    issued = [e for e in witness if e["event"] == "issued"]
+    assert issued and all(e["target_url"] == TARGET for e in issued)
+    assert verify_witness(witness, issuer_public_keys=ISSUER_KEYS)["accepted"]     # the new field is under the signature
+    other_gate = dict(issued[0], decision_id="another-gates-decision", target_url="mcp://filesystem/C:/elsewhere")
+    legacy = dict(issued[0], decision_id="old-issuer-no-target"); legacy.pop("target_url")
+    r = reconcile(evidence, witness + [other_gate], principal=PRINCIPAL, target_url=TARGET)
+    assert r["accepted"] and r["findings"] == [] and r["issued_elsewhere"] == 1
+    r = reconcile(evidence, witness + [other_gate], principal=PRINCIPAL)                 # unscoped: still reported
+    assert [f["finding"] for f in r["findings"]] == ["MISSING_EVIDENCE"]
+    r = reconcile(evidence, witness + [legacy], principal=PRINCIPAL, target_url=TARGET)   # no target on record: reported
+    assert [f["finding"] for f in r["findings"]] == ["MISSING_EVIDENCE"] and r["issued_elsewhere"] == 0

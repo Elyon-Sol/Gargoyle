@@ -306,9 +306,11 @@ these tools, a wait is normal, a refusal is final, plans and undo exist.
 having other file tools to pick from. An operator can replace the text
 with `GARGOYLE_MCP_INSTRUCTIONS` in the MCP entry's env. For a fleet, put
 the MCP entry and the deny rules in Claude Code's managed settings file
-(`C:\ProgramData\ClaudeCode\managed-settings.json`), which the user
+(`C:\Program Files\ClaudeCode\managed-settings.json`, and the MCP entry in `managed-mcp.json` beside it), which the user
 cannot override, and the gate is mandated by the administrator rather
-than typed by anyone.
+than typed by anyone. The managed entry is readable by every local user, so
+write it as `python -m gargoyle.mcp_server --env C:\\gargoyle\\middleware.env -- ...`
+with no `env` block: the key stays in `middleware.env`, readable by its user alone.
 
 **4.4b Ask it to bypass.** The standing instructions set the model's
 default; they are not a control, and a user can talk the model out of
