@@ -66,8 +66,8 @@ def test_a_gate_following_the_record_survives_a_rule_change_without_a_copy_or_re
     ic = IssuerClient("http://i", _token(), http=Shim(c))
     config = {"pinned_public_keys": {"issuer-1": issuer.public_key()}, "record": None, "record_url": "http://i/record",
               "target_id": TARGET, "principal": PRINCIPAL, "executor_signing_key": executor, "executor_key_id": "executor-1"}
-    live = ServerState(config, issuer_client=ic, audit_log=str(tmp_path / "audit.jsonl")); live.initialized = True
-    stale = ServerState(dict(config, record=pol.pin(), record_url=None), issuer_client=ic); stale.initialized = True   # a static copy of today's pin
+    live = ServerState(config, issuer_client=ic, audit_log=str(tmp_path / "audit.jsonl"), state_root="/gargoyle-test-root"); live.initialized = True
+    stale = ServerState(dict(config, record=pol.pin(), record_url=None), issuer_client=ic, state_root="/gargoyle-test-root"); stale.initialized = True   # a static copy of today's pin
     call = lambda i: {"jsonrpc": "2.0", "id": i, "method": "tools/call", "params": {"name": "read_file", "arguments": {"path": "a"}}}
     assert handle_message(live, call(1))["result"]["_meta"][EXECUTED_META_KEY] is True
     assert handle_message(stale, call(2))["result"]["_meta"][EXECUTED_META_KEY] is True

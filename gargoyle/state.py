@@ -28,12 +28,49 @@ the state is that file. Any executor can supply its own probe.
 """
 
 import hashlib
+import os
+import re
 from typing import Any, Callable, Dict, Optional
 
 from gargoyle.envelope import canonical_json
 
 PROBE_TOOLS = ("write_file", "edit_file", "create_directory", "move_file", "delete_file")
 PATH_ARGS = ("path", "source")
+RESOLVED_ARGS = ("path", "source", "destination")
+REF_TARGET_RELATIVE_PATH = "REF_TARGET_RELATIVE_PATH"   # a state-bound tool named a relative path and no root is configured
+
+
+def is_absolute_path(value: str) -> bool:
+    """POSIX absolute, a Windows drive path, or a UNC path. Anything else
+    is relative to something, and that something must be the root."""
+    return value.startswith("/") or value.startswith("\\\\") or bool(re.match(r"^[A-Za-z]:[\\/]", value))
+
+
+def resolve_path_args(tool: str, args: Any, root: Optional[str]):
+    """Return (args, reason). A relative path argument is made absolute
+    against `root` before anything looks at it, so the state the receipt
+    binds, the rules that match the path, the gate-folder check and the
+    upstream all see the same file. The upstream resolves relative paths
+    against its own root; the gate has to agree with it, not with its own
+    working directory (found 2026-10-30: a client sent "hello.txt", the
+    gate bound an absent file beside itself while the upstream overwrote
+    the real one). Without a root, a relative path on a state-bound tool is
+    refused with REF_TARGET_RELATIVE_PATH; other tools pass through as before."""
+    if not isinstance(args, dict):
+        return args, None
+    out = None
+    for key in RESOLVED_ARGS:
+        value = args.get(key)
+        if not isinstance(value, str) or not value or is_absolute_path(value):
+            continue
+        if root is None:
+            if tool in PROBE_TOOLS:
+                return args, REF_TARGET_RELATIVE_PATH
+            continue
+        if out is None:
+            out = dict(args)
+        out[key] = os.path.normpath(os.path.join(root, value))
+    return (out if out is not None else args), None
 TEXT_LIMIT = 65536
 
 

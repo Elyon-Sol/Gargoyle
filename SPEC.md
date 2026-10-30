@@ -234,6 +234,14 @@ apply to that state alone. The description is the executor's own statement
 state_sha256 = sha256(canonical_json(description))
 ```
 
+`ref` names the target as the upstream will resolve it. For a filesystem
+target that means an absolute path: a relative path argument is made
+absolute against the upstream's root before the rules, the state probe
+and the upstream see it (`GARGOYLE_MCP_STATE_ROOT`, or the root in a
+`mcp://filesystem/<root>` target id), and without a known root a
+state-bound tool with a relative path is refused rather than bound to a
+file beside the gate (`REF_TARGET_RELATIVE_PATH`).
+
 A description may also carry `summary`, a sentence for the approver in
 the target's own terms, and `irreversible`, true when no later call can
 restore the state (a sent message); neither is hashed, both are shown.

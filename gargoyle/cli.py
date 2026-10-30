@@ -205,6 +205,7 @@ def cmd_init(args) -> int:
         "GARGOYLE_MCP_ISSUER_URL": issuer_url, "GARGOYLE_MCP_CLIENT_TOKEN": client_token,
         "GARGOYLE_MCP_APPROVAL_TIMEOUT_SECONDS": "300",
         "GARGOYLE_MCP_AUDIT_LOG": client_dir + sep + "audit.jsonl",
+        "GARGOYLE_MCP_STATE_ROOT": allowed,      # relative path arguments resolve here, as the upstream resolves them
     }
     _write(out / "middleware.env", _env_lines(middleware_env), private=True)
     b64url = lambda b: __import__("base64").urlsafe_b64encode(b).rstrip(b"=").decode()
@@ -423,7 +424,7 @@ def cmd_remote(args) -> int:
                            state_probe=args.state_probe, snapshot_dir=env.get("GARGOYLE_MCP_SNAPSHOT_DIR"),
                            adapter_spec=args.adapter_spec or env.get("GARGOYLE_MCP_ADAPTER_SPEC"),
                            approval_timeout=float(env.get("GARGOYLE_MCP_APPROVAL_TIMEOUT_SECONDS", "300")),
-                           oauth=oauth)
+                           oauth=oauth, state_root=env.get("GARGOYLE_MCP_STATE_ROOT") or None)
     tls = {}
     if args.ssl_certfile or args.ssl_keyfile:
         if not (args.ssl_certfile and args.ssl_keyfile):

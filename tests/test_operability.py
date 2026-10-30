@@ -87,7 +87,7 @@ def test_a_hold_the_gate_stopped_waiting_for_is_declined(tmp_path):
         def get(self, url, headers=None, timeout=None): return c.get(url.replace("http://i", ""), headers=headers)
 
     ic = IssuerClient("http://i", token, http=Shim(), approval_timeout=0, sleep=lambda s: None)
-    state = ServerState(dict(_config(), pinned_public_keys={"issuer-1": issuer.public_key()}), issuer_client=ic); state.initialized = True
+    state = ServerState(dict(_config(), pinned_public_keys={"issuer-1": issuer.public_key()}), issuer_client=ic, state_root="/gargoyle-test-root"); state.initialized = True
     r = handle_message(state, _call("write_file", {"path": "x", "content": "y"}, 1))
     assert r["result"]["_meta"][REASON_META_KEY] == REF_TARGET_APPROVAL_TIMEOUT
     assert c.get("/pending", headers={"Authorization": "Bearer " + approver}).json()["pending"] == []     # the card is gone

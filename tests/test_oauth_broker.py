@@ -163,7 +163,7 @@ def test_discovery_registration_and_the_sign_in_name_the_directory_user(tmp_path
     try:
         app = build_remote_app(CONFIG, TokenMap(), upstream=up, issuer_url="http://i", issuer_http=shim,
                                audit_log=str(tmp_path / "audit.jsonl"), state_probe="filesystem", approval_timeout=30,
-                               poll_seconds=0.01, sleep=human, oauth=gate)
+                               poll_seconds=0.01, sleep=human, oauth=gate, state_root=str(root))
         c = TestClient(app)
         # No bearer: 401 pointing at the resource metadata, which names this gate as the authorization server.
         r = c.post("/mcp", content="{}", headers={"Content-Type": "application/json"})

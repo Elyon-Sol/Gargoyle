@@ -178,3 +178,26 @@ def test_middleware_refuses_when_the_file_moved_between_card_and_run(tmp_path):
     v = verify_log([entry], issuer_public_keys=ISSUER_KEYS, executor_public_keys={"executor-1": executor.public_key()},
                    approver_public_keys={"approver-1": approver.public_key()})
     assert v["accepted"] and v["entries"][0]["state"] == {"pre": ex["pre_state_sha256"], "post": ex["post_state_sha256"]}
+
+
+def test_resolve_path_args_makes_one_path_for_everyone():
+    from gargoyle.state import REF_TARGET_RELATIVE_PATH, resolve_path_args
+    root = "/srv/shared"
+    # Relative paths resolve against the root; absolute ones are left alone.
+    assert resolve_path_args("write_file", {"path": "hello.txt", "content": "x"}, root) == ({"path": "/srv/shared/hello.txt", "content": "x"}, None)
+    assert resolve_path_args("write_file", {"path": "a/../b.txt"}, root) == ({"path": "/srv/shared/b.txt"}, None)
+    assert resolve_path_args("move_file", {"source": "a.txt", "destination": "/srv/shared/sub/b.txt"}, root) == \
+        ({"source": "/srv/shared/a.txt", "destination": "/srv/shared/sub/b.txt"}, None)
+    assert resolve_path_args("read_file", {"path": "notes/x.md"}, root) == ({"path": "/srv/shared/notes/x.md"}, None)
+    untouched = {"path": "/etc/hosts"}
+    assert resolve_path_args("write_file", untouched, root)[0] is untouched
+    for absolute in ("C:\\x\\y.txt", "D:/x", "\\\\server\\share\\f"):
+        assert resolve_path_args("write_file", {"path": absolute}, root) == ({"path": absolute}, None)
+    # Without a root: state-bound tools refuse a relative path, others pass through unchanged.
+    assert resolve_path_args("write_file", {"path": "hello.txt"}, None) == ({"path": "hello.txt"}, REF_TARGET_RELATIVE_PATH)
+    assert resolve_path_args("edit_file", {"path": "hello.txt"}, None)[1] == REF_TARGET_RELATIVE_PATH
+    assert resolve_path_args("read_file", {"path": "hello.txt"}, None) == ({"path": "hello.txt"}, None)
+    assert resolve_path_args("write_file", {"path": "/srv/shared/hello.txt"}, None) == ({"path": "/srv/shared/hello.txt"}, None)
+    # Not a dict, or no path: nothing to do.
+    assert resolve_path_args("write_file", ["x"], root) == (["x"], None)
+    assert resolve_path_args("write_file", {"content": "x"}, None) == ({"content": "x"}, None)

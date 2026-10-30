@@ -67,7 +67,7 @@ def middleware(client, token_sub=PRINCIPAL, sleep=None, approval_timeout=5.0, at
         config.update(executor_signing_key=executor, executor_key_id="executor-1")
     ic = IssuerClient("http://issuer", token(token_sub), http=Shim(client), approval_timeout=approval_timeout,
                       poll_seconds=0.01, sleep=sleep or (lambda s: None))
-    return ServerState(config, issuer_client=ic)
+    return ServerState(config, issuer_client=ic, state_root="/gargoyle-test-root")
 
 
 def call(name, args):
@@ -115,7 +115,8 @@ def test_flagged_call_waits_for_the_human_then_runs_once():
                                    "params": call("write_file", {"path": "a.txt", "content": "hello"})})
     assert reply["result"]["isError"] is False, reply
     assert polls["n"] >= 2
-    assert state.executed == [{"tool": "write_file", "args": {"path": "a.txt", "content": "hello"}}]
+    # The upstream ran the resolved call: the relative path became the root's.
+    assert state.executed == [{"tool": "write_file", "args": {"path": "/gargoyle-test-root/a.txt", "content": "hello"}}]
     assert reply["result"]["_meta"][EXECUTION_META_KEY]["request_context"]["tool"] == "write_file"
     # The client never saw the receipt or the grant: the honored result carries them,
     # so the caller holds the whole chain and can audit it offline.
