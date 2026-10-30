@@ -724,6 +724,12 @@ def cmd_audit(args) -> int:
             print("tree: %d gated file(s) checked, %d untouched by the gate, %d changed outside it" % (t["checked"], t["untouched"], len(t["findings"])))
             rc = rc or (0 if t["accepted"] else 1)
         return rc
+    if args.witness or args.check_tree or args.summary:
+        print("--witness, --check-tree and --summary verify an evidence log: pass --log audit.jsonl as well", file=sys.stderr)
+        return 2
+    if not (args.receipt and args.execution):
+        print("nothing to verify: pass --log audit.jsonl, or a receipt and an execution record", file=sys.stderr)
+        return 2
     receipt, execution = json.load(open(args.receipt)), json.load(open(args.execution))
     grant = json.load(open(args.grant)) if args.grant else None
     result = verify_chain(receipt, execution, grant=grant, **trust)

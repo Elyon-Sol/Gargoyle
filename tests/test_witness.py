@@ -175,6 +175,13 @@ def test_audit_names_a_missing_witness_or_folder_plainly(tmp_path, capsys):
     assert "witness file not found" in capsys.readouterr().err
     assert main(["audit", "--log", str(log), "--out", str(out), "--check-tree", str(tmp_path / "nodir")]) == 2
     assert "not a directory" in capsys.readouterr().err
+    # --witness (or --check-tree, --summary) without --log is a usage error, not a crash.
+    assert main(["audit", "--out", str(out), "--witness", str(tmp_path / "nope.jsonl")]) == 2
+    assert "pass --log" in capsys.readouterr().err
+    assert main(["audit", "--out", str(out), "--check-tree", str(tmp_path)]) == 2
+    assert "pass --log" in capsys.readouterr().err
+    assert main(["audit", "--out", str(out)]) == 2
+    assert "nothing to verify" in capsys.readouterr().err
     # The issuer creates the witness file at start, before any decision.
     w = WitnessLog(str(tmp_path / "fresh" / "witness.jsonl"), issuer, "issuer-1")
     assert (tmp_path / "fresh" / "witness.jsonl").exists() and [e["event"] for e in w.entries] == ["started"]
