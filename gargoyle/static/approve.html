@@ -11,10 +11,13 @@
   header { padding:16px 24px; border-bottom:1px solid var(--line); display:flex; gap:16px; align-items:center; flex-wrap:wrap; }
   header h1 { font-size:17px; margin:0; }
   header .status { color:var(--muted); font-size:13px; }
+  header .viewpick { margin-left:auto; font-size:13px; color:var(--muted); }
+  header select { font:inherit; padding:4px 8px; border:1px solid var(--line); border-radius:6px; background:var(--card); color:var(--ink); }
   main { max-width:900px; margin:0 auto; padding:24px 16px; }
   .setup { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:16px; margin-bottom:24px; }
   .hold { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:16px 20px; margin-bottom:16px; }
   .hold h2 { margin:0 0 4px; font-size:20px; }
+  .hold.plain h2 { font-size:19px; line-height:1.35; }
   .meta { display:grid; grid-template-columns:150px 1fr; gap:4px 12px; font-size:13.5px; margin:10px 0; }
   .meta dt { color:var(--muted); } .meta dd { margin:0; word-break:break-all; }
   pre { background:var(--bg); border:1px solid var(--line); border-radius:8px; padding:12px; font-size:13px; overflow:auto; margin:8px 0 12px; }
@@ -27,7 +30,13 @@
   pre.diff { max-height:320px; overflow:auto; }
   .dadd { color:#1a7f37; } .ddel { color:#b42318; text-decoration:line-through; } .dctx { color:var(--muted, #777); }
   .note { font-size:.9em; color:var(--muted, #777); }
-  .actions { display:flex; gap:12px; align-items:center; }
+  .who { margin:6px 0 10px; color:var(--muted); font-size:14px; }
+  .who strong { color:var(--ink); font-weight:600; }
+  .alert { border:1px solid var(--bad); color:var(--bad); border-radius:8px; padding:8px 12px; margin:8px 0; font-weight:600; }
+  .hold details.tech { margin:8px 0; font-size:13.5px; }
+  .hold details.tech summary { cursor:pointer; color:var(--muted); }
+  .actions { display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
+  .actions input.why { font:inherit; font-size:13px; padding:6px 8px; border:1px solid var(--line); border-radius:6px; background:var(--bg); color:var(--ink); min-width:200px; flex:1; }
   .empty { color:var(--muted); text-align:center; padding:48px 0; }
   .log { font-size:13px; color:var(--muted); margin-top:16px; }
   .activity { margin-top:32px; }
@@ -48,6 +57,9 @@
 <header>
   <h1>Gargoyle approvals</h1>
   <span class="status" id="status">not loaded</span>
+  <label class="viewpick" id="viewpick" style="display:none">view
+    <select id="view"><option value="technical">technical</option><option value="deputy">deputy</option><option value="business">business</option></select>
+  </label>
 </header>
 <main>
   <section class="setup" id="entra" style="display:none">
@@ -72,10 +84,38 @@
 import { argsSha256, sha256Hex, canonicalJson, authorizeUrl, buildGrant, earlier, emiliaContext, emiliaSignoff, exchangeCode, generateApproverKey, importApproverKey, isoUtc, lineDiff, loadStoredKey,
          newGrantId, pkceChallenge, publicKeyHex, randomVerifier, signGrant, storeKey } from "./approve.js";
 
-const state = { token: null, key: null, keyId: null, ttl: 300, timer: null, seen: new Map(), witnessSeq: 0, witnessOff: false, rows: 0 };
+// One signed object, three renderings. Whatever the view, the approver
+// signs args_sha256 and state_sha256 (approve.js); the technical view shows
+// the bytes, the deputy and business views show the issuer's plain-language
+// line for the same bytes (gargoyle.holdtext, returned by /pending as
+// `summary`) and keep the technical details one click away. Nothing on a
+// card is authored text: a hold the template cannot describe is marked so.
+const state = { token: null, key: null, keyId: null, ttl: 300, timer: null, seen: new Map(), witnessSeq: 0, witnessOff: false, rows: 0,
+                view: "technical", roles: [], approverRole: "Approver", released: null, releasedByTool: {}, others: 0, waiting: 0 };
 const ACTIVITY_ROWS = 2000;                                  // kept in the page; older rows drop off the bottom
 const $ = (id) => document.getElementById(id);
 const log = (m) => { $("log").textContent = new Date().toLocaleTimeString() + "  " + m; };
+
+// ---- Views: which rendering this person gets by default, from the token's app roles ----
+function defaultView(roles, base) {
+  if (roles.includes(base + ".Business")) return "business";
+  if (roles.includes(base + ".Deputy")) return "deputy";
+  return "technical";
+}
+function setView(v, { refetch = true } = {}) {
+  state.view = v; $("view").value = v; $("viewpick").style.display = "";
+  try { localStorage.setItem("gargoyle-view", v); } catch (err) { /* private window */ }
+  for (const card of state.seen.values()) card.remove();
+  state.seen.clear();
+  $("holds").innerHTML = "";
+  $("activity").style.display = v === "technical" && state.rows ? "" : "none";
+  if (refetch && state.token) refresh();
+}
+$("view").addEventListener("change", () => setView($("view").value));
+function rememberedView(fallback) {
+  try { const v = localStorage.getItem("gargoyle-view"); if (["technical", "deputy", "business"].includes(v)) return v; } catch (err) { /* ignore */ }
+  return fallback;
+}
 
 // ---- Entra path: sign in, hold a browser key, enroll it once ----
 const redirectUri = location.origin + location.pathname;
@@ -137,11 +177,17 @@ async function entraReady() {
     if (res) log(res.replaced ? "this browser's key replaced your previous one" : "this browser's key enrolled");
   }
   state.key = keyPair.privateKey; state.keyId = me.principal;
+  state.roles = me.roles || []; state.approverRole = me.approver_role || "Approver";
+  state.released = me.released_7d ?? null; state.releasedByTool = me.released_by_tool_7d || {};
   $("entra").style.display = "none"; $("setup").style.display = "none";
   $("status").textContent = "approving as " + state.keyId;
+  // The role decides the default rendering; the person may switch, and the
+  // choice is remembered in this browser.
+  setView(rememberedView(defaultView(state.roles, state.approverRole)), { refetch: false });
   await refresh(); state.timer = setInterval(refresh, 3000);
 }
 entraSetup();
+setInterval(tick, 1000);
 
 $("file").addEventListener("change", async (e) => {
   const f = e.target.files[0]; if (!f) return;
@@ -150,6 +196,8 @@ $("file").addEventListener("change", async (e) => {
     state.key = await importApproverKey(cfg.jwk); state.keyId = cfg.key_id; state.token = cfg.token;
     if (cfg.grant_ttl_seconds) state.ttl = cfg.grant_ttl_seconds;
     $("setup").style.display = "none"; $("status").textContent = "approving as " + state.keyId;
+    try { const me = await api("me"); state.roles = me.roles || []; state.approverRole = me.approver_role || "Approver"; state.released = me.released_7d ?? null; } catch (err) { /* older issuer */ }
+    setView(rememberedView("technical"), { refetch: false });    // a key file is the engineer's path
     await refresh(); state.timer = setInterval(refresh, 3000);
   } catch (err) { log("could not load approver file: " + err.message); }
 });
@@ -164,19 +212,41 @@ async function api(path, opts = {}) {
   return r.json();
 }
 
+function status() {
+  const parts = [`approving as ${state.keyId}`, `${state.waiting} waiting`];
+  if (state.others) parts.push(`${state.others} for other approvers`);
+  if (state.released !== null && state.released !== undefined) {
+    const top = Object.entries(state.releasedByTool || {}).sort((a, b) => b[1] - a[1])[0];
+    parts.push(`you released ${state.released} this week` + (top && state.released > 3 ? ` (${top[1]} ${top[0]}: a rule or a scoped grant may fit)` : ""));
+  }
+  $("status").textContent = parts.join(" · ");
+}
+
+function timeLeft(iso) {
+  const ms = new Date(iso).getTime() - Date.now();
+  if (ms <= 0) return "expired";
+  const s = Math.round(ms / 1000);
+  return s < 90 ? `${s} s` : s < 3600 ? `${Math.round(s / 60)} min` : `${(s / 3600).toFixed(1)} h`;
+}
+function tick() { for (const el of document.querySelectorAll(".left[data-exp]")) el.textContent = timeLeft(el.dataset.exp); }
+
 async function refresh() {
   let pending;
   try { pending = (await api("pending")).pending; } catch (err) { log("issuer unreachable: " + err.message); return; }
   await activity();                                        // before the empty return: an observe week is nothing but activity
   const holds = $("holds");
-  if (!pending.length) { holds.innerHTML = '<div class="empty">Nothing waiting for you.</div>'; return; }
   const ids = new Set();
+  let others = 0, shown = 0;
   for (const item of pending) {
-    if (item.plan) { renderPlan(item, ids); continue; }
-    const env = item.envelope, id = env.approval_request_id; ids.add(id);
+    if (item.plan) { if (renderPlan(item, ids)) shown++; else others++; continue; }
+    const env = item.envelope, id = env.approval_request_id;
     const required = item.required ?? 1, collected = item.collected ?? 0, signers = item.approvers ?? [];
     const mine = signers.includes(state.keyId);
-    const eligible = !env.approval?.approvers || env.approval.approvers.includes(state.keyId);
+    // Eligible: the receipt's named approvers (if any) include this key, and
+    // the issuer says this token carries one of the receipt's roles (if any).
+    const eligible = (!env.approval?.approvers || env.approval.approvers.includes(state.keyId)) && item.eligible !== false;
+    if (state.view !== "technical" && !eligible) { others++; continue; }   // routing: not this person's to see
+    ids.add(id); shown++;
     const progress = required > 1 ? `${collected} of ${required} approvals` + (signers.length ? ` (${signers.map(esc).join(", ")})` : "") : "";
     if (state.seen.has(id)) {
       const card = state.seen.get(id);
@@ -185,29 +255,13 @@ async function refresh() {
       if (mine) { card.querySelector(".approve").disabled = true; card.querySelector(".result").innerHTML = '<span class="ok">you signed; waiting for the others</span>'; }
       continue;
     }
-    const card = document.createElement("article"); card.className = "hold"; card.dataset.id = id; card.dataset.collected = collected;
+    const card = document.createElement("article"); card.className = "hold" + (state.view === "technical" ? "" : " plain"); card.dataset.id = id; card.dataset.collected = collected;
     const rc = env.request_context;
     const bound = item.args !== null && item.args !== undefined ? (await argsSha256(item.args)) === rc.args_sha256 : false;
     const st = await verifyState(item.state, rc);
-    const expires = new Date(env.not_after);
-    card.innerHTML = `
-      <h2>${esc(rc.tool)} <span class="badge ${bound ? "ok" : "bad"}">${bound ? "arguments match the receipt" : "ARGUMENTS DO NOT MATCH; do not approve"}</span>${st.present ? ` <span class="badge ${st.ok ? "ok" : "bad"}">${st.ok ? "state matches the receipt" : "STATE DOES NOT MATCH THE RECEIPT; do not approve"}</span>` : ""}</h2>
-      <dl class="meta">
-        <dt>requested by</dt><dd>${esc(rc.principal)}${rc.on_behalf_of ? " on behalf of " + esc(rc.on_behalf_of) : ""}</dd>
-        <dt>target</dt><dd>${esc(env.target_url)}</dd>
-        <dt>policy</dt><dd>${esc(env.policy.policy_id)} <span class="badge">${esc(env.policy.policy_sha256.slice(0, 12))}</span></dd>
-        <dt>expires</dt><dd data-exp="${expires.toISOString()}">${expires.toLocaleTimeString()}</dd>
-        <dt>decision</dt><dd>${esc(env.decision_sha256.slice(0, 16))}&hellip;</dd>
-        ${required > 1 ? `<dt>approvals</dt><dd class="progress">${progress}</dd>` : ""}
-        ${env.approval?.approvers ? `<dt>eligible</dt><dd>${env.approval.approvers.map(esc).join(", ")}${eligible ? "" : ' <span class="badge bad">not you</span>'}</dd>` : ""}
-      </dl>
-      ${stateBlock(item, st)}
-      <pre>${esc(JSON.stringify(item.args, null, 2))}</pre>
-      <div class="actions">
-        <button class="approve" ${bound && st.ok && eligible && !mine ? "" : "disabled"}>Approve</button>
-        <button class="decline">Decline</button>
-        <span class="result"></span>
-      </div>`;
+    const ctx = { item, env, rc, id, required, collected, signers, mine, eligible, progress, bound, st, expires: new Date(env.not_after),
+                  summary: item.summary || { sentence: rc.tool, readable: false, irreversible: false } };
+    card.innerHTML = state.view === "technical" ? technicalCard(ctx) : plainCard(ctx);
     card.querySelector(".approve").addEventListener("click", () => approve(card, env));
     card.querySelector(".decline").addEventListener("click", () => decline(card, id));
     holds.querySelector(".empty")?.remove();
@@ -215,11 +269,105 @@ async function refresh() {
     state.seen.set(id, card);
   }
   for (const [id, card] of state.seen) if (!ids.has(id) && !card.dataset.done) { card.remove(); state.seen.delete(id); }
-  $("status").textContent = `approving as ${state.keyId} \u00b7 ${pending.length} waiting`;
+  if (!shown && !holds.querySelector(".hold")) {
+    holds.innerHTML = `<div class="empty">${others ? `Nothing waiting for you. ${others} hold${others === 1 ? " is" : "s are"} routed to other approvers.` : "Nothing waiting for you."}</div>`;
+  }
+  state.waiting = shown; state.others = others;
+  status();
+}
+
+// The engineer's card: tool, raw arguments, hashes, pin, ids, and the diff.
+function technicalCard({ env, rc, item, required, progress, eligible, mine, bound, st, expires, summary }) {
+  const roles = env.approval?.roles;
+  return `
+      <h2>${esc(rc.tool)} <span class="badge ${bound ? "ok" : "bad"}">${bound ? "arguments match the receipt" : "ARGUMENTS DO NOT MATCH; do not approve"}</span>${st.present ? ` <span class="badge ${st.ok ? "ok" : "bad"}">${st.ok ? "state matches the receipt" : "STATE DOES NOT MATCH THE RECEIPT; do not approve"}</span>` : ""}</h2>
+      ${summary.readable ? `<div class="who">${esc(summary.sentence)}${summary.irreversible ? ' <span class="badge bad">cannot be undone</span>' : ""}</div>` : ""}
+      <dl class="meta">
+        <dt>requested by</dt><dd>${esc(rc.principal)}${rc.on_behalf_of ? " on behalf of " + esc(rc.on_behalf_of) : ""}</dd>
+        <dt>target</dt><dd>${esc(env.target_url)}</dd>
+        <dt>policy</dt><dd>${esc(env.policy.policy_id)} <span class="badge">${esc(env.policy.policy_sha256.slice(0, 12))}</span></dd>
+        <dt>expires</dt><dd data-exp="${expires.toISOString()}">${expires.toLocaleTimeString()} (<span class="left" data-exp="${expires.toISOString()}">${timeLeft(env.not_after)}</span> left)</dd>
+        <dt>decision</dt><dd>${esc(env.decision_sha256.slice(0, 16))}&hellip;</dd>
+        ${required > 1 ? `<dt>approvals</dt><dd class="progress">${progress}</dd>` : ""}
+        ${env.approval?.approvers ? `<dt>eligible</dt><dd>${env.approval.approvers.map(esc).join(", ")}${env.approval.approvers.includes(state.keyId) ? "" : ' <span class="badge bad">not you</span>'}</dd>` : ""}
+        ${roles ? `<dt>routed to</dt><dd>role ${roles.map(esc).join(" or ")}${item.eligible === false ? ' <span class="badge bad">not your role</span>' : ""}</dd>` : ""}
+      </dl>
+      ${stateBlock(item, st)}
+      <pre>${esc(JSON.stringify(item.args, null, 2))}</pre>
+      <div class="actions">
+        <button class="approve" ${bound && st.ok && eligible && !mine ? "" : "disabled"}>Approve</button>
+        <button class="decline">Decline</button>
+        <input class="why" placeholder="reason for declining (optional)">
+        <span class="result"></span>
+      </div>`;
+}
+
+// The deputy's and the business approver's card: the sentence, who asked,
+// how long is left, the change as before/after text, and the decision.
+// Hashes, ids and raw JSON sit under "technical details". The business
+// view offers Approve only for a hold the template could describe; a
+// deputy may open the details and release one it could not.
+function plainCard({ env, rc, item, required, progress, eligible, mine, bound, st, expires, summary }) {
+  const business = state.view === "business";
+  const okToSign = bound && st.ok && eligible && !mine && (summary.readable || !business);
+  const integrity = !bound ? '<div class="alert">The arguments shown are not the ones that would run. Do not approve; tell the engineer.</div>'
+                  : !st.ok ? '<div class="alert">The file has changed since this was requested. Do not approve; ask for it again.</div>' : "";
+  const change = changeBlock(item, st, business);
+  return `
+      <h2>${esc(summary.sentence)}${summary.irreversible ? ' <span class="badge bad">cannot be undone</span>' : ""}</h2>
+      ${summary.readable ? "" : `<div class="note warn">This request has no plain-language description. ${business ? "It is for an engineer to review: switch to the technical view or leave it." : "Open the technical details before deciding."}</div>`}
+      <p class="who">Asked by <strong>${esc(rc.principal)}</strong>${rc.on_behalf_of ? " for " + esc(rc.on_behalf_of) : ""} · <span class="left" data-exp="${expires.toISOString()}">${timeLeft(env.not_after)}</span> left to decide${required > 1 ? ` · <span class="progress">${progress}</span>` : ""}</p>
+      ${integrity}
+      ${change}
+      <details class="tech"><summary>technical details</summary>
+        <dl class="meta">
+          <dt>tool</dt><dd>${esc(rc.tool)}</dd>
+          <dt>target</dt><dd>${esc(env.target_url)}</dd>
+          <dt>policy</dt><dd>${esc(env.policy.policy_id)} <span class="badge">${esc(env.policy.policy_sha256.slice(0, 12))}</span></dd>
+          <dt>decision</dt><dd>${esc(env.decision_sha256.slice(0, 16))}&hellip;</dd>
+          <dt>expires</dt><dd>${expires.toLocaleTimeString()}</dd>
+          ${env.approval?.roles ? `<dt>routed to</dt><dd>role ${env.approval.roles.map(esc).join(" or ")}</dd>` : ""}
+          <dt>arguments</dt><dd>${bound ? "match the receipt" : '<span class="bad">do not match the receipt</span>'}</dd>
+        </dl>
+        <pre>${esc(JSON.stringify(item.args, null, 2))}</pre>
+      </details>
+      <div class="actions">
+        <button class="approve" ${okToSign ? "" : "disabled"}>Approve</button>
+        <button class="decline">Decline</button>
+        <input class="why" placeholder="reason for declining (optional)">
+        <span class="result"></span>
+      </div>`;
+}
+
+// The change in the plain views: the same verified text the technical
+// view diffs, shown as before/after lines; nothing is shown that did not
+// hash to the receipt's bound state.
+function changeBlock(item, check, business) {
+  const st = item.state, args = item.args || {};
+  if (!st) {
+    if (typeof args.content === "string") return `<details><summary>new content (${args.content.split("\n").length} lines)</summary><pre>${esc(args.content)}</pre></details>`;
+    return "";
+  }
+  if (check && !check.textOk) return '<div class="note">The current content could not be checked against the request; it is not shown.</div>';
+  if (typeof st.text === "string" && typeof args.content === "string") {
+    const rows = lineDiff(st.text, args.content);
+    const changed = rows.filter((r) => r.op !== " ");
+    if (!changed.length) return '<div class="note">The new content is identical to the current content.</div>';
+    const shown = business ? changed : rows;                // business: only the lines that change; deputy: in context
+    return `<div class="state"><div class="note">${business ? "Lines removed are struck through; lines added are green." : "Current content with the change marked."}</div><pre class="diff">${shown.map((r) => `<span class="d${r.op === "+" ? "add" : r.op === "-" ? "del" : "ctx"}">${r.op} ${esc(r.text)}</span>`).join("\n")}</pre></div>`;
+  }
+  if (st.sha256 === null || st.sha256 === undefined) {
+    if (typeof args.content === "string") return `<details><summary>the new file's content (${args.content.split("\n").length} lines)</summary><pre>${esc(args.content)}</pre></details>`;
+    return "";
+  }
+  if (typeof args.content === "string") return '<div class="note">The current content is not text or is too large to show here; the new content is under technical details.</div>';
+  if (typeof st.text === "string") return `<details><summary>what it is now</summary><pre>${esc(st.text)}</pre></details>`;
+  return "";
 }
 
 // ---- Activity: the issuer's witness, newest first, fetched incrementally (witness?after=<seq>) ----
 // An observe-mode week has nothing to approve; this is what the gate recorded meanwhile.
+// Technical view only: a business approver gets the holds, not the stream.
 async function activity() {
   if (state.witnessOff) return;
   let res;
@@ -228,7 +376,7 @@ async function activity() {
     if (err.status === 403) { state.witnessOff = true; log("the witness is shown to approvers only; this identity is not one"); }
     return;
   }
-  $("activity").style.display = "";
+  $("activity").style.display = state.view === "technical" ? "" : "none";
   const rows = $("activity-rows"), filter = $("activity-filter").value.trim().toLowerCase();
   for (const e of res.entries) {
     const d = describeEntry(e);
@@ -253,9 +401,9 @@ function describeEntry(e) {
   switch (e.event) {
     case "issued": outcome = e.covered ? "covered by an approved plan" : e.held ? "held for approval" : "allowed"; ref = e.decision_id || e.decision_sha256 || ""; break;
     case "refused": outcome = `refused: ${e.reason ?? "?"}`; break;
-    case "granted": outcome = "released" + (e.required > 1 ? ` (${e.collected} of ${e.required})` : ""); ref = e.approval_request_id || ""; break;
+    case "granted": outcome = "released" + (e.required > 1 ? ` (${e.collected} of ${e.required})` : "") + (e.roles ? ` as ${e.roles.join("/")}` : ""); ref = e.approval_request_id || ""; break;
     case "grant_refused": outcome = `release refused: ${e.reason ?? "?"}`; ref = e.approval_request_id || ""; break;
-    case "declined": outcome = "declined"; ref = e.approval_request_id || ""; break;
+    case "declined": outcome = "declined" + (e.why ? `: ${e.why}` : ""); ref = e.approval_request_id || ""; break;
     case "plan": outcome = e.held ? "held for approval" : "allowed"; ref = e.plan_id || ""; break;
     case "started": outcome = e.resumed ? "issuer restarted" : "witness began"; break;
     case "enrolled": outcome = e.replaced ? "approver key replaced" : "approver key enrolled"; break;
@@ -272,26 +420,39 @@ $("activity-filter").addEventListener("input", () => {
 
 // A scoped grant: one card for a bounded plan. The approver signs the
 // plan's hash; each later matching call runs without a card of its own.
+// Returns false when the plan is routed to someone else in a plain view.
 function renderPlan(item, ids) {
-  const plan = item.plan, id = plan.approval_request_id; ids.add(id);
-  if (state.seen.has(id)) return;
-  const card = document.createElement("article"); card.className = "hold"; card.dataset.id = id;
+  const plan = item.plan, id = plan.approval_request_id;
+  const eligible = (!plan.approval?.approvers || plan.approval.approvers.includes(state.keyId)) && item.eligible !== false;
+  if (state.view !== "technical" && !eligible) return false;
+  ids.add(id);
+  if (state.seen.has(id)) return true;
+  const card = document.createElement("article"); card.className = "hold" + (state.view === "technical" ? "" : " plain"); card.dataset.id = id;
   const expires = new Date(plan.not_after);
   const steps = plan.steps.map((s, i) => `<li><code>${esc(s.tool)}</code> ${s.match ? Object.entries(s.match).map(([k, v]) => esc(k) + " = " + esc(v)).join(", ") : "exact arguments " + esc(String(s.args_sha256).slice(0, 12)) + "&hellip;"}</li>`).join("");
-  card.innerHTML = `
-    <h2>Plan: ${esc(plan.note || "(no note)")} <span class="badge">${plan.steps.length} step(s)</span></h2>
+  const summary = item.summary || { sentence: `Plan: ${plan.note || "(no note)"}`, readable: true };
+  const meta = `
     <dl class="meta">
       <dt>requested by</dt><dd>${esc(plan.principal)}</dd>
       <dt>target</dt><dd>${esc(plan.target_url)}</dd>
       <dt>policy</dt><dd>${esc(plan.policy.policy_id)} <span class="badge">${esc(plan.policy.policy_sha256.slice(0, 12))}</span></dd>
-      <dt>expires</dt><dd>${expires.toLocaleTimeString()}</dd>
+      <dt>expires</dt><dd>${expires.toLocaleTimeString()} (<span class="left" data-exp="${expires.toISOString()}">${timeLeft(plan.not_after)}</span> left)</dd>
       ${(item.required || 1) > 1 ? `<dt>approvals</dt><dd>${item.collected} of ${item.required}</dd>` : ""}
-    </dl>
-    <div class="note">Approving this plan releases every later call that matches an unused step, without a card for each; you will not see their contents.</div>
-    <ol>${steps}</ol>
+      ${plan.approval?.roles ? `<dt>routed to</dt><dd>role ${plan.approval.roles.map(esc).join(" or ")}${item.eligible === false ? ' <span class="badge bad">not your role</span>' : ""}</dd>` : ""}
+    </dl>`;
+  const warning = '<div class="note">Approving this plan releases every later call that matches an unused step, without a card for each; you will not see their contents.</div>';
+  card.innerHTML = state.view === "technical" ? `
+    <h2>Plan: ${esc(plan.note || "(no note)")} <span class="badge">${plan.steps.length} step(s)</span></h2>
+    ${meta}${warning}<ol>${steps}</ol>` : `
+    <h2>${esc(summary.sentence)}</h2>
+    <p class="who">Asked by <strong>${esc(plan.principal)}</strong> · <span class="left" data-exp="${expires.toISOString()}">${timeLeft(plan.not_after)}</span> left to decide</p>
+    ${warning}
+    <details class="tech"><summary>the steps and technical details</summary>${meta}<ol>${steps}</ol></details>`;
+  card.innerHTML += `
     <div class="actions">
-      <button class="approve">Approve plan</button>
+      <button class="approve" ${eligible && (summary.readable || state.view !== "business") ? "" : "disabled"}>Approve plan</button>
       <button class="decline">Decline</button>
+      <input class="why" placeholder="reason for declining (optional)">
       <span class="result"></span>
     </div>`;
   card.querySelector(".approve").addEventListener("click", () => approve(card, { decision_sha256: plan.plan_sha256, approval_request_id: id }));
@@ -299,6 +460,7 @@ function renderPlan(item, ids) {
   $("holds").querySelector(".empty")?.remove();
   $("holds").prepend(card);
   state.seen.set(id, card);
+  return true;
 }
 
 async function approve(card, env) {
@@ -320,15 +482,26 @@ async function approve(card, env) {
       card.querySelector(".decline").disabled = false;
       return;
     }
-    card.querySelector(".result").innerHTML = res.accepted ? '<span class="ok">approved; the call is running</span>' : `<span class="bad">refused: ${esc(res.reason)}</span>`;
+    card.querySelector(".result").innerHTML = res.accepted ? '<span class="ok">approved; the call is running</span>' : `<span class="bad">refused: ${esc(reasonText(res.reason))}</span>`;
+    if (res.accepted && state.released !== null) { state.released++; status(); }
     card.dataset.done = "1"; setTimeout(() => { card.remove(); state.seen.delete(env.approval_request_id); }, 8000);
   } catch (err) { card.querySelector(".result").innerHTML = `<span class="bad">${esc(err.message)}</span>`; buttons.forEach((b) => b.disabled = false); }
 }
 
+function reasonText(code) {
+  if (state.view === "technical") return code;
+  return { REF_APPROVAL_ROLE_NOT_ELIGIBLE: "this request is routed to a different approver role",
+           REF_APPROVAL_APPROVER_NOT_ELIGIBLE: "this request names other approvers",
+           REF_ISSUER_SELF_APPROVAL: "you cannot release your own request",
+           REF_ISSUER_HOLD_EXPIRED: "the request expired before you decided",
+           REF_ISSUER_NOT_AN_APPROVER: "your sign-in no longer carries the approver role" }[code] || code;
+}
+
 async function decline(card, id) {
   card.querySelectorAll("button").forEach((b) => b.disabled = true);
+  const why = (card.querySelector(".why")?.value || "").trim().slice(0, 500);
   try {
-    await api("decline", { method: "POST", body: JSON.stringify({ approval_request_id: id }) });
+    await api("decline", { method: "POST", body: JSON.stringify({ approval_request_id: id, ...(why ? { reason: why } : {}) }) });
     card.querySelector(".result").innerHTML = '<span class="warn">declined; the assistant is told</span>';
     card.dataset.done = "1"; setTimeout(() => { card.remove(); state.seen.delete(id); }, 5000);
   } catch (err) { card.querySelector(".result").innerHTML = `<span class="bad">${esc(err.message)}</span>`; }

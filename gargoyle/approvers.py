@@ -234,8 +234,11 @@ class ApproverRegistry:
 
 def may_enroll(who: Dict[str, Any], *, role: str = DEFAULT_APPROVER_ROLE, groups: Optional[list] = None) -> bool:
     """Does an authenticated identity (identity.principal_from_token's
-    result) qualify as an approver: the app role, or any configured group."""
-    if role and role in (who.get("roles") or []):
+    result) qualify as an approver: the app role, a role under it
+    (`Approver.Deputy`, `Approver.Business`: the routing classes a rule's
+    `approver_roles` names; see gargoyle.holdtext), or any configured group."""
+    roles = who.get("roles") or []
+    if role and any(r == role or r.startswith(role + ".") for r in roles if isinstance(r, str)):
         return True
     if groups and any(g in (who.get("groups") or []) for g in groups):
         return True

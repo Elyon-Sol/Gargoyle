@@ -350,8 +350,10 @@ class Consumer:
                 return Verdict(False, REF_TARGET_NO_APPROVER_TRUST)
             # One grant or several: the receipt's own `approval` terms say
             # how many distinct approvers, and which, must have signed.
+            # The pinned issuer keys also verify the issuer's role attestation
+            # on a grant for a receipt whose `approval.roles` routes it.
             g = verify_grants(grants, envelope=envelope, approver_public_keys=approver_keys,
-                              now=now, clock_skew=self.clock_skew)
+                              now=now, clock_skew=self.clock_skew, issuer_public_keys=pinned_public_keys)
             if not g["accepted"]:
                 return Verdict(False, g["reason"])
             for one in g["grants"]:

@@ -137,11 +137,13 @@ def describe(entry: Any) -> Dict[str, str]:
     elif ev == "granted":
         n, k = entry.get("collected"), entry.get("required")
         outcome = "released" + (" (%s of %s)" % (n, k) if isinstance(k, int) and k > 1 else "")
+        if isinstance(entry.get("roles"), list) and entry["roles"]:
+            outcome += " as " + "/".join(str(r) for r in entry["roles"])
         ref = short("approval_request_id", 40)
     elif ev == "grant_refused":
         outcome, ref = "release refused: %s" % entry.get("reason", "?"), short("approval_request_id", 40)
     elif ev == "declined":
-        outcome, ref = "declined", short("approval_request_id", 40)
+        outcome, ref = "declined" + (": %s" % entry["why"] if isinstance(entry.get("why"), str) and entry["why"] else ""), short("approval_request_id", 40)
     elif ev == "plan":
         outcome, ref = "held for approval" if entry.get("held") else "allowed", short("plan_id", 40)
     elif ev == "started":

@@ -207,9 +207,15 @@ def valid_principal(principal: Any) -> bool:
 
 def valid_approval(approval: Any) -> bool:
     """True iff `approval` is a well-formed receipt `approval` member:
-    {"required": int >= 1, "approvers": [non-empty unique strings] optional}."""
-    if not isinstance(approval, dict) or not set(approval) <= {"required", "approvers", "plannable"} or "required" not in approval:
+    {"required": int >= 1, "approvers": [non-empty unique strings] optional,
+    "roles": [non-empty unique strings] optional, "plannable": bool optional}."""
+    if (not isinstance(approval, dict) or not set(approval) <= {"required", "approvers", "plannable", "roles"}
+            or "required" not in approval):
         return False
+    if "roles" in approval:
+        r = approval["roles"]
+        if not isinstance(r, list) or not r or not all(isinstance(x, str) and x for x in r) or len(set(r)) != len(r):
+            return False
     if "plannable" in approval and not isinstance(approval["plannable"], bool):
         return False
     required = approval["required"]
@@ -322,6 +328,8 @@ def build_envelope(
         envelope["approval"] = {"required": approval["required"]}
         if "approvers" in approval:
             envelope["approval"]["approvers"] = sorted(approval["approvers"])
+        if "roles" in approval:
+            envelope["approval"]["roles"] = sorted(approval["roles"])
         if approval.get("plannable") is False:
             envelope["approval"]["plannable"] = False
     envelope["decision_sha256"] = decision_sha256_of(envelope)
@@ -329,12 +337,14 @@ def build_envelope(
 
 
 def approval_terms(envelope: Dict[str, Any]) -> Dict[str, Any]:
-    """{"required": n, "approvers": [...] or None} for a flagged receipt:
-    the receipt's `approval` member, or the default of one from anyone."""
+    """{"required": n, "approvers": [...] or None, "roles": [...] or None,
+    "plannable": bool} for a flagged receipt: the receipt's `approval`
+    member, or the default of one from anyone."""
     a = envelope.get("approval")
     if isinstance(a, dict):
-        return {"required": a["required"], "approvers": a.get("approvers"), "plannable": a.get("plannable", True)}
-    return {"required": 1, "approvers": None, "plannable": True}
+        return {"required": a["required"], "approvers": a.get("approvers"), "roles": a.get("roles"),
+                "plannable": a.get("plannable", True)}
+    return {"required": 1, "approvers": None, "roles": None, "plannable": True}
 
 
 def reassert(

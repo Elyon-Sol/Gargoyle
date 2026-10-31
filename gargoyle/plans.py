@@ -37,7 +37,7 @@ import hashlib
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
-from gargoyle.approval import as_grant_list, verify_grant
+from gargoyle.approval import as_grant_list, verify_grant, verify_role_attestation
 from gargoyle.globs import glob_match
 from gargoyle.envelope import approval_terms, args_sha256, canonical_json, valid_approval
 from gargoyle.verifier import not_after_valid
@@ -87,7 +87,7 @@ def build_plan(*, plan_id: str, approval_request_id: str, target_url: str, princ
     if not_after.tzinfo is None:
         raise ValueError("not_after must be timezone-aware")
     if approval is not None and not valid_approval(approval):
-        raise ValueError("approval must be {'required': int >= 1, 'approvers'?: [...]}")
+        raise ValueError("approval must be {'required': int >= 1, 'approvers'?: [...], 'roles'?: [...]}")
     plan: Dict[str, Any] = {
         "plan_version": PLAN_VERSION, "plan_id": plan_id, "approval_request_id": approval_request_id,
         "target_url": target_url, "principal": principal,
@@ -95,7 +95,8 @@ def build_plan(*, plan_id: str, approval_request_id: str, target_url: str, princ
         "steps": [dict(s) for s in steps], "note": note, "not_after": not_after.isoformat(),
     }
     if approval is not None:
-        plan["approval"] = {"required": approval["required"], **({"approvers": sorted(approval["approvers"])} if "approvers" in approval else {})}
+        plan["approval"] = {"required": approval["required"], **({"approvers": sorted(approval["approvers"])} if "approvers" in approval else {}),
+                            **({"roles": sorted(approval["roles"])} if "roles" in approval else {})}
     plan["plan_sha256"] = plan_sha256_of(plan)
     return plan
 
@@ -207,6 +208,11 @@ def verify_plan_release(release: Any, envelope: Dict[str, Any], call: Dict[str, 
         kid = grant["approver_key_id"]
         if kid in seen or (terms.get("approvers") and kid not in terms["approvers"]):
             return {"accepted": False, "reason": REF_PLAN_GRANTS}
+        if terms.get("roles"):
+            r = verify_role_attestation(grant, required_roles=terms["roles"], issuer_public_keys=issuer_public_keys,
+                                        gate_key_id=plan.get("issuer_key_id"))
+            if not r["accepted"]:
+                return {"accepted": False, "reason": r["reason"]}
         seen.append(kid)
     if len(seen) < terms.get("required", 1):
         return {"accepted": False, "reason": REF_PLAN_GRANTS}
@@ -215,6 +221,16 @@ def verify_plan_release(release: Any, envelope: Dict[str, Any], call: Dict[str, 
     # approved by one junior never releases a two-signature finance write.
     if not grants_satisfy(env_terms, seen):
         return {"accepted": False, "reason": REF_PLAN_TERMS_WEAKER}
+    if env_terms.get("roles"):
+        # A receipt routed to a role is released by a plan only through
+        # grants the issuer attested for that role (checked above when the
+        # plan names roles; here against the receipt's own, which may differ).
+        for kid in seen:
+            att = next((g for g in as_grant_list(release.get("grants")) if g.get("approver_key_id") == kid), None)
+            r = verify_role_attestation(att, required_roles=env_terms["roles"], issuer_public_keys=issuer_public_keys,
+                                        gate_key_id=plan.get("issuer_key_id"))
+            if not r["accepted"]:
+                return {"accepted": False, "reason": REF_PLAN_TERMS_WEAKER}
     return {"accepted": True, "reason": ACCEPT_PLAN_RELEASE, "step": i}
 
 

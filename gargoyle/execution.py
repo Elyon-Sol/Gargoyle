@@ -228,7 +228,8 @@ def verify_chain(
             steps.append(("approval", REF_EXEC_GRANT_MISSING))
             return {"accepted": False, "reason": REF_EXEC_GRANT_MISSING, "steps": steps}
         else:
-            g = verify_grants(grant, envelope=envelope, approver_public_keys=approver_public_keys or {}, now=executed_at)
+            g = verify_grants(grant, envelope=envelope, approver_public_keys=approver_public_keys or {}, now=executed_at,
+                              issuer_public_keys=issuer_public_keys)
         steps.append(("approval", g["reason"]))
         if not g["accepted"]:
             return {"accepted": False, "reason": g["reason"], "steps": steps}

@@ -144,10 +144,22 @@ In Entra admin center:
    **Create app role**: display name `Approver`, allowed member types
    **Users/Groups**, value `Approver`, description `May release held
    Gargoyle calls`, enabled. **Apply**.
+   For routed approvals (rules with `"approver_roles"`), create two more
+   app roles the same way: value `Approver.Deputy` (display name
+   `Approver (deputy)`, description `May release held Gargoyle calls
+   routed to deputies; sees the plain-language view`) and value
+   `Approver.Business` (display name `Approver (business)`, description
+   `May release routine content changes in plain language`). Any role
+   whose value starts with `Approver.` counts as an approver for sign-in
+   and enrolment; which holds it may release is the rule's
+   `approver_roles` list, and a rule that should admit engineers too
+   names `Approver` alongside.
 2. **Enterprise applications**, open **Gargoyle-Issuer-API**, **Users and
    groups**, **Add user/group**: pick the approvers (or an approvers
-   group), role **Approver**, **Assign**. The role lands in their access
-   token's `roles` claim.
+   group), role **Approver** (or **Approver (deputy)** / **Approver
+   (business)**), **Assign**. The role lands in their access token's
+   `roles` claim and chooses the console's default view: technical for
+   `Approver`, the plain-language views for the other two.
 3. **App registrations**, open **User-Client-Flow**, **Authentication**,
    **Add a platform**, **Single-page application**, redirect URI
    `https://<issuer host>/approve` (the PoC: `https://192.168.56.101:8443/approve`).
