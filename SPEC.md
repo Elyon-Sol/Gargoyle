@@ -519,6 +519,20 @@ frees a slot. The cap keeps one runaway client from filling every
 approver's queue and the hold store. It is a service limit, not part of
 the receipt.
 
+A decline carries the approver's reason to the submitter. `POST /decline`
+takes an optional `reason`; `GET /grants/{id}` returns it as `why` beside
+`declined: true`; the reference middleware appends it to the refusal the
+model reads (`refused: REF_TARGET_APPROVAL_DECLINED (the approver said:
+...)`). The service also remembers a human's declines by (principal, tool,
+normalized path) for `GARGOYLE_DECLINE_WINDOW_HOURS` (default 24): once
+`GARGOYLE_DECLINE_LIMIT` of them (default 2; 0 disables) stand inside the
+window, a further held call for the same path is answered
+`REF_ISSUER_DECLINED_RECENTLY` with the last reason given, and no card is
+opened. A gate withdrawing its own timed-out hold is not remembered. The
+middleware's success line says which yes it got: `executed write_file
+(allowed by rule and recorded; no approver saw it)` or `(released by an
+approver)`, so a client cannot report an observed call as approved.
+
 ### 8.4 The optional `emilia` member
 
 A grant MAY carry an `emilia` member: `{"context": <EMILIA Authorization
