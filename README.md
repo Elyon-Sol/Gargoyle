@@ -349,7 +349,9 @@ Same issuer, receipts, holds, approvers and evidence log as the MCP gate;
 the approver sees the shell command or the file content, a held Write is
 bound to the file's state, the refusal reaches Claude by name. Deploy the
 hook from managed settings for a fleet. It covers Claude Code only, and it
-is evidence rather than containment where the user owns the workstation.
+is evidence rather than containment where the user owns the workstation:
+a line typed with the `!` prefix runs in the user's shell with no hook at
+all (verified 2026-10-31), and no setting changes that.
 [docs/claude-code-hook.md](docs/claude-code-hook.md) has the setup and the
 limits.
 
@@ -361,8 +363,9 @@ folder without the gate, Claude Code's own Write and Bash with no hook, a
 project `.mcp.json` anyone who writes the folder can extend, a managed MCP
 file that is not exclusive, a share that exports the folder, a world-writable
 folder, a symlink that lands outside it, a gated file changed with no
-evidence entry. None of these is an attack; all of them are what an audit of
-the evidence log cannot see. The gate looks for them itself (`gargoyle.sidedoors`):
+evidence entry, a script written through the gate that a person then runs
+outside it, and Claude Code's `!` prefix. None of these is an attack; all of
+them are what an audit of the evidence log cannot see. The gate looks for them itself (`gargoyle.sidedoors`):
 
     gargoyle sidedoors --env middleware.env            # list them now; exit 1 when any are found
     gargoyle sidedoors --env middleware.env --report   # also write audit.sidedoors.json and tell the issuer

@@ -95,6 +95,13 @@ evidence log verified: 4 entries, 3 honored, 1 refused, 0 failed.
 
 - Claude Desktop, claude.ai and hosted connectors have no hook. This
   covers Claude Code.
+- A line the user types with the `!` prefix runs in the user's own shell.
+  No hook fires for it and no `permissions.deny` rule applies (verified on
+  a hooked host, 2026-10-31; the official docs do not state it). The model
+  can draft such a line and the person runs it; nothing is witnessed. No
+  setting closes this. Discovery reports it on every Claude Code host
+  (`CLIENT_SHELL_PASSTHROUGH`) so the record says so, and the user
+  agreement should too.
 - The shell and the files are on the workstation. A user with the rights
   to remove the hook can act without it. Managed settings with
   `allowManagedHooksOnly` make that an administrator's act, and

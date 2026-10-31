@@ -75,12 +75,14 @@ def test_claude_codes_own_tools_are_a_side_door_until_a_hook_or_a_managed_deny_c
     assert "Write, Edit, MultiEdit, NotebookEdit, Bash" in f[0]["detail"]
     hook = {"hooks": {"PreToolUse": [{"matcher": "", "hooks": [{"type": "command", "command": "python -m gargoyle hook --env x"}]}]}}
     home, managed = home_with(tmp_path, settings=hook)
-    assert kinds(discover(root, home, managed)) == [sd.HOOK_REMOVABLE]      # the user can edit it away
+    assert kinds(discover(root, home, managed)) == [sd.CLIENT_SHELL_PASSTHROUGH, sd.HOOK_REMOVABLE]   # the user can edit it away
     home, managed = home_with(tmp_path, settings=hook, managed_settings=dict(hook, allowManagedHooksOnly=True))
-    assert kinds(discover(root, home, managed)) == []
+    f = discover(root, home, managed)
+    assert kinds(f) == [sd.CLIENT_SHELL_PASSTHROUGH]            # the standing note: no setting closes `!`
+    assert "no hook fires" in f[0]["detail"] and "user agreement" in f[0]["remedy"]
     home, managed = home_with(tmp_path, managed_settings={"permissions": {"deny": ["Write", "Edit", "MultiEdit", "NotebookEdit"]}})
     f = discover(root, home, managed)
-    assert kinds(f) == [sd.CLIENT_TOOLS_UNGATED] and f[0]["detail"].endswith("Bash run with no gargoyle hook")
+    assert kinds(f) == [sd.CLIENT_SHELL_PASSTHROUGH, sd.CLIENT_TOOLS_UNGATED] and f[0]["detail"].endswith("Bash run with no gargoyle hook")
 
 
 def test_project_configs_and_a_non_exclusive_managed_file_are_named(tmp_path):
@@ -91,14 +93,31 @@ def test_project_configs_and_a_non_exclusive_managed_file_are_named(tmp_path):
                               managed_mcp={"mcpServers": {"gate": {"command": "python", "args": ["-m", "gargoyle.mcp_server"]}}},
                               managed_settings={"permissions": {"deny": ["Write", "Edit", "MultiEdit", "NotebookEdit", "Bash"]}})
     f = discover(root, home, managed)
-    assert kinds(f) == [sd.MANAGED_NOT_EXCLUSIVE, sd.PROJECT_MCP_CONFIG, sd.UNGATED_MCP_SERVER]
+    assert kinds(f) == [sd.CLIENT_SHELL_PASSTHROUGH, sd.MANAGED_NOT_EXCLUSIVE, sd.PROJECT_MCP_CONFIG, sd.UNGATED_MCP_SERVER]
     proj = next(x for x in f if x["kind"] == sd.PROJECT_MCP_CONFIG)
     assert proj["path"] == str(root / ".mcp.json") and "1 ungated server(s): extra" in proj["detail"]
     assert "(project %s)" % root in next(x for x in f if x["kind"] == sd.UNGATED_MCP_SERVER)["detail"]
     home, managed = home_with(tmp_path, managed_mcp={"mcpServers": {}}, managed_settings={"allowManagedMcpServersOnly": True,
                               "permissions": {"deny": ["Write", "Edit", "MultiEdit", "NotebookEdit", "Bash"]}})
     (root / ".mcp.json").unlink()
-    assert kinds(discover(root, home, managed)) == []
+    assert kinds(discover(root, home, managed)) == [sd.CLIENT_SHELL_PASSTHROUGH]     # Claude Code is installed here; `!` stays
+
+
+def test_a_script_written_through_the_gate_is_a_side_door_even_when_the_rules_allowed_it(tmp_path):
+    root = tmp_path / "share"; root.mkdir()
+    home, managed = home_with(tmp_path, managed_settings={"permissions": {"deny": ["Write", "Edit", "MultiEdit", "NotebookEdit", "Bash"]}})
+    ev = [{"kind": "honored", "tool": "write_file", "ref": str(root / "gate-info.ps1"), "at": "2026-10-31T22:20:19+00:00",
+           "principal": "claude@hearthcorp.com", "reason": "REASSERTED_AND_BOUND", "receipt": {"requires_approval": False}, "grant": None},
+          {"kind": "honored", "tool": "write_file", "ref": str(root / "notes.md"), "at": "2026-10-31T22:21:00+00:00", "principal": "claude@hearthcorp.com"},
+          {"kind": "refused", "tool": "write_file", "ref": str(root / "evil.bat"), "at": "2026-10-31T22:22:00+00:00", "principal": "claude@hearthcorp.com"},
+          {"kind": "honored", "tool": "Write", "ref": str(root / "run.sh"), "at": "2026-10-31T22:23:00+00:00", "principal": "sysops@hearthcorp.com",
+           "receipt": {"requires_approval": True}, "grant": {"g": 1}}]
+    f = [x for x in discover(root, home, managed, evidence=ev) if x["kind"] == sd.EXECUTABLE_WRITTEN]
+    assert sorted(x["path"] for x in f) == [str(root / "gate-info.ps1"), str(root / "run.sh")]
+    ps1 = next(x for x in f if x["path"].endswith(".ps1"))
+    assert ps1["detail"] == "ps1 file written through the gate at 2026-10-31T22:20:19 by claude@hearthcorp.com (allowed by rule; no approver saw it)"
+    assert "released by an approver" in next(x for x in f if x["path"].endswith(".sh"))["detail"]
+    assert '"action": "hold"' in ps1["remedy"]
 
 
 @pytest.mark.skipif(not POSIX, reason="POSIX modes, symlinks and smb.conf")
@@ -118,7 +137,7 @@ def test_the_tree_itself_world_writable_folders_symlinks_out_and_shares(tmp_path
     finally:
         sd.client_config_paths = orig
     by = {x["kind"]: x for x in f}
-    assert kinds(f) == [sd.SMB_SHARE, sd.SYMLINK_OUT, sd.WORLD_WRITABLE]
+    assert kinds(f) == [sd.CLIENT_SHELL_PASSTHROUGH, sd.SMB_SHARE, sd.SYMLINK_OUT, sd.WORLD_WRITABLE]   # managed settings present: Claude Code is here
     assert by[sd.SYMLINK_OUT]["path"] == str(root / "inside" / "link.txt")   # the in-tree link is fine
     assert by[sd.WORLD_WRITABLE]["path"] == str(root / "open")
     assert by[sd.SMB_SHARE]["detail"] == "share 'clients' exports %s" % root
