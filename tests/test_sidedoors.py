@@ -131,7 +131,7 @@ def test_windows_shares_come_from_powershell_through_the_injected_runner():
     def run(argv, **kw):
         calls.append(argv); return R()
     shares = sd._shares("Windows", "/nonexistent", run)
-    assert shares == [{"name": "Clients", "path": r"C:\gargoyle-share"}, {"name": "ADMIN$", "path": r"C:\Windows"}]
+    assert shares == [{"name": "Clients", "path": r"C:\gargoyle-share"}]        # administrative shares are not reported
     assert calls[0][0] == "powershell" and "Get-SmbShare" in calls[0][-1]
     assert sd._touches(r"C:\gargoyle-share", r"c:/gargoyle-share/routed") and not sd._touches(r"C:\Windows", r"C:\gargoyle-share")
     def boom(argv, **kw): raise OSError("no powershell")
