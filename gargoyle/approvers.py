@@ -20,6 +20,7 @@ duties still holds at the key level: an approver's key is never the
 issuer's, and the issuer never sees a private key.
 """
 
+import hashlib
 import json
 import os
 import stat
@@ -54,7 +55,7 @@ class ApproverRegistry:
         self._approvers: Dict[str, Dict[str, Any]] = {}
         self._revoked: Dict[str, Dict[str, Any]] = {}      # former approvers, kept so old grants still verify in audits
         self._history: Dict[str, List[Dict[str, Any]]] = {}  # every key each UPN held and how it ended (replaced, revoked)
-        self._mtime: Optional[float] = None
+        self._stamp: Optional[str] = None       # sha256 of the file as last read
         self._load()
 
     def _load(self) -> None:
@@ -78,18 +79,25 @@ class ApproverRegistry:
                 history.setdefault(upn, []).append({**{k: v for k, v in e.items() if k not in ("revoked_at", "revoked_by")},
                                                     "ended_at": e.get("revoked_at"), "ended_by": e.get("revoked_by"), "reason": "revoked"})
         self._approvers, self._revoked, self._history = approvers, revoked, history
-        self._mtime = self.path.stat().st_mtime
+        self._stamp = self._file_stamp()
+
+    def _file_stamp(self) -> Optional[str]:
+        """What the file holds now, as a digest. Not its mtime: two writes
+        inside one timestamp tick (a revoke on the host right after an
+        enrolment; seen on Windows CI, 2026-10-31) look identical by mtime
+        and the second one would go unread. The file is a few KB."""
+        try:
+            return hashlib.sha256(self.path.read_bytes()).hexdigest()
+        except OSError:
+            return None
 
     def _refresh(self) -> None:
         """Re-read the file when something else wrote it: `gargoyle approvers
         revoke` on the issuer's host takes effect without a restart."""
         if self.path is None:
             return
-        try:
-            mtime = self.path.stat().st_mtime
-        except OSError:
-            return
-        if mtime != self._mtime:
+        stamp = self._file_stamp()
+        if stamp is not None and stamp != self._stamp:
             self._load()
 
     def _save(self) -> None:
@@ -106,7 +114,7 @@ class ApproverRegistry:
             os.chmod(self.path, stat.S_IRUSR | stat.S_IWUSR)
         except OSError:
             pass
-        self._mtime = self.path.stat().st_mtime
+        self._stamp = self._file_stamp()
 
     def enroll(self, upn: str, public_key_hex: str, *, enrolled_by: Optional[str] = None,
                now: Optional[datetime] = None, oid: Optional[str] = None, tid: Optional[str] = None) -> Dict[str, Any]:
