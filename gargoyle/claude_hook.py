@@ -230,6 +230,8 @@ def decide(event: Dict[str, Any], state: Any, *, final: bool = False, now: Optio
             envelope = gate.get("envelope")
             detail = ("hold %s" % envelope["approval_request_id"]
                       if isinstance(envelope, dict) and envelope.get("approval_request_id") else "")
+            if gate.get("why"):
+                detail = (detail + "; " if detail else "") + "the approver said: %s" % str(gate["why"])[:500]
             return _deny(str(gate["reason"]), detail)
         if pending is not None and tool_use_id:
             pending.put(tool_use_id, gate, params, now)
@@ -237,7 +239,9 @@ def decide(event: Dict[str, Any], state: Any, *, final: bool = False, now: Optio
             _record(state, HONORED, gate, params, _attest(state, gate["envelope"], None, params))
         envelope = gate.get("envelope")
         decision_id = envelope.get("decision_id") if isinstance(envelope, dict) else None
-        note = "gargoyle: %s%s" % (gate["reason"], (", receipt %s" % decision_id) if decision_id else "")
+        how = ("released by an approver" if (gate.get("grant") is not None or (isinstance(envelope, dict) and envelope.get("requires_approval") is True))
+               else "allowed by rule and recorded; no approver saw it")
+        note = "gargoyle: %s%s; %s" % (gate["reason"], (", receipt %s" % decision_id) if decision_id else "", how)
         return _allow(final, note)
 
     if kind == PERMISSION_DENIED:

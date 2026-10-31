@@ -10,6 +10,12 @@ share that exports the folder, a world-writable folder, a symlink inside
 the folder that lands outside it, and a gated file changed with no
 evidence entry (gargoyle.reconcile.check_tree). None of these is an
 attack; all of them are what an audit of the evidence log cannot see.
+Two are not configuration at all: a script written through an allowed path
+becomes something a person runs outside the gate (EXECUTABLE_WRITTEN), and
+Claude Code's `!` prefix runs a line in the user's own shell with no hook
+and no deny rule (CLIENT_SHELL_PASSTHROUGH; verified on a hooked host,
+2026-10-31). Those two are reported so the record says what the rules
+cannot reach; the remedy for them is a rule and an agreement, not a setting.
 
 `discover()` enumerates them from the client configuration files on this
 host and the state of the tree. The gate runs it at startup and once a
@@ -43,6 +49,11 @@ WORLD_WRITABLE = "WORLD_WRITABLE"                # the root (or a folder in it) 
 SMB_SHARE = "SMB_SHARE"                          # a share exports the root or a parent of it
 SYMLINK_OUT = "SYMLINK_OUT"                      # a symlink inside the root points outside it
 UNATTRIBUTED_CHANGE = "UNATTRIBUTED_CHANGE"      # a gated file is not as the gate left it (reconcile.check_tree)
+EXECUTABLE_WRITTEN = "EXECUTABLE_WRITTEN"        # a script or binary was written through the gate: content that runs outside it
+CLIENT_SHELL_PASSTHROUGH = "CLIENT_SHELL_PASSTHROUGH"  # Claude Code's `!` prefix runs a line in the user's shell with no hook (standing)
+
+SCRIPT_SUFFIXES = (".ps1", ".psm1", ".bat", ".cmd", ".vbs", ".js", ".sh", ".py", ".exe", ".msi", ".dll", ".jar")
+WRITING_TOOLS = ("write_file", "edit_file", "move_file", "Write", "Edit", "MultiEdit", "NotebookEdit")
 
 DISCOVERY_VERSION = "gargoyle-sidedoors/1"
 REPORT_SUFFIX = ".sidedoors.json"
@@ -241,6 +252,13 @@ def discover(root: str, *, home: Optional[str] = None, system: Optional[str] = N
     elif hook_files and not managed_hook:
         findings.append(_finding(HOOK_REMOVABLE, hook_files[0], "the gargoyle hook is in a settings file the user can edit",
                                  "move the hooks block to managed-settings.json with allowManagedHooksOnly"))
+    claude_code_here = any(f.exists() for f in paths["code_user"] + paths["code_settings"]) or hook_files or managed_hook \
+        or any((d / "managed-settings.json").exists() for d in paths["managed_dir"])
+    if claude_code_here:
+        findings.append(_finding(CLIENT_SHELL_PASSTHROUGH, str(paths["code_user"][0]) if paths["code_user"] else str(home_p / ".claude.json"),
+                                 "Claude Code's `!` prefix runs a line in the user's shell: no hook fires and no deny rule applies "
+                                 "(verified 2026-10-31); the model can draft the line and the person runs it",
+                                 "no setting closes it: name it in the user agreement; the gate is evidence, not containment, for the workstation's own user"))
 
     # 3. The tree itself: who else can write it, and where writes inside it land.
     rootp = Path(root)
@@ -285,11 +303,30 @@ def discover(root: str, *, home: Optional[str] = None, system: Optional[str] = N
                                      "remove the share, or make it read-only for everyone but the gate's account"))
 
     # 5. Gated files not as the gate left them (the evidence log knows their last state).
-    if evidence is not None and rootp.is_dir():
-        from gargoyle.reconcile import check_tree
-        for f in check_tree(list(evidence), root)["findings"]:
-            findings.append(_finding(UNATTRIBUTED_CHANGE, f["path"], "changed outside the gate%s" % (" (missing)" if f.get("missing") else ""),
-                                     "find the writer: a side door above, or a person at the console; `gargoyle audit --check-tree` lists these"))
+    if evidence is not None:
+        entries = list(evidence)
+        if rootp.is_dir():
+            from gargoyle.reconcile import check_tree
+            for f in check_tree(entries, root)["findings"]:
+                findings.append(_finding(UNATTRIBUTED_CHANGE, f["path"], "changed outside the gate%s" % (" (missing)" if f.get("missing") else ""),
+                                         "find the writer: a side door above, or a person at the console; `gargoyle audit --check-tree` lists these"))
+        # 6. Scripts and binaries the gate let through: a .ps1 in the share is
+        # run by a person later, outside any receipt. The latest write per file.
+        scripts: Dict[str, Dict[str, Any]] = {}
+        for e in entries:
+            if not isinstance(e, dict) or e.get("kind") != "honored" or e.get("tool") not in WRITING_TOOLS:
+                continue
+            ref = e.get("ref")
+            if not isinstance(ref, str) or not ref.lower().endswith(SCRIPT_SUFFIXES):
+                continue
+            receipt = e.get("receipt") if isinstance(e.get("receipt"), dict) else {}
+            how = "released by an approver" if (e.get("grant") is not None or receipt.get("requires_approval") is True) \
+                else "allowed by rule; no approver saw it"
+            scripts[_norm(ref)] = _finding(EXECUTABLE_WRITTEN, ref, "%s written through the gate at %s by %s (%s)"
+                                           % (ref.rsplit(".", 1)[-1] + " file", str(e.get("at", ""))[:19], e.get("principal", "?"), how),
+                                           'hold scripts even in observe mode: {"tools": ["write_file", "edit_file", "move_file"], '
+                                           '"args": {"path": "*.ps1"}, "action": "hold"} (one rule per extension), and treat the share as not a launch folder')
+        findings.extend(scripts.values())
     return findings
 
 

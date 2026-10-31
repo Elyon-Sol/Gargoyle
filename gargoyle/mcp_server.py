@@ -174,7 +174,10 @@ class IssuerClient:
             sys.stderr.write("gargoyle: issuer unreachable at %s: %s: %s\n" % (self.url, type(exc).__name__, str(exc)[:300]))
             return {"envelope": None, "reason": REF_TARGET_ISSUER_UNAVAILABLE}
         if not body.get("issued"):
-            return {"envelope": None, "reason": body.get("reason") or REF_TARGET_ISSUER_UNAVAILABLE}
+            out = {"envelope": None, "reason": body.get("reason") or REF_TARGET_ISSUER_UNAVAILABLE}
+            if isinstance(body.get("why"), str) and body["why"]:
+                out["why"] = body["why"]            # the approver's last words on this very file (cooldown)
+            return out
         return {"envelope": body.get("envelope"), "reason": None}
 
     def plan(self, target_url: str, steps: List[Dict[str, Any]], note: str) -> Dict[str, Any]:
@@ -239,7 +242,10 @@ class IssuerClient:
             if isinstance(body.get("grants"), list) and body["grants"]:
                 return {"grant": body["grants"], "reason": None}
             if body.get("declined") is True:
-                return {"grant": None, "reason": REF_TARGET_APPROVAL_DECLINED}
+                out = {"grant": None, "reason": REF_TARGET_APPROVAL_DECLINED}
+                if isinstance(body.get("why"), str) and body["why"]:
+                    out["why"] = body["why"]        # relayed to the model: a decline with its reason is not re-asked
+                return out
             if body and not body.get("pending", True):
                 return {"grant": None, "reason": REF_TARGET_APPROVAL_TIMEOUT}
             if time.monotonic() >= deadline:
@@ -486,10 +492,15 @@ def _gate(state: ServerState, params: Dict[str, Any]) -> Dict[str, Any]:
     this server obtained them."""
     gate_ref: Dict[str, Any] = {"ref": None}
 
-    def refused(reason, envelope=None):
+    def refused(reason, envelope=None, why=None):
         # A refusal keeps the receipt when there was one (a hold the human
         # declined or let lapse), so the evidence log can show what was asked.
-        return {"executed": False, "reason": reason, "envelope": envelope, "grant": None, "self_issued": False, "ref": gate_ref["ref"]}
+        # `why` is the approver's own words, when they gave any: the model
+        # reads them instead of guessing at the rule.
+        out = {"executed": False, "reason": reason, "envelope": envelope, "grant": None, "self_issued": False, "ref": gate_ref["ref"]}
+        if why:
+            out["why"] = why
+        return out
     if state.consumer is None:
         return refused(REF_TARGET_NOT_CONFIGURED)
 
@@ -526,7 +537,7 @@ def _gate(state: ServerState, params: Dict[str, Any]) -> Dict[str, Any]:
         res = state.issuer_client.issue(state.config["target_id"], name, args, state=probed[0] if probed else None,
                                         plan_id=release["plan"]["plan_id"] if release else None)
         if res["envelope"] is None:
-            return refused(res["reason"])
+            return refused(res["reason"], why=res.get("why"))
         envelope, self_issued = res["envelope"], True
         if isinstance(envelope, dict) and envelope.get("requires_approval") is True and grant is None:
             # A scoped grant the human already signed may cover this call;
@@ -540,7 +551,7 @@ def _gate(state: ServerState, params: Dict[str, Any]) -> Dict[str, Any]:
                         # the card down, or an approval minutes later would
                         # read as a change that happened.
                         state.issuer_client.decline(arid)
-                    return refused(waited["reason"], envelope)
+                    return refused(waited["reason"], envelope, why=waited.get("why"))
                 grant = waited["grant"]
             else:
                 grant = release
@@ -589,6 +600,26 @@ def _gate(state: ServerState, params: Dict[str, Any]) -> Dict[str, Any]:
     state.executed.append({"tool": name, "args": args})  # THE side effect
     return {"executed": True, "reason": verdict.reason, "envelope": envelope, "grant": grant,
             "self_issued": self_issued, "ref": gate_ref["ref"]}
+
+
+def _why_text(why: Any) -> str:
+    return (" (the approver said: %s)" % str(why)[:500]) if isinstance(why, str) and why else ""
+
+
+def outcome_text(gate: Dict[str, Any], name: Any) -> str:
+    """The one line the model reads about a decision. It says what kind of
+    yes it got: a call allowed by rule was recorded and seen by no one, and
+    must not be reported as approved; a released call was. A refusal
+    carries the approver's reason when one was given, so the model does not
+    guess at the rule or ask again."""
+    if not gate.get("executed"):
+        return "refused: %s%s" % (gate.get("reason"), _why_text(gate.get("why")))
+    env = gate.get("envelope") if isinstance(gate.get("envelope"), dict) else {}
+    if gate.get("grant") is not None or env.get("requires_approval") is True:
+        how = "released by an approver"
+    else:
+        how = "allowed by rule and recorded; no approver saw it"
+    return "executed %s (%s)" % (name, how)
 
 
 _GATE_FILE_GLOBS = ("*.env", "*.json", "*.jsonl", "*.jsonl.lock", "*.sqlite", "*.sqlite-*", "snapshots")
@@ -680,7 +711,7 @@ def _handle_plan(state: ServerState, params: Dict[str, Any]) -> Dict[str, Any]:
     if res["held"]:
         waited = state.issuer_client.wait_for_grant(plan["approval_request_id"])
         if waited["grant"] is None:
-            return {"content": [{"type": "text", "text": "refused: " + str(waited["reason"])}], "isError": True,
+            return {"content": [{"type": "text", "text": "refused: %s%s" % (waited["reason"], _why_text(waited.get("why")))}], "isError": True,
                     "_meta": {EXECUTED_META_KEY: False, REASON_META_KEY: waited["reason"]}}
         grants = waited["grant"] if isinstance(waited["grant"], list) else [waited["grant"]]
     state.plans.append({"plan": plan, "grants": grants, "consumed": set()})
@@ -867,7 +898,7 @@ def handle_message(state: ServerState, msg: Dict[str, Any]) -> Optional[Dict[str
             return reply
         if not executed:
             _record(state, REFUSED, gate, params)
-        text = ("executed %s" % params.get("name")) if executed else ("refused: %s" % reason)
+        text = outcome_text(gate, params.get("name"))
         result = {
             "content": [{"type": "text", "text": text}],
             "isError": (not executed),

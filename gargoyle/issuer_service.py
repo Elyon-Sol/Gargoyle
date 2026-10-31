@@ -40,12 +40,13 @@ grant that would be refused downstream; the executor checks and single-uses
 it again when the call runs. The pending set is in memory: one instance.
 """
 
+import hashlib
 import json
 import os
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional
+from typing import List, Any, Callable, Dict, Optional
 
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import Response
@@ -86,8 +87,12 @@ ENV_RECEIPT_TTL = "GARGOYLE_RECEIPT_TTL_SECONDS"
 ENV_CONSOLE_CLIENT_ID = "GARGOYLE_ENTRA_CLIENT_ID"   # the public client app the console signs in with (User-Client-Flow)
 ENV_CONSOLE_SCOPE = "GARGOYLE_ENTRA_SCOPE"           # default api://<last audience>/access
 ENV_MAX_OPEN_HOLDS = "GARGOYLE_MAX_OPEN_HOLDS"       # holds one principal may have waiting at once
+ENV_DECLINE_LIMIT = "GARGOYLE_DECLINE_LIMIT"           # declines of one (principal, tool, path) within the window before the issuer stops asking; 0 disables
+ENV_DECLINE_WINDOW_HOURS = "GARGOYLE_DECLINE_WINDOW_HOURS"
 ENV_ALLOW_SELF_APPROVAL = "GARGOYLE_ALLOW_SELF_APPROVAL"   # "1": a person may release their own call (default: refused)
 DEFAULT_MAX_OPEN_HOLDS = 20
+DEFAULT_DECLINE_LIMIT = 2
+DEFAULT_DECLINE_WINDOW_HOURS = 24.0
 
 REF_ISSUER_UNAUTHENTICATED = "REF_ISSUER_UNAUTHENTICATED"
 REF_ISSUER_BAD_REQUEST = "REF_ISSUER_BAD_REQUEST"
@@ -97,6 +102,7 @@ REF_ISSUER_NO_APPROVER_TRUST = "REF_ISSUER_NO_APPROVER_TRUST"
 REF_ISSUER_NOT_AN_APPROVER = "REF_ISSUER_NOT_AN_APPROVER"   # enrollment without the approver role or group
 REF_ISSUER_FORBIDDEN = "REF_ISSUER_FORBIDDEN"               # authenticated, but not an approver and not the hold's own principal
 REF_ISSUER_TOO_MANY_HOLDS = "REF_ISSUER_TOO_MANY_HOLDS"     # the principal already has the cap's worth of holds waiting
+REF_ISSUER_DECLINED_RECENTLY = "REF_ISSUER_DECLINED_RECENTLY"  # the same principal, tool and path were declined too often lately; no new card
 REF_ISSUER_KEY_REVOKED = "REF_ISSUER_KEY_REVOKED"           # enrollment offered a key that was revoked; a new key is needed
 REF_ISSUER_KEY_ENROLLED = "REF_ISSUER_KEY_ENROLLED"          # another key is enrolled for this account; it must consent, or the operator revoke it
 REF_ISSUER_HOLD_EXPIRED = "REF_ISSUER_HOLD_EXPIRED"          # the hold's receipt or plan expired; nothing can release it now
@@ -146,6 +152,8 @@ def build_issuer_app(
     tenant: Optional[str] = None,
     tenant_key_ids: Optional[set] = None,
     max_open_holds: int = DEFAULT_MAX_OPEN_HOLDS,
+    decline_limit: int = DEFAULT_DECLINE_LIMIT,
+    decline_window_hours: float = DEFAULT_DECLINE_WINDOW_HOURS,
     idp_key_refresh: Optional[Callable[[], Dict[str, Any]]] = None,
     allow_self_approval: bool = False,
 ) -> FastAPI:
@@ -169,6 +177,8 @@ def build_issuer_app(
     app.state.pending_state = store.dict("pending_state") # approval_request_id -> the target's state when held
     app.state.grants = store.dict("grants")               # approval_request_id -> [grant, ...]
     app.state.declined = store.set("declined")            # approval_request_ids a human refused
+    app.state.declined_why = store.dict("declined_why")   # approval_request_id -> the approver's words, for the submitter
+    app.state.recent_declines = store.dict("recent_declines")  # decline key -> [{"at", "why"}], the cooldown's memory
     app.state.pending_plans = store.dict("pending_plans") # approval_request_id -> signed plan (gargoyle.plans)
     app.state.started_at = now().isoformat()
 
@@ -241,6 +251,57 @@ def build_issuer_app(
             return env.get("request_context", {}).get("principal")
         plan = app.state.pending_plans.get(arid)
         return plan.get("principal") if plan is not None else None
+
+    def decline_keys(principal: Optional[str], tool: Any, args: Any) -> List[str]:
+        """What a decline is remembered by: the principal, the tool and the
+        path it named (normalized as the rules compare it), so the next card
+        for the same thing is not opened. A call with no path is not
+        remembered: the cooldown is for one file asked for again and again."""
+        from gargoyle.globs import normalize_path
+        if not principal or not isinstance(tool, str) or not isinstance(args, dict):
+            return []
+        keys = []
+        for k in ("path", "source", "file_path", "destination"):
+            if isinstance(args.get(k), str) and args[k]:
+                keys.append(hashlib.sha256(("%s|%s|%s" % (principal, tool, normalize_path(args[k]))).encode("utf-8")).hexdigest())
+                break
+        return keys
+
+    def remember_decline(arid: str, why: Optional[str]) -> None:
+        owner = hold_owner(arid)
+        at = now().isoformat()
+        targets = []
+        if arid in app.state.pending:
+            targets.append((app.state.pending[arid].get("request_context", {}).get("tool"), app.state.pending_args.get(arid)))
+        plan = app.state.pending_plans.get(arid)
+        if plan is not None:
+            targets += [(s.get("tool"), s.get("args")) for s in plan.get("steps", []) if isinstance(s, dict)]
+        for tool, args in targets:
+            for key in decline_keys(owner, tool, args):
+                had = [d for d in app.state.recent_declines.get(key, []) if _within_window(d.get("at"))]
+                had.append({"at": at, "why": why})
+                app.state.recent_declines[key] = had[-10:]
+
+    def _within_window(at: Any) -> bool:
+        try:
+            return (now() - datetime.fromisoformat(at)).total_seconds() <= decline_window_hours * 3600
+        except (TypeError, ValueError):
+            return False
+
+    def declined_recently(principal: str, tool: str, args: Any) -> Optional[Dict[str, Any]]:
+        """The cooldown: when this principal has had this tool on this path
+        declined `decline_limit` times inside the window, the issuer opens
+        no new card and tells the client why (the last words the approver
+        gave). Zero disables it. The approver's attention is the scarce
+        thing here; a third card for the same file is fatigue, not review."""
+        if decline_limit <= 0:
+            return None
+        for key in decline_keys(principal, tool, args):
+            recent = [d for d in app.state.recent_declines.get(key, []) if _within_window(d.get("at"))]
+            if len(recent) >= decline_limit:
+                whys = [d.get("why") for d in recent if d.get("why")]
+                return {"count": len(recent), "why": whys[-1] if whys else None, "last_at": recent[-1].get("at")}
+        return None
 
     def _open_holds(principal: str) -> int:
         """Held receipts and plans of `principal` still waiting on a release:
@@ -357,6 +418,11 @@ def build_issuer_app(
                         and grants_satisfy(env_terms, [g["approver_key_id"] for g in app.state.grants.get(arid_p, [])])):
                     covered = True
                     break
+        cooled = declined_recently(who["principal"], body["tool"], body["args"]) if result.envelope["requires_approval"] and not covered else None
+        if cooled is not None:
+            event("refused", principal=who["principal"], tool=body["tool"], reason=REF_ISSUER_DECLINED_RECENTLY,
+                  declines=cooled["count"], **({"why": cooled["why"]} if cooled["why"] else {}))
+            return {"issued": False, "reason": REF_ISSUER_DECLINED_RECENTLY, "why": cooled["why"], "declines": cooled["count"]}
         if result.envelope["requires_approval"] and not covered and _open_holds(who["principal"]) >= max_open_holds:
             # A service limit, not a policy decision: nothing is stored, the
             # signed envelope is dropped, the client reports the reason.
@@ -645,6 +711,12 @@ def build_issuer_app(
             raise _refuse(400, REF_ISSUER_BAD_REQUEST)
         if not is_approver(who) and hold_owner(arid) != who["principal"]:
             raise _refuse(403, REF_ISSUER_FORBIDDEN)      # only an approver, or the person whose call it is, may cancel it
+        if is_approver(who) and hold_owner(arid) != who["principal"]:
+            # A human's decline is remembered; a gate withdrawing its own
+            # timed-out hold is not a decision about the file.
+            remember_decline(arid, why)
+            if why:
+                app.state.declined_why[arid] = why
         app.state.pending_plans.pop(arid, None)
         app.state.pending.pop(arid, None)
         app.state.pending_args.pop(arid, None)
@@ -686,11 +758,15 @@ def build_issuer_app(
         env = app.state.pending.get(approval_request_id) or app.state.pending_plans.get(approval_request_id)
         have = app.state.grants.get(approval_request_id, [])
         complete = _complete(approval_request_id)
-        return {"pending": env is not None,
-                "grant": have[0] if complete and len(have) == 1 else None,
-                "grants": list(have) if complete else [],
-                "collected": len(have), "required": (_plan_terms(env) if env and "plan_version" in env else approval_terms(env))["required"] if env else None,
-                "declined": approval_request_id in app.state.declined}
+        out = {"pending": env is not None,
+               "grant": have[0] if complete and len(have) == 1 else None,
+               "grants": list(have) if complete else [],
+               "collected": len(have), "required": (_plan_terms(env) if env and "plan_version" in env else approval_terms(env))["required"] if env else None,
+               "declined": approval_request_id in app.state.declined}
+        why = app.state.declined_why.get(approval_request_id) if out["declined"] else None
+        if why:
+            out["why"] = why                      # the approver's words, for the submitter
+        return out
 
     @app.get("/approvers")
     async def approvers():
@@ -914,6 +990,8 @@ def app_from_env() -> FastAPI:
         on_hold=notifier_from_env(os.environ),
         hold_store=HoldStore(os.environ.get(ENV_HOLDS_PATH) or None),
         max_open_holds=int(os.environ.get(ENV_MAX_OPEN_HOLDS, DEFAULT_MAX_OPEN_HOLDS)),
+        decline_limit=int(os.environ.get(ENV_DECLINE_LIMIT, DEFAULT_DECLINE_LIMIT)),
+        decline_window_hours=float(os.environ.get(ENV_DECLINE_WINDOW_HOURS, DEFAULT_DECLINE_WINDOW_HOURS)),
         allow_self_approval=os.environ.get(ENV_ALLOW_SELF_APPROVAL, "").strip().lower() in ("1", "true", "yes"),
         witness=(WitnessLog(os.environ["GARGOYLE_WITNESS_PATH"], Ed25519PrivateKey.from_private_bytes(bytes.fromhex(required[ENV_ISSUER_KEY_HEX])),
                             required[ENV_ISSUER_KEY_ID]) if os.environ.get("GARGOYLE_WITNESS_PATH") else None),
