@@ -313,3 +313,20 @@ def test_every_operator_revoke_is_witnessed_not_only_the_first(tmp_path):
     revoked = [e for e in events if e.get("event") == "revoked"]
     assert len(revoked) == 3 and all(e["approver"] == "dana@contoso.com" and e["by"] == "operator:root" for e in revoked)
     assert len([e for e in events if e.get("event") == "enrolled"]) == 3
+
+
+def test_a_revoke_inside_the_same_timestamp_tick_is_still_noticed(tmp_path):
+    """Windows CI, 2026-10-31: the operator's revoke landed in the same mtime
+    tick as the enrolment before it and went unread. The registry re-reads on
+    the file's content, so a write that leaves the mtime untouched still counts."""
+    import os
+    path = tmp_path / "approvers.json"
+    reg = ApproverRegistry(str(path))
+    k = Ed25519PrivateKey.generate()
+    reg.enroll("dana@contoso.com", pub_hex(k))
+    before = path.stat()
+    operator = ApproverRegistry(str(path))
+    assert operator.revoke("dana@contoso.com", revoked_by="operator:root")
+    os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))     # the write is invisible by mtime
+    assert path.stat().st_mtime_ns == before.st_mtime_ns
+    assert "dana@contoso.com" not in reg and reg.revoked_entries()["dana@contoso.com"]["revoked_by"] == "operator:root"
