@@ -51,6 +51,18 @@
   .activity tr.held td.outcome { color:var(--warn); } .activity tr.refused td.outcome, .activity tr.declined td.outcome, .activity tr.grant_refused td.outcome { color:var(--bad); }
   .activity tr.granted td.outcome { color:var(--ok); } .activity tr.started td, .activity tr.enrolled td, .activity tr.revoked td, .activity tr.enroll_refused td { color:var(--muted); }
   .activity tr.hidden { display:none; }
+  .activity td.click { cursor:pointer; text-decoration:underline dotted; text-underline-offset:3px; }
+  .activity td.click:hover, .activity td.click:focus { color:var(--accent); outline:none; }
+  .activity td.ref { font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size:12px; }
+  .activity tr.open td { background:var(--bg); }
+  .activity tr.detail td { white-space:normal; background:var(--bg); padding:10px 14px 14px; }
+  .detail .head { font-weight:600; margin-bottom:6px; }
+  .detail dl { display:grid; grid-template-columns:160px 1fr; gap:3px 12px; margin:6px 0; font-size:13px; }
+  .detail dt { color:var(--muted); } .detail dd { margin:0; word-break:break-all; }
+  .detail dd code { font-size:12px; }
+  .detail h4 { margin:10px 0 4px; font-size:12.5px; color:var(--muted); text-transform:uppercase; letter-spacing:.04em; }
+  .detail ul { margin:4px 0; padding-left:18px; } .detail li { margin:2px 0; }
+  .detail a { color:var(--accent); cursor:pointer; text-decoration:underline dotted; text-underline-offset:3px; }
 </style>
 </head>
 <body>
@@ -76,7 +88,8 @@
   <section class="activity" id="activity" style="display:none">
     <h2>Activity <span class="count" id="activity-count"></span> <input id="activity-filter" type="search" placeholder="filter by user, tool or outcome"></h2>
     <div class="note" style="margin-bottom:8px">The issuer's witness as it is written: every receipt it issued, every hold released or declined, every restart. Who asked, which tool, and what the policy did. Arguments are never recorded here, only their hash.</div>
-    <div class="wrap"><table><thead><tr><th>when</th><th>who</th><th>tool</th><th>outcome</th><th>event</th></tr></thead><tbody id="activity-rows"></tbody></table></div>
+    <div class="wrap"><table><thead><tr><th>when</th><th>who</th><th>tool</th><th>outcome</th><th>event</th><th>id</th></tr></thead><tbody id="activity-rows"></tbody></table></div>
+    <div class="note" style="margin-top:6px">Click an outcome or an id to see everything the entry records, the entries that share its hold, decision or plan, and the waiting card if the hold is still open.</div>
   </section>
   <div class="log" id="log"></div>
 </main>
@@ -90,7 +103,7 @@ import { argsSha256, sha256Hex, canonicalJson, authorizeUrl, buildGrant, earlier
 // line for the same bytes (gargoyle.holdtext, returned by /pending as
 // `summary`) and keep the technical details one click away. Nothing on a
 // card is authored text: a hold the template cannot describe is marked so.
-const state = { token: null, key: null, keyId: null, ttl: 300, timer: null, seen: new Map(), witnessSeq: 0, witnessOff: false, rows: 0,
+const state = { token: null, key: null, keyId: null, ttl: 300, timer: null, seen: new Map(), witnessSeq: 0, witnessOff: false, rows: 0, entries: new Map(),
                 view: "technical", roles: [], approverRole: "Approver", released: null, releasedByTool: {}, others: 0, waiting: 0 };
 const ACTIVITY_ROWS = 2000;                                  // kept in the page; older rows drop off the bottom
 const $ = (id) => document.getElementById(id);
@@ -382,13 +395,23 @@ async function activity() {
     const d = describeEntry(e);
     const tr = document.createElement("tr"); tr.className = e.event; tr.dataset.seq = e.seq;
     const when = e.at ? new Date(e.at) : null;
-    tr.innerHTML = `<td title="${esc(e.at || "")}">${when ? esc(when.toLocaleString()) : ""}</td><td class="who" title="${esc(d.who)}">${esc(d.who)}</td><td>${esc(d.tool)}</td><td class="outcome" title="${esc(d.ref)}">${esc(d.outcome)}</td><td>${esc(e.event)}</td>`;
-    tr.dataset.text = `${d.who} ${d.tool} ${d.outcome} ${e.event}`.toLowerCase();
+    const ref = entryRef(e);
+    tr.innerHTML = `<td title="${esc(e.at || "")}">${when ? esc(when.toLocaleString()) : ""}</td><td class="who" title="${esc(d.who)}">${esc(d.who)}</td><td>${esc(d.tool)}</td><td class="outcome click" tabindex="0" title="${esc(d.ref || "details")}">${esc(d.outcome)}</td><td>${esc(e.event)}</td><td class="ref click" tabindex="0" title="${esc(ref.full)}">${esc(ref.short)}</td>`;
+    tr.dataset.text = `${d.who} ${d.tool} ${d.outcome} ${e.event} ${ref.full} ${e.seq}`.toLowerCase();
     if (filter && !tr.dataset.text.includes(filter)) tr.classList.add("hidden");
+    if (typeof e.seq === "number") state.entries.set(e.seq, e);
+    for (const cell of tr.querySelectorAll(".click")) {
+      cell.addEventListener("click", () => toggleDetail(tr));
+      cell.addEventListener("keydown", (ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); toggleDetail(tr); } });
+    }
     rows.prepend(tr); state.rows++;
     if (typeof e.seq === "number" && e.seq > state.witnessSeq) state.witnessSeq = e.seq;
   }
-  while (rows.children.length > ACTIVITY_ROWS) rows.lastElementChild.remove();
+  while (rows.querySelectorAll("tr:not(.detail)").length > ACTIVITY_ROWS) {
+    const last = rows.lastElementChild;
+    if (!last.classList.contains("detail")) state.entries.delete(Number(last.dataset.seq));
+    last.remove();
+  }
   if (res.seq > state.witnessSeq) state.witnessSeq = res.seq;   // a first page that was cut by `limit`: do not refetch the older lines
   $("activity-count").textContent = `${rows.children.length} entries shown` + (res.seq > rows.children.length ? ` of ${res.seq}` : "");
 }
@@ -415,8 +438,75 @@ function describeEntry(e) {
 
 $("activity-filter").addEventListener("input", () => {
   const filter = $("activity-filter").value.trim().toLowerCase();
+  for (const tr of [...$("activity-rows").querySelectorAll("tr.detail")]) closeDetail(tr.previousElementSibling);
   for (const tr of $("activity-rows").children) tr.classList.toggle("hidden", !!filter && !tr.dataset.text.includes(filter));
 });
+
+// ---- Activity details: everything one witness entry records, and what it is tied to ----
+// The id an entry is read by: the hold for a release or refusal, the decision for an
+// issue, the plan for a plan, the approver for an enrolment. Shown short, kept full.
+function entryRef(e) {
+  const full = e.approval_request_id || e.decision_id || e.plan_id || e.decision_sha256 || e.approver || "";
+  return { full, short: full ? (full.length > 12 ? full.slice(0, 8) + "\u2026" : full) : (typeof e.seq === "number" ? "#" + e.seq : "") };
+}
+const CHAIN_KEYS = ["witness_version", "seq", "at", "event", "prev_sha256", "entry_sha256", "issuer_key_id", "issuer_signature"];
+const LABELS = { principal: "who asked", approver: "approver", by: "by", oid: "object id", tool: "tool", target_url: "target", reason: "reason",
+                 held: "held for approval", covered: "covered by a plan", decision_id: "decision id", decision_sha256: "decision hash",
+                 approval_request_id: "hold id", args_sha256: "arguments hash", plan_id: "plan id", steps: "steps", collected: "signatures collected",
+                 required: "signatures required", hold_kind: "hold kind", roles: "released as role", why: "reason given", replaced: "key replaced",
+                 revoked_at: "revoked at", resumed: "restart" };
+function fieldValue(v) {
+  if (v === null || v === undefined) return "";
+  if (typeof v === "boolean") return v ? "yes" : "no";
+  if (Array.isArray(v)) return v.map(String).join(", ");
+  if (typeof v === "object") return JSON.stringify(v);
+  return String(v);
+}
+function toggleDetail(tr) {
+  const next = tr.nextElementSibling;
+  if (next && next.classList.contains("detail")) { closeDetail(tr); return; }
+  const e = state.entries.get(Number(tr.dataset.seq)); if (!e) return;
+  const d = describeEntry(e);
+  const fields = Object.keys(e).filter((k) => !CHAIN_KEYS.includes(k)).sort();
+  const dl = fields.map((k) => `<dt>${esc(LABELS[k] || k.replace(/_/g, " "))}</dt><dd>${/sha256|_id$/.test(k) ? `<code>${esc(fieldValue(e[k]))}</code>` : esc(fieldValue(e[k]))}</dd>`).join("");
+  // Entries on this page that share the same hold, decision or plan: the story of one call.
+  const keys = ["approval_request_id", "decision_id", "plan_id", "decision_sha256"].filter((k) => typeof e[k] === "string" && e[k]);
+  const related = [...state.entries.values()].filter((o) => o !== e && keys.some((k) => o[k] === e[k])).sort((a, b) => a.seq - b.seq);
+  const relatedHtml = related.length
+    ? `<h4>related</h4><ul>${related.map((o) => { const od = describeEntry(o); return `<li><a data-seq="${o.seq}">#${o.seq} \u00b7 ${esc(o.at ? new Date(o.at).toLocaleString() : "")} \u00b7 ${esc(o.event)} \u00b7 ${esc(od.outcome)}${od.who ? " \u00b7 " + esc(od.who) : ""}</a></li>`; }).join("")}</ul>`
+    : (keys.length ? '<h4>related</h4><div class="note">no other entry on this page shares this id</div>' : "");
+  const card = e.approval_request_id && state.seen.get(e.approval_request_id);
+  const waiting = card ? `<div style="margin-top:8px"><a data-card="${esc(e.approval_request_id)}">this hold is still waiting on this page: open its card</a></div>` : "";
+  const row = document.createElement("tr"); row.className = "detail" + (tr.classList.contains("hidden") ? " hidden" : ""); row.dataset.for = tr.dataset.seq;
+  row.innerHTML = `<td colspan="6"><div class="detail">
+      <div class="head">#${esc(e.seq)} \u00b7 ${esc(e.event)} \u00b7 ${esc(d.outcome)}</div>
+      <dl>${dl}</dl>
+      <h4>witness chain</h4>
+      <dl><dt>recorded at</dt><dd>${esc(e.at || "")}</dd>
+          <dt>entry hash</dt><dd><code>${esc(e.entry_sha256 || "")}</code></dd>
+          <dt>previous entry</dt><dd><code>${esc(e.prev_sha256 || "")}</code></dd>
+          <dt>signed by</dt><dd>${esc(e.issuer_key_id || "")} <code title="${esc(e.issuer_signature || "")}">${esc(String(e.issuer_signature || "").slice(0, 16))}\u2026</code></dd></dl>
+      ${relatedHtml}${waiting}
+      <div class="note" style="margin-top:8px">Arguments are never in the witness; the arguments hash is what the receipt bound. \`gargoyle audit --witness\` verifies this chain offline.</div>
+    </div></td>`;
+  for (const a of row.querySelectorAll("a[data-seq]")) a.addEventListener("click", () => jumpTo(Number(a.dataset.seq)));
+  const open = row.querySelector("a[data-card]");
+  if (open) open.addEventListener("click", () => { const c = state.seen.get(open.dataset.card); if (c) { c.scrollIntoView({ behavior: "smooth", block: "center" }); c.style.outline = "2px solid var(--accent)"; setTimeout(() => { c.style.outline = ""; }, 2500); } });
+  tr.classList.add("open");
+  tr.after(row);
+}
+function closeDetail(tr) {
+  const next = tr && tr.nextElementSibling;
+  if (next && next.classList.contains("detail")) next.remove();
+  if (tr) tr.classList.remove("open");
+}
+function jumpTo(seq) {
+  const tr = [...$("activity-rows").children].find((r) => !r.classList.contains("detail") && Number(r.dataset.seq) === seq);
+  if (!tr) return;
+  tr.classList.remove("hidden");
+  if (!(tr.nextElementSibling && tr.nextElementSibling.classList.contains("detail"))) toggleDetail(tr);
+  tr.scrollIntoView({ behavior: "smooth", block: "center" });
+}
 
 // A scoped grant: one card for a bounded plan. The approver signs the
 // plan's hash; each later matching call runs without a card of its own.
