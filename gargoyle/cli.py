@@ -297,9 +297,11 @@ def cmd_sidedoors(args) -> int:
     from gargoyle.claude_hook import _state_from_env
     from gargoyle.mcp_server import ENV_STATE_ROOT, load_env_file
     from gargoyle.sidedoors import discover, format_table, run_for_state, summarize, write_report
-    env: Dict[str, str] = {}
+    # Into the process environment, as the hook does: REQUESTS_CA_BUNDLE and
+    # the like are read by the HTTP library at request time, not from a dict.
     if args.env:
-        load_env_file(args.env, env)
+        load_env_file(args.env)
+    env: Dict[str, str] = dict(os.environ)
     root = args.root or env.get(ENV_STATE_ROOT)
     state = _state_from_env(env) if args.env else None
     if not root and state is not None:
