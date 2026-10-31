@@ -197,7 +197,7 @@ def discover(root: str, *, home: Optional[str] = None, system: Optional[str] = N
                     continue
                 served = _serves_root(entry, root)
                 if served:
-                    findings.append(_finding(UNGATED_MCP_SERVER, str(f), "%s server %r serves %s without the gate" % (kind, entry["_name"], served),
+                    findings.append(_finding(UNGATED_MCP_SERVER, str(f), "%s server '%s' serves %s without the gate" % (kind, entry["_name"], served),
                                              "remove the entry, or point it at the gate (python -m gargoyle.mcp_server --env middleware.env -- <server>)"))
     for mdir in paths["managed_dir"]:
         mmcp = _read_json(mdir / "managed-mcp.json")
@@ -205,7 +205,7 @@ def discover(root: str, *, home: Optional[str] = None, system: Optional[str] = N
         if mmcp is not None:
             for entry in _server_entries(mmcp):
                 if not _is_gate(entry) and _serves_root(entry, root):
-                    findings.append(_finding(UNGATED_MCP_SERVER, str(mdir / "managed-mcp.json"), "managed server %r serves the root without the gate" % entry["_name"],
+                    findings.append(_finding(UNGATED_MCP_SERVER, str(mdir / "managed-mcp.json"), "managed server '%s' serves the root without the gate" % entry["_name"],
                                              "replace the managed entry with the gate's"))
             if not (isinstance(mset, dict) and mset.get("allowManagedMcpServersOnly") is True):
                 findings.append(_finding(MANAGED_NOT_EXCLUSIVE, str(mdir / "managed-settings.json"),
@@ -281,7 +281,7 @@ def discover(root: str, *, home: Optional[str] = None, system: Optional[str] = N
     # 4. Shares: the folder reachable over the network without any client.
     for share in _shares(system, smb_conf, run):
         if _touches(share["path"], root):
-            findings.append(_finding(SMB_SHARE, share["path"], "share %r exports %s" % (share["name"], share["path"]),
+            findings.append(_finding(SMB_SHARE, share["path"], "share '%s' exports %s" % (share["name"], share["path"]),
                                      "remove the share, or make it read-only for everyone but the gate's account"))
 
     # 5. Gated files not as the gate left them (the evidence log knows their last state).
@@ -301,7 +301,10 @@ def _shares(system: str, smb_conf: str, run: Callable[..., Any]) -> List[Dict[st
                     capture_output=True, text=True, timeout=15)
             doc = json.loads(r.stdout or "[]")
             for s in doc if isinstance(doc, list) else [doc]:
-                if isinstance(s, dict) and s.get("Path"):
+                # Administrative shares (C$, ADMIN$, IPC$) exist on every Windows
+                # host for its administrators; they are not a door the operator
+                # opened, so they are not reported.
+                if isinstance(s, dict) and s.get("Path") and not str(s.get("Name", "")).endswith("$"):
                     out.append({"name": str(s.get("Name")), "path": str(s["Path"])})
         except Exception:
             pass
