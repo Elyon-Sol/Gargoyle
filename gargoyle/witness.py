@@ -154,6 +154,13 @@ def describe(entry: Any) -> Dict[str, str]:
         outcome, ref = "enrolment refused: %s" % entry.get("reason", "?"), ""
     elif ev == "revoked":
         outcome, ref = "approver key revoked by %s" % (entry.get("by") or "the operator"), ""
+    elif ev == "sidedoors":
+        n = entry.get("count")
+        kinds = entry.get("kinds") if isinstance(entry.get("kinds"), dict) else {}
+        outcome = ("%s side door%s found" % (n, "" if n == 1 else "s")) if isinstance(n, int) and n else "no side doors found"
+        if kinds:
+            outcome += " (" + ", ".join("%d %s" % (v, k) for k, v in sorted(kinds.items())) + ")"
+        ref = str(entry.get("target_url") or "")[:40]
     else:
         outcome, ref = ev, ""
     return {"at": str(entry.get("at", "")), "event": ev, "who": who, "tool": tool, "outcome": outcome, "ref": ref}

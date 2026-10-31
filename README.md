@@ -353,6 +353,28 @@ is evidence rather than containment where the user owns the workstation.
 [docs/claude-code-hook.md](docs/claude-code-hook.md) has the setup and the
 limits.
 
+### Side doors: discovery mode
+
+A gate stands in front of one tool server. The files behind it can still be
+reached around it: a second MCP server in a client's config serving the same
+folder without the gate, Claude Code's own Write and Bash with no hook, a
+project `.mcp.json` anyone who writes the folder can extend, a managed MCP
+file that is not exclusive, a share that exports the folder, a world-writable
+folder, a symlink that lands outside it, a gated file changed with no
+evidence entry. None of these is an attack; all of them are what an audit of
+the evidence log cannot see. The gate looks for them itself (`gargoyle.sidedoors`):
+
+    gargoyle sidedoors --env middleware.env            # list them now; exit 1 when any are found
+    gargoyle sidedoors --env middleware.env --report   # also write audit.sidedoors.json and tell the issuer
+
+The MCP gate takes the same look at startup and the hook on its next run,
+whenever the last report beside the evidence log is older than
+`GARGOYLE_MCP_DISCOVERY_HOURS` (default 24; `0` disables). Findings go beside
+the evidence log with the time each was first seen, and to the issuer
+(`POST /sidedoors`), whose witness records them, so they show in the
+console's Activity and in `gargoyle audit --summary`. Each finding names a
+remedy. Discovery is notice, never admission: nothing is held or refused on it.
+
 ## Scoped grants
 
 One card per held call is right for a mailbox rule and wrong for a long
@@ -503,6 +525,7 @@ on it.
 | `evidence` | the executor's hash-chained log of every decision, and its offline verifier |
 | `mcp_server` | the stdio MCP middleware (and demo executor), with self-issue mode |
 | `claude_hook` | the same gate as a Claude Code hook over its own tools (Bash, Edit, Write, direct MCP calls) |
+| `sidedoors` | discovery mode: every other way into the gated files this host shows, recorded beside the evidence log and in the witness |
 | `fs_server` | a small Python filesystem MCP server, for clients without Node |
 | `issuer_service` | the HTTP issuing service: identity in, receipts out, holds and grants |
 | `replay_cache`, `pending_store` | single use for receipts and holds; in memory, SQLite beside the audit log (the middleware's default) or Redis |

@@ -432,6 +432,11 @@ function describeEntry(e) {
     case "enrolled": outcome = e.replaced ? "approver key replaced" : "approver key enrolled"; break;
     case "enroll_refused": outcome = `enrolment refused: ${e.reason ?? "?"}`; break;
     case "revoked": outcome = `approver key revoked by ${e.by || "the operator"}`; break;
+    case "sidedoors": {
+      const kinds = e.kinds && typeof e.kinds === "object" ? Object.entries(e.kinds).sort().map(([k, v]) => `${v} ${k}`).join(", ") : "";
+      outcome = e.count ? `${e.count} side door${e.count === 1 ? "" : "s"} found${kinds ? ` (${kinds})` : ""}` : "no side doors found";
+      ref = (e.target_url || "").slice(0, 40); break;
+    }
   }
   return { who, tool, outcome, ref };
 }
@@ -452,7 +457,7 @@ function entryRef(e) {
 const CHAIN_KEYS = ["witness_version", "seq", "at", "event", "prev_sha256", "entry_sha256", "issuer_key_id", "issuer_signature"];
 const LABELS = { principal: "who asked", approver: "approver", by: "by", oid: "object id", tool: "tool", target_url: "target", reason: "reason",
                  held: "held for approval", covered: "covered by a plan", decision_id: "decision id", decision_sha256: "decision hash",
-                 approval_request_id: "hold id", args_sha256: "arguments hash", plan_id: "plan id", steps: "steps", collected: "signatures collected",
+                 approval_request_id: "hold id", args_sha256: "arguments hash", count: "side doors", kinds: "by kind", findings: "findings", plan_id: "plan id", steps: "steps", collected: "signatures collected",
                  required: "signatures required", hold_kind: "hold kind", roles: "released as role", why: "reason given", replaced: "key replaced",
                  revoked_at: "revoked at", resumed: "restart" };
 function fieldValue(v) {

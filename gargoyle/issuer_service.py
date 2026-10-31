@@ -654,6 +654,32 @@ def build_issuer_app(
         event("declined", approval_request_id=arid, by=who["principal"], **({"why": why} if why else {}))
         return {"declined": True, "reason": None}
 
+    @app.post("/sidedoors")
+    async def sidedoors(request: Request, authorization: Optional[str] = Header(default=None)):
+        """A gate's report of the other ways into its files (gargoyle.sidedoors):
+        witnessed, so the operator's record names what the rules cannot
+        reach, and the console's Activity shows it. Not an admission path:
+        nothing is held or released on it."""
+        who = authenticate(authorization)
+        try:
+            body = await request.json()
+        except Exception:
+            raise _refuse(400, REF_ISSUER_BAD_REQUEST)
+        target = body.get("target_url") if isinstance(body, dict) else None
+        findings = body.get("findings") if isinstance(body, dict) else None
+        if not isinstance(target, str) or not target or not isinstance(findings, list) or len(findings) > 100:
+            raise _refuse(400, REF_ISSUER_BAD_REQUEST)
+        clean = []
+        for f in findings:
+            if not isinstance(f, dict) or not isinstance(f.get("kind"), str) or not isinstance(f.get("path"), str):
+                raise _refuse(400, REF_ISSUER_BAD_REQUEST)
+            clean.append({"kind": f["kind"][:40], "path": f["path"][:300], "detail": str(f.get("detail") or "")[:200]})
+        kinds: Dict[str, int] = {}
+        for f in clean:
+            kinds[f["kind"]] = kinds.get(f["kind"], 0) + 1
+        event("sidedoors", principal=who["principal"], target_url=target, count=len(clean), kinds=kinds, findings=clean)
+        return {"recorded": True, "count": len(clean)}
+
     @app.get("/grants/{approval_request_id}")
     async def get_grant(approval_request_id: str, authorization: Optional[str] = Header(default=None)):
         authenticate(authorization)

@@ -290,6 +290,40 @@ def cmd_hook(args) -> int:
     return run_hook((["--env", args.env] if args.env else []) + (["--final"] if args.final else []))
 
 
+def cmd_sidedoors(args) -> int:
+    """Every other way into the gated files this host shows (gargoyle.sidedoors),
+    on demand: the same look the gate takes in discovery mode. --report
+    also writes the sidecar beside the evidence log and tells the issuer."""
+    from gargoyle.claude_hook import _state_from_env
+    from gargoyle.mcp_server import ENV_STATE_ROOT, load_env_file
+    from gargoyle.sidedoors import discover, format_table, run_for_state, summarize, write_report
+    env: Dict[str, str] = {}
+    if args.env:
+        load_env_file(args.env, env)
+    root = args.root or env.get(ENV_STATE_ROOT)
+    state = _state_from_env(env) if args.env else None
+    if not root and state is not None:
+        root = state.state_root or (str(state.evidence.path.resolve().parent) if state.evidence is not None else None)
+    if not root:
+        print("gargoyle sidedoors: pass --root DIR or --env middleware.env with a state root", file=sys.stderr)
+        return 2
+    if args.report and state is not None and state.evidence is not None:
+        findings = run_for_state(state, force=True, env=env) or []
+    else:
+        entries = []
+        if state is not None and state.evidence is not None and state.evidence.path.exists():
+            from gargoyle.evidence import read_log
+            entries = read_log(str(state.evidence.path))
+        findings = discover(root, evidence=entries if entries else None)
+        if args.report:
+            print("gargoyle sidedoors: --report needs --env with an audit log to write beside", file=sys.stderr)
+    if args.json:
+        print(json.dumps({"root": root, "count": len(findings), "kinds": summarize(findings), "findings": findings}, indent=2))
+    else:
+        print(format_table(findings, root))
+    return 1 if findings else 0
+
+
 def cmd_tokens(args) -> int:
     """New identity tokens from the deployment's existing identity key: the
     client's shared token (unless the client signs in with Entra, whose
@@ -691,6 +725,15 @@ def cmd_audit(args) -> int:
         entries = read_log(args.log)
         if args.summary:
             _audit_summary(v["entries"], entries)
+            from gargoyle.sidedoors import report_path
+            side = report_path(args.log)
+            if side.exists():
+                try:
+                    doc = json.loads(side.read_text(encoding="utf-8"))
+                    print("side doors (%s, %d): %s" % (doc.get("at", "?"), len(doc.get("findings", [])),
+                          ", ".join("%s %s" % (f.get("kind"), f.get("path")) for f in doc.get("findings", [])) or "none"))
+                except (OSError, ValueError):
+                    print("side doors: %s is unreadable" % side)
         if args.witness and not Path(args.witness).exists():
             print("witness file not found: %s (copy the issuer's witness.jsonl here first)" % args.witness, file=sys.stderr)
             return 2
@@ -773,6 +816,12 @@ def main(argv=None) -> int:
     p.add_argument("--env", help="the workstation's middleware.env")
     p.add_argument("--final", action="store_true", help="an allowed call also skips Claude Code's own permission prompt")
     p.set_defaults(fn=cmd_hook)
+    p = sub.add_parser("sidedoors", help="list every other way into the gated files this host shows (what the gate looks for in discovery mode)")
+    p.add_argument("--env", help="middleware.env: the root, the evidence log and the issuer come from it")
+    p.add_argument("--root", help="the folder the gate protects (default: the state root in middleware.env)")
+    p.add_argument("--json", action="store_true")
+    p.add_argument("--report", action="store_true", help="also write audit.sidedoors.json beside the evidence log and tell the issuer")
+    p.set_defaults(fn=cmd_sidedoors)
     p = sub.add_parser("tokens", help="mint new client and approver tokens from a deployment's existing keys")
     p.add_argument("--out", default="gargoyle-deploy")
     p.add_argument("--token-days", type=int, default=30)
