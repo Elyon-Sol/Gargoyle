@@ -1004,13 +1004,15 @@ entry = {
   "witness_version": "gargoyle-witness/1",
   "seq": n, "prev_sha256": ..., "at": ...,
   "event": "started" | "issued" | "refused" | "granted" | "grant_refused" | "declined" | "plan"
-         | "plan_granted" | "enrolled" | "enroll_refused" | "revoked",
+         | "plan_granted" | "enrolled" | "enroll_refused" | "revoked" | "sidedoors",
   ... (issued: principal, tool, decision_id, decision_sha256, approval_request_id,
        args_sha256, held, covered; granted: approval_request_id, approver,
        collected, required, hold_kind; grant_refused: approval_request_id, approver,
        reason; declined: approval_request_id, by; plan: principal, plan_id, steps,
        held; enrolled: approver, oid, replaced; enroll_refused: approver, reason;
-       revoked: approver, by, revoked_at),
+       revoked: approver, by, revoked_at; sidedoors: principal, target_url, count,
+       kinds, findings[{kind, path, detail}] (a gate's discovery report, see
+       the reference implementation's gargoyle.sidedoors)),
   "entry_sha256":    sha256(canonical_json(entry minus entry_sha256, issuer_key_id, issuer_signature)),
   "issuer_key_id":   ..., "issuer_signature": ed25519 over canonical_json(entry minus issuer_signature)
 }

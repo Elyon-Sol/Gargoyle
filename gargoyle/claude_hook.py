@@ -277,6 +277,7 @@ def run_hook(argv, stdin=None, stdout=None, *, environ: Optional[Dict[str, str]]
     # settings such as REQUESTS_CA_BUNDLE are read by the HTTP library at
     # request time, not at construction.
     env: Dict[str, str] = os.environ if environ is None else environ    # type: ignore[assignment]
+    state = None
     try:
         if args.env:
             load_env_file(args.env, env)
@@ -290,6 +291,13 @@ def run_hook(argv, stdin=None, stdout=None, *, environ: Optional[Dict[str, str]]
         out = _deny(REF_TARGET_NOT_CONFIGURED, "%s: %s" % (type(exc).__name__, str(exc)[:200]))
     stdout.write(json.dumps(out) + "\n")
     stdout.flush()
+    # Discovery mode, after the decision is out: a hook has no long-running
+    # process, so each run checks whether the daily look for side doors
+    # (gargoyle.sidedoors) is due and takes it. Bounded, and never a reason
+    # to change the decision already written.
+    if state is not None:
+        from gargoyle.sidedoors import run_for_state
+        run_for_state(state, env=env)
     return 0
 
 

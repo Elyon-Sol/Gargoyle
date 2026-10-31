@@ -105,6 +105,7 @@ ENV_STATE_PROBE = "GARGOYLE_MCP_STATE_PROBE"
 ENV_STATE_ROOT = "GARGOYLE_MCP_STATE_ROOT"     # the upstream's root: relative path arguments are resolved against it (default: the path in a mcp://filesystem/ target id)
 ENV_ADAPTER_SPEC = "GARGOYLE_MCP_ADAPTER_SPEC"    # with GARGOYLE_MCP_STATE_PROBE=graph: the tool mapping JSON
 ENV_INSTRUCTIONS = "GARGOYLE_MCP_INSTRUCTIONS"   # override the standing instructions the gate gives the model (default: gate_instructions())
+ENV_DISCOVERY_HOURS = "GARGOYLE_MCP_DISCOVERY_HOURS"  # how often the gate looks for side doors (gargoyle.sidedoors); default 24, "0" disables
 ENV_SNAPSHOT_DIR = "GARGOYLE_MCP_SNAPSHOT_DIR"   # where pre-change snapshots live (default: snapshots/ beside the audit log); "none" disables undo   # "filesystem" (default): bind held calls to the target file's state; "none" to disable
 REF_TARGET_LOGIN_REQUIRED = "REF_TARGET_LOGIN_REQUIRED"   # Entra login mode and no usable token: run `gargoyle login`   # the evidence log: one hash-chained JSON line per decision, honored or refused
 
@@ -188,6 +189,19 @@ class IssuerClient:
         if not body.get("issued"):
             return {"plan": None, "reason": body.get("reason") or REF_TARGET_ISSUER_UNAVAILABLE}
         return {"plan": body["plan"], "held": bool(body.get("held")), "reason": None}
+
+    def report_sidedoors(self, target_url: str, findings: List[Dict[str, Any]]) -> bool:
+        """Hand the issuer this host's side-door findings (gargoyle.sidedoors)
+        for its witness. True when recorded; a failure is the caller's to
+        log, never to act on."""
+        from gargoyle.sidedoors import MAX_FINDINGS_REPORTED
+        body = {"target_url": target_url,
+                "findings": [{"kind": f["kind"], "path": str(f["path"])[:300], "detail": str(f.get("detail", ""))[:200]}
+                             for f in findings[:MAX_FINDINGS_REPORTED]]}
+        r = self._post("/sidedoors", body)
+        if r.status_code != 200:
+            raise RuntimeError("issuer answered %s to POST /sidedoors" % r.status_code)
+        return bool(r.json().get("recorded"))
 
     def approver_keys(self) -> Dict[str, Any]:
         """The issuer's enrolled approvers as {upn: public key}; {} when the
@@ -1058,11 +1072,18 @@ if __name__ == "__main__":
         load_env_file(_env_path)
     _upstream = upstream_from_argv(_rest)
     try:
-        serve_stdio(ServerState(config_from_env(), upstream=_upstream, issuer_client=issuer_client_from_env(),
-                                audit_log=_os.environ.get(ENV_AUDIT_LOG) or None,
-                                state_probe=_os.environ.get(ENV_STATE_PROBE) or "filesystem",
-                                adapter_spec=_os.environ.get(ENV_ADAPTER_SPEC) or None,
-                                state_root=_os.environ.get(ENV_STATE_ROOT) or None))
+        _state = ServerState(config_from_env(), upstream=_upstream, issuer_client=issuer_client_from_env(),
+                             audit_log=_os.environ.get(ENV_AUDIT_LOG) or None,
+                             state_probe=_os.environ.get(ENV_STATE_PROBE) or "filesystem",
+                             adapter_spec=_os.environ.get(ENV_ADAPTER_SPEC) or None,
+                             state_root=_os.environ.get(ENV_STATE_ROOT) or None)
+        # Discovery mode: once the gate is up, look around it for the other
+        # ways into its files (gargoyle.sidedoors) when the last look is older
+        # than GARGOYLE_MCP_DISCOVERY_HOURS. Off the serving thread; the gate
+        # does not wait for it and never refuses on it.
+        from gargoyle.sidedoors import run_for_state as _discover
+        threading.Thread(target=_discover, args=(_state,), name="gargoyle-sidedoors", daemon=True).start()
+        serve_stdio(_state)
     finally:
         if _upstream is not None:
             _upstream.close()
