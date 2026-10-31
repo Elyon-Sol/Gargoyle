@@ -7,7 +7,9 @@ exchange for flagged calls.
                              | {"issued": false, "reason": ...}
     GET  /pending           Bearer; flagged receipts still waiting for a grant, each with
                             the full arguments the issuer saw, so a reviewer can read what
-                            they are releasing (the receipt's args_sha256 binds them)
+                            they are releasing (the receipt's args_sha256 binds them), a
+                            plain-language `summary` (gargoyle.holdtext) and whether the
+                            caller's roles make them `eligible` to release it
     POST /grants            Bearer; body = a signed grant for one of them; a hold whose
                             receipt requires several approvers collects grants until enough
                             distinct eligible approvers have signed
@@ -51,8 +53,9 @@ from fastapi.responses import Response
 STATIC = Path(__file__).resolve().parent / "static"
 
 from gargoyle.approval import (REF_APPROVAL_APPROVER_NOT_ELIGIBLE, REF_APPROVAL_DUPLICATE_APPROVER,
-                               verify_grant)
+                               REF_APPROVAL_ROLE_NOT_ELIGIBLE, attest_roles, verify_grant)
 from gargoyle.envelope import approval_terms
+from gargoyle.holdtext import describe_hold, describe_plan
 from gargoyle.emilia import EMILIA_MEMBER, verify_embedded_signoff
 from gargoyle.state import state_sha256, text_consistent, valid_description
 from gargoyle.holdstore import ENV_HOLDS_PATH, HoldStore
@@ -395,7 +398,7 @@ def build_issuer_app(
                 or not isinstance(body.get("note", ""), str)):
             raise _refuse(400, REF_ISSUER_BAD_REQUEST)
         from gargoyle.envelope import args_sha256
-        norm, held, required, approvers = [], False, 1, set()
+        norm, held, required, approvers, role_sets = [], False, 1, set(), []
         for s in steps:
             if "args" in s:
                 judged_args, step = s["args"], {"tool": s["tool"], "args_sha256": args_sha256(s["args"])}
@@ -427,14 +430,21 @@ def build_issuer_app(
                 required = max(required, d.approvals_required)
                 if d.approvers:
                     approvers.update(d.approvers)
+                if d.approver_roles:
+                    role_sets.append(set(d.approver_roles))
             norm.append(step)
         if held and _open_holds(who["principal"]) >= max_open_holds:
             event("refused", principal=who["principal"], tool="plan", reason=REF_ISSUER_TOO_MANY_HOLDS)
             return {"issued": False, "reason": REF_ISSUER_TOO_MANY_HOLDS}
         import uuid
         approval = None
-        if required > 1 or approvers:
-            approval = {"required": required, **({"approvers": sorted(approvers)} if approvers else {})}
+        roles = set.intersection(*role_sets) if role_sets else set()
+        if role_sets and not roles:
+            # Steps routed to disjoint roles: no one approver may release the whole plan.
+            return {"issued": False, "reason": REF_PLAN_STEP_NOT_PLANNABLE}
+        if required > 1 or approvers or roles:
+            approval = {"required": required, **({"approvers": sorted(approvers)} if approvers else {}),
+                        **({"roles": sorted(roles)} if roles else {})}
         plan = sign_plan(build_plan(plan_id=str(uuid.uuid4()), approval_request_id=str(uuid.uuid4()), target_url=body["target_url"],
                                     principal=who["principal"], policy_pin=policy.pin(), steps=norm,
                                     not_after=now() + timedelta(seconds=min(ttl_seconds * 6, 3600)), note=body.get("note", ""),
@@ -446,6 +456,53 @@ def build_issuer_app(
 
     def _plan_terms(plan):
         return approval_terms({"approval": plan["approval"]} if "approval" in plan else {})
+
+    def _roles_held(who: Dict[str, Any], terms: Dict[str, Any]) -> list:
+        """The receipt's `approval.roles` this identity's token carries (all
+        of them when the receipt names none): the routing check."""
+        wanted = terms.get("roles")
+        mine = [r for r in (who.get("roles") or []) if isinstance(r, str)]
+        return mine if not wanted else [r for r in mine if r in wanted]
+
+    def _eligible(who: Dict[str, Any], terms: Dict[str, Any]) -> bool:
+        return not terms.get("roles") or bool(_roles_held(who, terms))
+
+    def _week(entries, kind: str, current: datetime):
+        since = (current - timedelta(days=7)).isoformat()
+        return [e for e in entries if e.get("event") == kind and isinstance(e.get("at"), str) and e["at"] >= since]
+
+    def _week_stats(current: datetime, approver: Optional[str] = None) -> Dict[str, Any]:
+        """Holds and releases over the last seven days from the witness, for
+        the console's "you released N holds this week" and a monitor's view
+        of approval load: the prompt to add a rule or a scoped grant."""
+        entries = list(witness.entries) if witness is not None else []
+        held = [e for e in _week(entries, "issued", current) if e.get("held") and not e.get("covered")]
+        granted = _week(entries, "granted", current)
+        if approver is not None:
+            granted = [e for e in granted if e.get("approver") == approver]
+        held_at = {e.get("approval_request_id"): e.get("at") for e in held}
+        waits = []
+        for e in granted:
+            at = held_at.get(e.get("approval_request_id"))
+            if at and e.get("collected", 1) >= e.get("required", 1):
+                try:
+                    waits.append((datetime.fromisoformat(e["at"]) - datetime.fromisoformat(at)).total_seconds())
+                except (ValueError, TypeError):
+                    pass
+        waits.sort()
+        by_tool: Dict[str, int] = {}
+        for e in granted:
+            tool = next((h.get("tool") for h in held if h.get("approval_request_id") == e.get("approval_request_id")), None)
+            by_tool[tool or "?"] = by_tool.get(tool or "?", 0) + 1
+        out = {"held_7d": len(held), "released_7d": len(granted), "released_by_tool_7d": by_tool,
+               "median_release_seconds": (waits[len(waits) // 2] if waits else None)}
+        if approver is None:
+            by_role: Dict[str, int] = {}
+            for e in granted:
+                for r in e.get("roles") or ["*"]:
+                    by_role[r] = by_role.get(r, 0) + 1
+            out["released_by_role_7d"] = by_role
+        return out
 
     @app.get("/pending")
     async def pending(authorization: Optional[str] = Header(default=None)):
@@ -464,7 +521,8 @@ def build_issuer_app(
                     continue
                 have = app.state.grants.get(arid, [])
                 live[arid] = {"plan": plan, "collected": len(have), "required": _plan_terms(plan)["required"],
-                              "approvers": [g["approver_key_id"] for g in have]}
+                              "approvers": [g["approver_key_id"] for g in have],
+                              "summary": describe_plan(plan), "eligible": _eligible(who, _plan_terms(plan))}
         for arid, env in list(app.state.pending.items()):
             if datetime.fromisoformat(env["not_after"]) <= current:
                 _forget(arid)                         # an expired hold can never be released
@@ -472,10 +530,12 @@ def build_issuer_app(
                 if not sees_all and env.get("request_context", {}).get("principal") != who["principal"]:
                     continue
                 have = app.state.grants.get(arid, [])
-                live[arid] = {"envelope": env, "args": app.state.pending_args.get(arid),
-                              "state": app.state.pending_state.get(arid),
+                args, st = app.state.pending_args.get(arid), app.state.pending_state.get(arid)
+                live[arid] = {"envelope": env, "args": args, "state": st,
                               "collected": len(have), "required": approval_terms(env)["required"],
-                              "approvers": [g["approver_key_id"] for g in have]}
+                              "approvers": [g["approver_key_id"] for g in have],
+                              "summary": describe_hold(env.get("request_context", {}).get("tool"), args, st),
+                              "eligible": _eligible(who, approval_terms(env))}
         return {"pending": list(live.values())}
 
     def _forget(arid: str) -> None:
@@ -544,6 +604,11 @@ def build_issuer_app(
             return refused(REF_APPROVAL_DUPLICATE_APPROVER)
         if terms["approvers"] is not None and grant["approver_key_id"] not in terms["approvers"]:
             return refused(REF_APPROVAL_APPROVER_NOT_ELIGIBLE)
+        roles_held = _roles_held(who, terms)
+        if terms.get("roles") and not roles_held:
+            # Routed to a role this token does not carry: the business
+            # approver's grant on a technical-only hold, or the reverse.
+            return refused(REF_APPROVAL_ROLE_NOT_ELIGIBLE)
         if env is not None and EMILIA_MEMBER in grant:
             # The console's second signature, over the EMILIA Authorization
             # Context for this hold: checked against the hold now so that an
@@ -551,10 +616,15 @@ def build_issuer_app(
             s = verify_embedded_signoff(grant, env, trusted.get(grant["approver_key_id"]))
             if not s["accepted"]:
                 return refused(s["reason"])
+        if terms.get("roles"):
+            # The executor cannot see the token; it sees the issuer's signed
+            # word that the role was there, bound to this grant.
+            grant = dict(grant)
+            grant["role_attestation"] = attest_roles(grant, roles_held, signing_key, key_id)
         have.append(grant)
         app.state.grants[arid] = have                      # written back: the store persists on assignment
         event("granted", approval_request_id=arid, approver=grant["approver_key_id"], collected=len(have), required=terms["required"],
-              hold_kind="plan" if plan else "receipt")
+              hold_kind="plan" if plan else "receipt", **({"roles": sorted(roles_held)} if terms.get("roles") else {}))
         return {"accepted": True, "reason": g["reason"], "collected": len(have), "required": terms["required"],
                 "complete": len(have) >= terms["required"]}
 
@@ -568,8 +638,11 @@ def build_issuer_app(
         except Exception:
             raise _refuse(400, REF_ISSUER_BAD_REQUEST)
         arid = body.get("approval_request_id") if isinstance(body, dict) else None
+        why = body.get("reason") if isinstance(body, dict) else None
         if not isinstance(arid, str) or (arid not in app.state.pending and arid not in app.state.pending_plans):
             return {"declined": False, "reason": REF_ISSUER_UNKNOWN_HOLD}
+        if why is not None and (not isinstance(why, str) or len(why) > 500):
+            raise _refuse(400, REF_ISSUER_BAD_REQUEST)
         if not is_approver(who) and hold_owner(arid) != who["principal"]:
             raise _refuse(403, REF_ISSUER_FORBIDDEN)      # only an approver, or the person whose call it is, may cancel it
         app.state.pending_plans.pop(arid, None)
@@ -578,7 +651,7 @@ def build_issuer_app(
         app.state.pending_state.pop(arid, None)
         app.state.grants.pop(arid, None)
         app.state.declined.add(arid)
-        event("declined", approval_request_id=arid, by=who["principal"])
+        event("declined", approval_request_id=arid, by=who["principal"], **({"why": why} if why else {}))
         return {"declined": True, "reason": None}
 
     @app.get("/grants/{approval_request_id}")
@@ -666,7 +739,10 @@ def build_issuer_app(
         upn = who["principal"]
         _notice_revocations()
         return {"principal": upn, "may_approve": may_enroll(who, role=approver_role, groups=approver_groups) or upn in static_approvers,
-                "enrolled_public_key_hex": registry.public_hex().get(upn)}
+                "enrolled_public_key_hex": registry.public_hex().get(upn),
+                "roles": [r for r in (who.get("roles") or []) if isinstance(r, str)],
+                "approver_role": approver_role,
+                **{k: v for k, v in _week_stats(now(), approver=upn).items() if k in ("released_7d", "released_by_tool_7d")}}
 
     @app.get("/witness")
     async def witness_entries(authorization: Optional[str] = Header(default=None), after: int = 0, limit: int = 0):
@@ -698,7 +774,8 @@ def build_issuer_app(
                 "pending_receipts": live(list(app.state.pending.items())), "pending_plans": live(list(app.state.pending_plans.items())),
                 "max_open_holds": max_open_holds,
                 "enrolled_approvers": len(registry.public_hex()), "static_approvers": len(static_approvers),
-                "entra": bool(console_entra), "persistent": store.path != ":memory:", "started_at": app.state.started_at}
+                "entra": bool(console_entra), "persistent": store.path != ":memory:", "started_at": app.state.started_at,
+                "week": _week_stats(current)}
 
     @app.get("/approve-config")
     async def approve_config():

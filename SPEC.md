@@ -96,6 +96,7 @@ signature region (section 5).
 | `request_context.state_sha256` | 64 hex | yes | yes | optional: the hash of the executor's description of the target's state before the call (section 6.1); the receipt is honored only in that state |
 | `approval.required` | integer | yes | yes | optional, flagged receipts only: how many distinct approvers must sign (absent: 1) |
 | `approval.approvers` | array of string | yes | yes | optional, with `approval.required`: the approver key ids that count, sorted, unique, at least `required` of them (absent: any trusted approver) |
+| `approval.roles` | array of string | yes | yes | optional, with `approval.required`: directory roles (identity-token `roles` claim values, e.g. `Approver.Business`), sorted, unique; a grant counts only with the issuer's attestation that the approver's token carried one of them when it was posted (section 8.0) |
 | `timestamp_utc` | timestamp | no | no | when the receipt was built; informational only |
 | `decision_sha256` | 64 hex | - | yes | section 4 |
 | `issuer_key_id` | string | no | yes | names the issuer key in the target's trust material |
@@ -119,7 +120,8 @@ that is true, a non-empty string `approval_request_id`. An `approval`
 member, when present, must sit on a flagged receipt and be an object with
 exactly `required` (an integer, at least 1, not a boolean), optionally
 `approvers` (a non-empty array of unique non-empty strings, no fewer than
-`required`) and optionally `plannable` (a boolean; `false` marks a call
+`required`), optionally `roles` (a non-empty array of unique non-empty
+strings) and optionally `plannable` (a boolean; `false` marks a call
 the policy approves individually, which no plan releases, section 17),
 else the receipt is unusable. A receipt whose
 `envelope_version` is not the one the verifier implements is refused
@@ -357,10 +359,34 @@ receipt supplying `decision_sha256`, `approval_request_id` and
 `issuer_key_id`; the first failing grant's reason is the answer. Then, in
 order: a key that signed twice is `REF_APPROVAL_DUPLICATE_APPROVER`; a key
 the receipt's `approvers` list does not name is
-`REF_APPROVAL_APPROVER_NOT_ELIGIBLE`; fewer distinct approvers than
+`REF_APPROVAL_APPROVER_NOT_ELIGIBLE`; when the receipt names `roles`, a
+grant without a valid issuer role attestation is
+`REF_APPROVAL_ROLE_UNATTESTED` and one attested for none of the named
+roles is `REF_APPROVAL_ROLE_NOT_ELIGIBLE`; fewer distinct approvers than
 `required` (an empty list included) is `REF_APPROVAL_INSUFFICIENT`;
 otherwise `GRANTS_SUFFICIENT`. Grants beyond the threshold are accepted and
 counted; the set that verified is what the caller claims.
+
+**Role attestation.** An executor sees the approver's key, not the
+approver's directory token, so a receipt whose `approval.roles` routes it
+to a role is released only through a grant the issuer has annotated: a
+`role_attestation` member, outside the approver-signature region (the
+approver signed before it existed), of the form
+
+    {"attestation_version": "1.0", "grant_id", "approval_request_id", "approver_key_id",
+     "roles": [the named roles the posting token carried, sorted], "issuer_key_id", "issuer_signature"}
+
+with `issuer_signature` the issuer's Ed25519 signature over the canonical
+JSON of the other members. The verifier checks that the three ids equal
+the grant's, that `issuer_key_id` is the receipt's `issuer_key_id` and a
+pinned issuer key, that the signature verifies, and that `roles`
+intersects the receipt's `approval.roles`. The reference issuing service
+refuses a grant posted under a token that carries none of the receipt's
+roles (`REF_APPROVAL_ROLE_NOT_ELIGIBLE`) and attests the roles it does
+carry on one it accepts; a grant a client brings without the attestation
+is refused at the target. Routing never widens who may release: the
+approver's key must still be trusted and, when the receipt names
+`approvers`, listed.
 
 ### 8.1 At the target
 

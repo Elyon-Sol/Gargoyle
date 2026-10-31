@@ -71,7 +71,8 @@ def test_enrollment_needs_the_role_and_binds_the_tokens_upn(tmp_path):
     assert r.json() == {"enrolled": True, "key_id": "dana@contoso.com", "replaced": False}
     assert c.get("/approvers").json() == {"approvers": {"dana@contoso.com": pub_hex(key)}}        # public
     me = c.get("/me", headers=h(token("dana@contoso.com", roles=["Approver"]))).json()
-    assert me == {"principal": "dana@contoso.com", "may_approve": True, "enrolled_public_key_hex": pub_hex(key)}
+    assert me == {"principal": "dana@contoso.com", "may_approve": True, "enrolled_public_key_hex": pub_hex(key),
+                  "roles": ["Approver"], "approver_role": "Approver", "released_7d": 0, "released_by_tool_7d": {}}
     assert c.get("/me", headers=h(token("eve@contoso.com"))).json()["may_approve"] is False
     assert c.get("/approve-config").json() == {"entra": {"tenant": "t", "client_id": "c", "scope": "api://a/access"}}
     assert c.post("/approvers/enroll", json={"public_key_hex": "nope"}, headers=h(token("dana@contoso.com", roles=["Approver"]))).status_code == 400

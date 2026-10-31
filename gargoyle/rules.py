@@ -26,7 +26,10 @@ value matching the glob. Actions: "allow" (free),
 "hold" (allowed, needs a human's grant), "deny" (refused; `reason` names
 why, default RULE_DENIED). A hold may say how many distinct approvers must
 sign (`approvals`, default 1) and which approver key ids count
-(`approvers`); both go into the receipt. `"plan": false` on a hold keeps
+(`approvers`), and which directory roles a releasing approver's token
+must carry (`approver_roles`, e.g. ["Approver.Business"]: the routing
+that keeps a hold off the wrong person's screen); all go into the
+receipt. `"plan": false` on a hold keeps
 that tool out of scoped grants (gargoyle.plans): every call is approved
 on its own card. `default` is "deny" unless the
 file says "allow" or "hold".
@@ -93,8 +96,11 @@ def validate_rules(doc: Any) -> Optional[str]:
         if "approvers" in rule and (_globs(rule["approvers"]) is None or len(set(rule["approvers"])) != len(rule["approvers"])
                                     or len(rule["approvers"]) < rule.get("approvals", 1)):
             return "rule %d: approvers must list at least `approvals` distinct approver key ids" % i
-        if ("approvals" in rule or "approvers" in rule) and rule["action"] != "hold":
-            return "rule %d: approvals and approvers belong to a hold" % i
+        if "approver_roles" in rule and (_globs(rule["approver_roles"]) is None
+                                         or len(set(rule["approver_roles"])) != len(rule["approver_roles"])):
+            return "rule %d: approver_roles must be a non-empty list of distinct role names" % i
+        if ("approvals" in rule or "approvers" in rule or "approver_roles" in rule) and rule["action"] != "hold":
+            return "rule %d: approvals, approvers and approver_roles belong to a hold" % i
         if "plan" in rule and (not isinstance(rule["plan"], bool) or rule["action"] != "hold"):
             return "rule %d: plan must be true or false, on a hold" % i
     return None
@@ -258,7 +264,14 @@ def decide_rules_pattern(doc: Dict[str, Any], interaction: Mapping[str, Any]) ->
         if len(common) < required:
             plannable = False        # no one grant set could satisfy every rule the pattern reaches
         approvers = tuple(sorted(common)) if common else None
-    return Decision(ELIGIBLE, None, True, required, approvers, plannable)
+    role_sets = [set(r["approver_roles"]) for r in holds if "approver_roles" in r]
+    roles = None
+    if role_sets:
+        common_roles = set.intersection(*role_sets)
+        if not common_roles:
+            plannable = False        # routed to disjoint roles: no one approver may release every call
+        roles = tuple(sorted(common_roles)) if common_roles else None
+    return Decision(ELIGIBLE, None, True, required, approvers, plannable, roles)
 
 
 def decide_rules(doc: Dict[str, Any], interaction: Mapping[str, Any]) -> Decision:
@@ -282,7 +295,8 @@ def decide_rules(doc: Dict[str, Any], interaction: Mapping[str, Any]) -> Decisio
             return refuse(rule.get("reason", RULE_DENIED))
         if action == "hold":
             return Decision(ELIGIBLE, None, True, rule.get("approvals", 1),
-                            tuple(rule["approvers"]) if "approvers" in rule else None, rule.get("plan", True))
+                            tuple(rule["approvers"]) if "approvers" in rule else None, rule.get("plan", True),
+                            tuple(rule["approver_roles"]) if "approver_roles" in rule else None)
         return Decision(ELIGIBLE)
     default = doc.get("default", "deny")
     if default == "deny":

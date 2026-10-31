@@ -47,8 +47,10 @@ class Decision:
     asks the issuer's caller to hold the call for a human-signed grant
     (gargoyle.approval) before presenting the receipt; `approvals_required`
     says how many distinct approvers must sign (default 1) and `approvers`,
-    when given, which approver key ids are eligible to. Both go into the
-    receipt, hashed and signed, so the threshold is the issuer's word."""
+    when given, which approver key ids are eligible to; `approver_roles`,
+    when given, which directory roles (Entra app roles) a releasing
+    approver's token must carry. All go into the receipt, hashed and
+    signed, so the threshold and the routing are the issuer's word."""
 
     outcome: str
     reason: Optional[str] = None
@@ -56,16 +58,20 @@ class Decision:
     approvals_required: int = 1
     approvers: Optional[Tuple[str, ...]] = None
     plannable: bool = True      # False: this call must be approved individually, never inside a plan (gargoyle.plans)
+    approver_roles: Optional[Tuple[str, ...]] = None   # routing: only an approver whose token carries one of these may release
 
     @property
     def approval(self) -> Optional[Dict[str, Any]]:
         """The receipt's `approval` member for this decision, or None when
         the default (one grant from any trusted approver) applies."""
-        if not self.requires_approval or (self.approvals_required == 1 and not self.approvers and self.plannable):
+        if not self.requires_approval or (self.approvals_required == 1 and not self.approvers and self.plannable
+                                          and not self.approver_roles):
             return None
         out: Dict[str, Any] = {"required": int(self.approvals_required)}
         if self.approvers:
             out["approvers"] = sorted(set(self.approvers))
+        if self.approver_roles:
+            out["roles"] = sorted(set(self.approver_roles))
         if not self.plannable:
             out["plannable"] = False     # signed into the receipt: no plan may release this call
         return out

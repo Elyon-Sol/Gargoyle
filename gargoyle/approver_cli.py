@@ -133,8 +133,9 @@ def describe(pending: Dict[str, Any], args: Any = None) -> None:
              "  decision_sha256     : %s" % pending.get("decision_sha256"),
              "  approval_request_id : %s" % pending.get("approval_request_id")]
     if isinstance(pending.get("approval"), dict):
-        lines.append("  approvals needed    : %s%s" % (pending["approval"].get("required"),
-                     (" from " + ", ".join(pending["approval"]["approvers"])) if pending["approval"].get("approvers") else ""))
+        lines.append("  approvals needed    : %s%s%s" % (pending["approval"].get("required"),
+                     (" from " + ", ".join(pending["approval"]["approvers"])) if pending["approval"].get("approvers") else "",
+                     (" with role " + " or ".join(pending["approval"]["roles"])) if pending["approval"].get("roles") else ""))
     rc = pending.get("request_context")
     if isinstance(rc, dict):
         lines += ["  tool                : %s" % rc.get("tool"),
@@ -189,6 +190,11 @@ def approve_at_issuer(issuer_url: str, token: str, *, key_hex: str, key_id: str,
     status = 0
     for item in pending:
         env, args_ = (item["envelope"], item.get("args")) if isinstance(item, dict) and "envelope" in item else (item, None)
+        summary = item.get("summary") if isinstance(item, dict) else None
+        if isinstance(summary, dict) and isinstance(summary.get("sentence"), str):
+            # The issuer's plain-language line (gargoyle.holdtext): what the console's business view says.
+            print("  in plain words        : %s%s" % (summary["sentence"], " [cannot be undone]" if summary.get("irreversible") else ""),
+                  file=sys.stderr)
         describe(env, args_)
         if args_ is not None:
             from gargoyle.envelope import args_sha256

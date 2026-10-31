@@ -309,6 +309,27 @@ signs, deletes are refused; the policy is a JSON rules file you edit. A
 hold can demand more than one signature: `"approvals": 2` on a rule, with
 an optional `"approvers": [...]` naming which keys count, puts the terms
 in the receipt itself, and `gargoyle init --approvers 2` creates the keys.
+A hold can also be routed to a kind of approver: `"approver_roles":
+["Approver.Business"]` on a rule means only a sign-in whose Entra app
+roles include that one may release it, the issuer attests the role on the
+grant, and the executor refuses a grant without the attestation. The
+console renders every hold three ways for the same signature: the
+technical view (tool, raw arguments, hashes, pin, the diff) for the
+engineer, and the deputy and business views, which lead with the issuer's
+one-line description of the change (`Replace the contents of plan.md in
+/srv/clients/acme (412 bytes -> 530 bytes; +4/-1 lines)`), the change as
+before/after lines, who asked and how long is left, with the technical
+details one click away. The sentence is computed in the issuer from the
+held arguments and the bound state (`gargoyle.holdtext`; an adapter may
+supply its own in the state description), never authored, and a hold no
+template can describe is offered to the business view read-only. The view
+follows the sign-in's role (`Approver.Deputy`, `Approver.Business`; plain
+`Approver` and key files get the technical view) and can be switched.
+The business view hides holds routed to other roles and the activity
+stream; the status line says how many holds the person released this
+week and which tool most of them were, the prompt to add a rule or a
+scoped grant instead. Routing is what keeps approvals rare for the person
+who should see few; the rendering never changes what is signed.
 Every honored call comes back with receipt, grants and execution receipt,
 and `gargoyle audit` verifies them later offline.
 [examples/filesystem-agent](examples/filesystem-agent/) walks through it,

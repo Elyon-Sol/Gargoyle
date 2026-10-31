@@ -28,7 +28,12 @@ GRANT_VERSION = "1.0"
 # Keys excluded from the approver-signature region. The signature covers
 # everything else - including grant_id, decision_sha256, approval_request_id,
 # not_after, and approver_key_id - so all of them are tamper-proof.
-_SIGNATURE_EXCLUDED_KEYS = ("approver_signature",)
+# `role_attestation` is the issuer's own signed statement, attached after
+# the approver signed (see attest_roles); it carries its own signature.
+_SIGNATURE_EXCLUDED_KEYS = ("approver_signature", "role_attestation")
+
+ROLE_ATTESTATION_VERSION = "1.0"
+_ATTESTATION_SIGNATURE_EXCLUDED_KEYS = ("issuer_signature",)
 
 # Refusal codes.
 REF_APPROVAL_MALFORMED = "REF_APPROVAL_MALFORMED"
@@ -64,6 +69,8 @@ REF_APPROVAL_REQUEST_UNKNOWN = "REF_APPROVAL_REQUEST_UNKNOWN"
 REF_APPROVAL_INSUFFICIENT = "REF_APPROVAL_INSUFFICIENT"          # fewer distinct approvers than required
 REF_APPROVAL_DUPLICATE_APPROVER = "REF_APPROVAL_DUPLICATE_APPROVER"  # the same key signed twice
 REF_APPROVAL_APPROVER_NOT_ELIGIBLE = "REF_APPROVAL_APPROVER_NOT_ELIGIBLE"  # a key the receipt does not name
+REF_APPROVAL_ROLE_NOT_ELIGIBLE = "REF_APPROVAL_ROLE_NOT_ELIGIBLE"    # the approver holds none of the receipt's `approval.roles`
+REF_APPROVAL_ROLE_UNATTESTED = "REF_APPROVAL_ROLE_UNATTESTED"        # a role-routed receipt, and the grant carries no valid issuer attestation of the role
 
 ACCEPT_GRANT_VALID = "GRANT_VALID"
 ACCEPT_GRANTS_SUFFICIENT = "GRANTS_SUFFICIENT"
@@ -125,6 +132,53 @@ def sign_grant(grant: Dict[str, Any], signing_key: Any, key_id: str) -> Dict[str
     signature = signing_key.sign(canonical_json(region).encode("utf-8"))
     signed["approver_signature"] = signature.hex()
     return signed
+
+
+def attest_roles(grant: Dict[str, Any], roles: List[str], signing_key: Any, key_id: str) -> Dict[str, Any]:
+    """The issuer's signed statement that, when this grant was posted, the
+    approver's directory token carried `roles` (the ones the receipt's
+    `approval.roles` names). Bound to the grant (grant_id, hold, approver
+    key id) so it cannot be moved to another; signed with the issuer's
+    key, which the executor already pins. The approver's own signature is
+    untouched: the attestation sits outside its region."""
+    att = {"attestation_version": ROLE_ATTESTATION_VERSION, "grant_id": grant["grant_id"],
+           "approval_request_id": grant["approval_request_id"], "approver_key_id": grant["approver_key_id"],
+           "roles": sorted(set(roles)), "issuer_key_id": key_id}
+    att["issuer_signature"] = signing_key.sign(canonical_json(att).encode("utf-8")).hex()
+    return att
+
+
+def verify_role_attestation(grant: Any, *, required_roles: Any, issuer_public_keys: Optional[Dict[str, Any]],
+                            gate_key_id: Optional[str] = None) -> Dict[str, Any]:
+    """Does `grant` carry the issuer's word that its approver held one of
+    `required_roles`? Checks: the attestation is present and well-formed,
+    names this grant, its hold and its approver key, is signed by a pinned
+    issuer key (the receipt's own `issuer_key_id` when given), and names at
+    least one required role. Without issuer keys nothing can be verified
+    and the answer is REF_APPROVAL_ROLE_UNATTESTED: a role-routed hold is
+    never released on the client's say-so."""
+    att = grant.get("role_attestation") if isinstance(grant, dict) else None
+    if (not isinstance(att, dict) or att.get("attestation_version") != ROLE_ATTESTATION_VERSION
+            or not isinstance(att.get("roles"), list) or not att["roles"]
+            or not all(isinstance(r, str) and r for r in att["roles"])
+            or not isinstance(att.get("issuer_key_id"), str) or not isinstance(att.get("issuer_signature"), str)):
+        return _reject(REF_APPROVAL_ROLE_UNATTESTED)
+    if (att.get("grant_id") != grant.get("grant_id") or att.get("approval_request_id") != grant.get("approval_request_id")
+            or att.get("approver_key_id") != grant.get("approver_key_id")):
+        return _reject(REF_APPROVAL_ROLE_UNATTESTED)
+    if gate_key_id is not None and att["issuer_key_id"] != gate_key_id:
+        return _reject(REF_APPROVAL_ROLE_UNATTESTED)
+    key = (issuer_public_keys or {}).get(att["issuer_key_id"])
+    if key is None:
+        return _reject(REF_APPROVAL_ROLE_UNATTESTED)
+    region = {k: v for k, v in att.items() if k not in _ATTESTATION_SIGNATURE_EXCLUDED_KEYS}
+    try:
+        key.verify(bytes.fromhex(att["issuer_signature"]), canonical_json(region).encode("utf-8"))
+    except Exception:
+        return _reject(REF_APPROVAL_ROLE_UNATTESTED)
+    if not any(r in required_roles for r in att["roles"]):
+        return _reject(REF_APPROVAL_ROLE_NOT_ELIGIBLE)
+    return _accept()
 
 
 def _reject(reason: str) -> Dict[str, Any]:
@@ -243,6 +297,7 @@ def verify_grants(
     approver_public_keys: Dict[str, Any],
     now: Optional[datetime] = None,
     clock_skew: timedelta = timedelta(0),
+    issuer_public_keys: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Do these grants release the flagged `envelope` under its own terms?
 
@@ -252,7 +307,10 @@ def verify_grants(
     verify_grant against the receipt's decision_sha256, approval_request_id
     and issuer_key_id; the first failing grant's reason is the answer. Then:
     a key named by no grant more than once (REF_APPROVAL_DUPLICATE_APPROVER),
-    every key eligible (REF_APPROVAL_APPROVER_NOT_ELIGIBLE), and at least
+    every key eligible (REF_APPROVAL_APPROVER_NOT_ELIGIBLE), when the
+    receipt names `roles` every grant attested by the issuer for one of
+    them (REF_APPROVAL_ROLE_UNATTESTED / REF_APPROVAL_ROLE_NOT_ELIGIBLE;
+    `issuer_public_keys` verifies the attestation), and at least
     `required` of them (REF_APPROVAL_INSUFFICIENT). An empty list is
     REF_APPROVAL_INSUFFICIENT. Returns {"accepted", "reason", "grants"}
     with the grants that were counted, so the caller can claim each one."""
@@ -278,6 +336,11 @@ def verify_grants(
             return {"accepted": False, "reason": REF_APPROVAL_DUPLICATE_APPROVER, "grants": []}
         if terms["approvers"] is not None and key_id not in terms["approvers"]:
             return {"accepted": False, "reason": REF_APPROVAL_APPROVER_NOT_ELIGIBLE, "grants": []}
+        if terms.get("roles"):
+            r = verify_role_attestation(grant, required_roles=terms["roles"], issuer_public_keys=issuer_public_keys,
+                                        gate_key_id=envelope.get("issuer_key_id"))
+            if not r["accepted"]:
+                return {"accepted": False, "reason": r["reason"], "grants": []}
         seen.append(key_id)
     if len(seen) < terms["required"]:
         return {"accepted": False, "reason": REF_APPROVAL_INSUFFICIENT, "grants": []}
