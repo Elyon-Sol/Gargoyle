@@ -276,6 +276,7 @@ hold and deny rules):
     gargoyle witness --follow                   # the issuer's witness as a table, on its host (what an observe week records)
     gargoyle doctor --env middleware.env        # on a workstation: is this gate ready, one PASS/WARN/FAIL line per concern
     gargoyle rules test --rules rules.json --calls calls.jsonl   # what the file would do with these calls, vs. what you expect; then lint
+    gargoyle backup /var/backups/gargoyle       # on the issuer host: one archive named with the witness head; `gargoyle restore` puts it back (docs/operations.md)
 
 or approve in a browser: open the issuer's `/approve` page and load
 `approver-web.json`, or, with Entra configured, sign in with Microsoft;

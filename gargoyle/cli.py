@@ -738,6 +738,54 @@ def cmd_rules(args) -> int:
     return 1 if any(not r["ok"] for r in rows) or findings else 0
 
 
+def cmd_backup(args) -> int:
+    """`gargoyle backup DEST`: the issuer host's state as one archive named
+    with the witness head (gargoyle.operations); nothing is written when
+    the copied witness does not verify."""
+    from gargoyle.operations import backup, format_inventory
+    if args.inventory:
+        print(format_inventory()); return 0
+    if not args.dest:
+        print("gargoyle backup: DEST directory required (or --inventory)", file=sys.stderr); return 2
+    r = backup(Path(args.opt), Path(args.dest), extra=[Path(x) for x in (args.extra or [])])
+    if args.json:
+        print(json.dumps(r, indent=2))
+    elif r.get("archive"):
+        head = r.get("witness_head") or {}
+        print("%s  (%d files, %d bytes; witness seq %s %s; holds %s)" % (
+            r["archive"], r["files"], r["bytes"], head.get("seq"), (r.get("witness") or {}).get("reason", "no witness"),
+            json.dumps(r.get("holds") or {})))
+    else:
+        print("backup refused: %s" % r.get("refused"), file=sys.stderr)
+    return 0 if r.get("archive") else 1
+
+
+def cmd_restore(args) -> int:
+    """`gargoyle restore ARCHIVE`: verify the manifest, witness and hold
+    store, then put the state back under --opt (existing state moved
+    aside with --force). Stop the services first; the wrapper does."""
+    from gargoyle.operations import inspect, restore
+    if args.inspect:
+        print(json.dumps(inspect(Path(args.archive)), indent=2)); return 0
+    r = restore(Path(args.archive), Path(args.opt), force=args.force, verify_only=args.verify_only)
+    if args.json:
+        print(json.dumps(r, indent=2))
+    else:
+        m = r["manifest"]; head = m.get("witness_head") or {}
+        print("archive from %s on %s: %d files, witness seq %s, holds %s" % (m.get("created"), m.get("host"), r["files"], head.get("seq"), json.dumps(m.get("holds") or {})))
+        if r.get("witness"):
+            print("witness: %s (%s entries)" % (r["witness"].get("reason"), r["witness"].get("count")))
+        if r.get("holds_integrity"):
+            print("hold store: integrity %s" % r["holds_integrity"])
+        if r.get("refused"):
+            print("restore refused: %s" % r["refused"], file=sys.stderr)
+        elif args.verify_only:
+            print("verified; nothing written")
+        else:
+            print("restored under %s%s" % (args.opt, ("; previous state moved to " + r["moved_aside"]) if r.get("moved_aside") else ""))
+    return 0 if (r.get("restored") or (args.verify_only and not r.get("refused"))) else 1
+
+
 def cmd_audit(args) -> int:
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
     from gargoyle.execution import verify_chain
@@ -949,6 +997,23 @@ def main(argv=None) -> int:
     q = rs.add_parser("lint", help="unreachable rules, argument keys the tool never sends, unknown approver roles")
     q.add_argument("--rules", required=True); q.add_argument("--roles"); q.add_argument("--json", action="store_true")
     p.set_defaults(fn=cmd_rules)
+
+    p = sub.add_parser("backup", help="archive the issuer host's state (hold store, witness, keys, rules, gates) named with the witness head")
+    p.add_argument("dest", nargs="?", help="directory to write the archive into")
+    p.add_argument("--opt", default="/opt/gargoyle", help="the install root (default /opt/gargoyle)")
+    p.add_argument("--extra", action="append", metavar="FILE", help="also keep this file (e.g. a systemd unit); repeatable")
+    p.add_argument("--inventory", action="store_true", help="print what is backed up and what losing each means, then exit")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(fn=cmd_backup)
+
+    p = sub.add_parser("restore", help="put a backup archive's state back under --opt after verifying it; services must be stopped")
+    p.add_argument("archive")
+    p.add_argument("--opt", default="/opt/gargoyle")
+    p.add_argument("--force", action="store_true", help="move existing state aside to <opt>/pre-restore-<stamp>/ first")
+    p.add_argument("--verify-only", action="store_true", help="check the archive and write nothing")
+    p.add_argument("--inspect", action="store_true", help="print the archive's manifest")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(fn=cmd_restore)
 
     p = sub.add_parser("audit", help="verify a receipt chain offline, or a whole evidence log")
     p.add_argument("receipt", nargs="?"); p.add_argument("execution", nargs="?"); p.add_argument("grant", nargs="?")
