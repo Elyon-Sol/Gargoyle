@@ -49,7 +49,8 @@ def test_backup_names_the_witness_head_and_copies_the_inventory(tmp_path):
     assert r["archive"] and r["witness"]["accepted"] and r["witness_head"]["seq"] == 3
     name = Path(r["archive"]).name
     assert name.startswith("gargoyle-backup-") and "-w3-" in name and name.endswith(".tar.gz")
-    assert oct(Path(r["archive"]).stat().st_mode & 0o777) == "0o600"
+    if os.name == "posix":
+        assert oct(Path(r["archive"]).stat().st_mode & 0o777) == "0o600"
     m = inspect(Path(r["archive"]))
     files = set(m["files"])
     assert {"deploy/holds.sqlite", "deploy/witness.jsonl", "deploy/public-keys.json", "deploy/issuer.env", "tls/gate.key",
@@ -94,7 +95,8 @@ def test_restore_round_trip_moves_existing_aside_and_brings_the_hold_back(tmp_pa
     back = HoldStore(str(opt / "deploy" / "holds.sqlite"))
     assert "arid-1" in back.dict("pending"); back.close()
     assert (opt / "deploy" / "files" / "snapshots" / "x.bin").read_bytes() == b"\x00\x01"
-    assert oct((opt / "deploy" / "issuer.env").stat().st_mode & 0o777) == "0o600"
+    if os.name == "posix":
+        assert oct((opt / "deploy" / "issuer.env").stat().st_mode & 0o777) == "0o600"
 
 
 def test_restore_verify_only_writes_nothing_and_a_tampered_archive_is_refused(tmp_path):
