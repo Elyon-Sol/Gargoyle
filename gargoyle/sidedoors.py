@@ -39,6 +39,8 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional
 
+from gargoyle.globs import canonical_path
+
 # Kinds. The remedy for each is a sentence the operator can act on.
 UNGATED_MCP_SERVER = "UNGATED_MCP_SERVER"        # a client config runs a server on the root without the gate
 PROJECT_MCP_CONFIG = "PROJECT_MCP_CONFIG"        # a .mcp.json under the root: writers of the root can add servers
@@ -51,6 +53,7 @@ SYMLINK_OUT = "SYMLINK_OUT"                      # a symlink inside the root poi
 UNATTRIBUTED_CHANGE = "UNATTRIBUTED_CHANGE"      # a gated file is not as the gate left it (reconcile.check_tree)
 EXECUTABLE_WRITTEN = "EXECUTABLE_WRITTEN"        # a script or binary was written through the gate: content that runs outside it
 CLIENT_SHELL_PASSTHROUGH = "CLIENT_SHELL_PASSTHROUGH"  # Claude Code's `!` prefix runs a line in the user's shell with no hook (standing)
+CLIENT_STATE_IN_ROOT = "CLIENT_STATE_IN_ROOT"    # a client's own state folder (.claude) inside the root: the client writes there without the gate
 
 SCRIPT_SUFFIXES = (".ps1", ".psm1", ".bat", ".cmd", ".vbs", ".js", ".sh", ".py", ".exe", ".msi", ".dll", ".jar")
 WRITING_TOOLS = ("write_file", "edit_file", "move_file", "Write", "Edit", "MultiEdit", "NotebookEdit")
@@ -232,6 +235,14 @@ def discover(root: str, *, home: Optional[str] = None, system: Optional[str] = N
             names = [e["_name"] for e in _server_entries(doc) if not _is_gate(e)]
             findings.append(_finding(PROJECT_MCP_CONFIG, str(f), "project MCP config with %d ungated server(s): %s" % (len(names), ", ".join(names) or "none"),
                                      "keep .mcp.json out of gated trees, or set allowManagedMcpServersOnly"))
+    # A client launched inside the root keeps its own state there (Claude Code: .claude/, lock files,
+    # settings.local.json) and writes it without the gate: seen 2026-11-01 as .claude/scheduled_tasks.lock.
+    for name in (".claude", ".claude.json"):
+        f = Path(root) / name
+        if f.exists():
+            findings.append(_finding(CLIENT_STATE_IN_ROOT, str(f),
+                                     "a client's own state (%s) lives inside the gated root; the client writes there without the gate" % name,
+                                     "launch the client from a folder outside the root; the root is the server's argument, not the working directory"))
 
     # 2. Claude Code's own tools: Write/Edit/Bash reach any file the user can; the hook or a managed deny closes it.
     hook_files, managed_hook, managed_deny = [], False, []
@@ -317,7 +328,8 @@ def discover(root: str, *, home: Optional[str] = None, system: Optional[str] = N
             if not isinstance(e, dict) or e.get("kind") != "honored" or e.get("tool") not in WRITING_TOOLS:
                 continue
             ref = e.get("ref")
-            if not isinstance(ref, str) or not ref.lower().endswith(SCRIPT_SUFFIXES):
+            # The name Windows would use: `x.ps1.` and `x.ps1::$DATA` are x.ps1 on disk.
+            if not isinstance(ref, str) or not canonical_path(ref).endswith(SCRIPT_SUFFIXES):
                 continue
             receipt = e.get("receipt") if isinstance(e.get("receipt"), dict) else {}
             how = "released by an approver" if (e.get("grant") is not None or receipt.get("requires_approval") is True) \

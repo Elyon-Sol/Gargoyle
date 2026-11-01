@@ -38,6 +38,14 @@ TOOLS = [
 ]
 
 
+from gargoyle.globs import path_rewrite_reason
+
+# On Windows a name the filesystem would rewrite (trailing dot or space, a
+# stream suffix, a device name) is refused outright, so the file created is
+# the file named. Tests set this on any platform.
+STRICT_NAMES = os.name == "nt"
+
+
 class Root:
     def __init__(self, root: str) -> None:
         self.root = Path(root).resolve()
@@ -45,6 +53,10 @@ class Root:
             raise SystemExit("fs_server: not a directory: %s" % root)
 
     def inside(self, p: str) -> Path:
+        if STRICT_NAMES:
+            reason = path_rewrite_reason(p)
+            if reason:
+                raise ValueError("path is not canonical: %s (%s)" % (p, reason))
         q = (self.root / p).resolve() if not Path(p).is_absolute() else Path(p).resolve()
         if q != self.root and self.root not in q.parents:
             raise ValueError("path is outside the allowed root: %s" % p)
@@ -68,8 +80,8 @@ class Root:
             p.write_bytes(data)
             return "wrote %d bytes to %s" % (len(data), p)
         if name == "create_directory":
-            p = self.inside(args["path"]); p.mkdir(parents=True, exist_ok=True)
-            return "created %s" % p
+            p = self.inside(args["path"]); existed = p.is_dir(); p.mkdir(parents=True, exist_ok=True)
+            return ("already existed %s" if existed else "created %s") % p
         if name == "move_file":
             s, d = self.inside(args["source"]), self.inside(args["destination"])
             shutil.move(str(s), str(d))

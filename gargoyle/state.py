@@ -29,6 +29,7 @@ the state is that file. Any executor can supply its own probe.
 
 import hashlib
 import ntpath
+import os
 import posixpath
 import re
 from typing import Any, Callable, Dict, Optional
@@ -39,6 +40,16 @@ PROBE_TOOLS = ("write_file", "edit_file", "create_directory", "move_file", "dele
 PATH_ARGS = ("path", "source")
 RESOLVED_ARGS = ("path", "source", "destination")
 REF_TARGET_RELATIVE_PATH = "REF_TARGET_RELATIVE_PATH"   # a state-bound tool named a relative path and no root is configured
+REF_TARGET_PATH_NOT_CANONICAL = "REF_TARGET_PATH_NOT_CANONICAL"  # Windows would rewrite the name (trailing dot/space, stream suffix, device name)
+REF_TARGET_STATE_UNREADABLE = "REF_TARGET_STATE_UNREADABLE"      # the target exists but could not be read: the call must not run unbound
+
+
+class StateUnreadable(Exception):
+    """The target exists but its bytes could not be read (a sharing violation,
+    a permission error). Before 2026-11-01 the probe returned None here and
+    the call went on unbound: no state on the card, no state check at
+    execution, no line in any log. A security property must not vanish
+    silently; the gate refuses instead."""
 
 
 def is_absolute_path(value: str) -> bool:
@@ -59,19 +70,53 @@ def resolve_path_args(tool: str, args: Any, root: Optional[str]):
     refused with REF_TARGET_RELATIVE_PATH; other tools pass through as before."""
     if not isinstance(args, dict):
         return args, None
+    from gargoyle.globs import is_windows_path, path_rewrite_reason
     out = None
     for key in RESOLVED_ARGS:
         value = args.get(key)
-        if not isinstance(value, str) or not value or is_absolute_path(value):
+        if not isinstance(value, str) or not value:
             continue
-        if root is None:
-            if tool in PROBE_TOOLS:
-                return args, REF_TARGET_RELATIVE_PATH
-            continue
-        if out is None:
-            out = dict(args)
-        out[key] = _join_under(root, value)
+        if not is_absolute_path(value):
+            if root is None:
+                if tool in PROBE_TOOLS:
+                    return args, REF_TARGET_RELATIVE_PATH
+                continue
+            if out is None:
+                out = dict(args)
+            value = out[key] = _join_under(root, value)
+        # A name Windows would rewrite is refused before the rules see it, so
+        # the name judged, the name bound and the name on disk are one name
+        # (soak test 2026-11-01: `x.ps1.`, `x.ps1 ` and `x.ps1::$DATA` slipped
+        # a hold on `*.ps1` and landed as x.ps1).
+        if (is_windows_path(value) or (root is not None and not root.startswith("/"))) and path_rewrite_reason(value):
+            return args, REF_TARGET_PATH_NOT_CANONICAL
     return (out if out is not None else args), None
+
+
+def resolve_steps(steps: Any, root: Optional[str]):
+    """Plan steps resolved the way calls are: exact arguments through
+    `resolve_path_args`, relative `match` globs joined under the root. Until
+    2026-11-01 steps went to the issuer as written while calls were
+    resolved first, so a relative step was judged by the wrong rules and
+    never matched the call it was meant to release. Returns (steps, reason)."""
+    if not isinstance(steps, list):
+        return steps, None
+    out = []
+    for s in steps:
+        if isinstance(s, dict) and isinstance(s.get("args"), dict):
+            a, why = resolve_path_args(str(s.get("tool")), s["args"], root)
+            if why is not None:
+                return steps, why
+            s = dict(s, args=a)
+        elif isinstance(s, dict) and isinstance(s.get("match"), dict) and root:
+            m = dict(s["match"])
+            for k in RESOLVED_ARGS:
+                v = m.get(k)
+                if isinstance(v, str) and v and not is_absolute_path(v):
+                    m[k] = _join_under(root, v)
+            s = dict(s, match=m)
+        out.append(s)
+    return out, None
 
 
 def _join_under(root: str, value: str) -> str:
@@ -139,6 +184,10 @@ def filesystem_probe(tool: str, args: Any) -> Optional[Dict[str, Any]]:
     path = next((args[k] for k in PATH_ARGS if isinstance(args.get(k), str) and args[k]), None)
     if path is None:
         return None
+    if os.path.isdir(path):
+        # The same on every platform: Windows raises PermissionError for a
+        # directory, which used to leave create_directory unbound there.
+        return describe(path, b"", with_text=False)
     try:
         with open(path, "rb") as f:
             data = f.read()
@@ -146,8 +195,8 @@ def filesystem_probe(tool: str, args: Any) -> Optional[Dict[str, Any]]:
         data = None
     except IsADirectoryError:
         return describe(path, b"", with_text=False)
-    except OSError:
-        return None
+    except OSError as exc:
+        raise StateUnreadable("%s: %s" % (path, exc))
     return describe(path, data)
 
 

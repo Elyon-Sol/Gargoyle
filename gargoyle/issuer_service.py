@@ -431,7 +431,8 @@ def build_issuer_app(
         event("issued", principal=who["principal"], tool=body["tool"], held=bool(result.envelope["requires_approval"]),
               **({"oid": who["oid"]} if who.get("oid") else {}),
               target_url=body["target_url"],         # one issuer, several gates: an audit of one gate's log skips the others' receipts
-              covered=covered, decision_id=result.envelope.get("decision_id"), decision_sha256=result.envelope["decision_sha256"],
+              covered=covered, state_bound=state is not None,   # whether the receipt binds the target's state (asked by the 2026-11-01 soak)
+              decision_id=result.envelope.get("decision_id"), decision_sha256=result.envelope["decision_sha256"],
               approval_request_id=result.envelope.get("approval_request_id"), args_sha256=result.envelope["request_context"]["args_sha256"])
         if result.envelope["requires_approval"] and not covered:
             arid = result.envelope["approval_request_id"]

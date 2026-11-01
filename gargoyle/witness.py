@@ -131,6 +131,10 @@ def describe(entry: Any) -> Dict[str, str]:
     short = lambda k, n=12: (str(entry.get(k) or "")[:n])
     if ev == "issued":
         outcome = "covered by an approved plan" if entry.get("covered") else ("held for approval" if entry.get("held") else "allowed")
+        if entry.get("state_bound"):
+            outcome += " (state-bound)"
+        elif "state_bound" in entry and entry.get("held"):
+            outcome += " (unbound)"
         ref = short("decision_id", 40) or short("decision_sha256")
     elif ev == "refused":
         outcome, ref = "refused: %s" % entry.get("reason", "?"), ""

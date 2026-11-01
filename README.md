@@ -364,7 +364,8 @@ project `.mcp.json` anyone who writes the folder can extend, a managed MCP
 file that is not exclusive, a share that exports the folder, a world-writable
 folder, a symlink that lands outside it, a gated file changed with no
 evidence entry, a script written through the gate that a person then runs
-outside it, and Claude Code's `!` prefix. None of these is an attack; all of
+outside it, Claude Code's `!` prefix, and a client's own state folder
+(`.claude/`) kept inside the gated root, where the client writes without the gate. None of these is an attack; all of
 them are what an audit of the evidence log cannot see. The gate looks for them itself (`gargoyle.sidedoors`):
 
     gargoyle sidedoors --env middleware.env            # list them now; exit 1 when any are found
@@ -477,7 +478,7 @@ cannot attach receipts work unchanged. Configuration is by environment:
 | `GARGOYLE_HOLD_WEBHOOK_URL`, `GARGOYLE_APPROVE_URL` | issuer: POST a notice of every new hold (Slack incoming-webhook shape, `text` plus the hold) with a link to the console; notice only, the grant still needs the approver's key |
 | `GARGOYLE_MCP_INSTRUCTIONS` | replaces the standing instructions the gate hands the model in the MCP handshake (default: all work on the target goes through these tools, a wait is normal, a refusal is final, plans and undo exist); the user never has to name the server |
 | `GARGOYLE_MCP_STATE_PROBE` | `filesystem` (default) binds a held file write to the file's current state: the approver sees the change as a diff, the call refuses if the file moved before the run (`REF_VERIFY_STATE_MISMATCH`), and the execution receipt records pre and post state; `none` disables |
-| `GARGOYLE_MCP_STATE_ROOT` | the upstream's root: a relative path argument is made absolute against it before the rules, the gate-folder check, the state probe and the upstream see it, so all four look at the same file (default: the path in a `mcp://filesystem/` target id; `init` writes it). With no root, a relative path on a state-bound tool is refused with `REF_TARGET_RELATIVE_PATH` |
+| `GARGOYLE_MCP_STATE_ROOT` | the upstream's root: a relative path argument is made absolute against it before the rules, the gate-folder check, the state probe and the upstream see it, so all four look at the same file (default: the path in a `mcp://filesystem/` target id; `init` writes it). With no root, a relative path on a state-bound tool is refused with `REF_TARGET_RELATIVE_PATH`; a name Windows would rewrite (trailing dot or space, a stream suffix, a device name) with `REF_TARGET_PATH_NOT_CANONICAL`, and globs are matched against the canonical name too |
 | `GARGOYLE_MCP_ADAPTER_SPEC` | with `GARGOYLE_MCP_STATE_PROBE=graph`: the tool-to-resource mapping JSON (default: the reference naming) |
 | `GARGOYLE_MCP_UPSTREAM_URL`, `GARGOYLE_MCP_UPSTREAM_TOKEN` | remote mode: the MCP server to front over Streamable HTTP, and its bearer |
 | `GARGOYLE_MCP_SNAPSHOT_DIR` | where the bytes a held, state-bound write replaces are kept (default `snapshots/` beside the audit log; `none` disables undo); the middleware then offers a `gargoyle_revert` tool that restores an approved change through the gate, held and state-bound like any write |
