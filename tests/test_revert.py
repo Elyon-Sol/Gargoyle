@@ -16,7 +16,7 @@ from gargoyle.issuer_service import build_issuer_app
 from gargoyle.jws import encode
 from gargoyle.mcp_server import EXECUTED_META_KEY, REASON_META_KEY, IssuerClient, ServerState, StdioUpstream, handle_message
 from gargoyle.policy import ELIGIBLE, Decision, refuse
-from gargoyle.revert import (REF_REVERT_NEEDS_DELETE, REF_REVERT_STATE_CHANGED, REF_REVERT_UNKNOWN, REVERT_TOOL,
+from gargoyle.revert import (REF_REVERT_NOT_ATTESTED, REF_REVERT_NEEDS_DELETE, REF_REVERT_STATE_CHANGED, REF_REVERT_UNKNOWN, REVERT_TOOL,
                              SnapshotStore, plan_revert)
 from gargoyle.adapters import FilesystemAdapter
 from gargoyle.state import describe, filesystem_probe, state_sha256
@@ -46,7 +46,7 @@ def test_snapshot_store_and_plan(tmp_path):
     desc = describe(str(f), b"one\n")
     meta = store.put("d-1", desc, b"one\n", "write_file", {"path": str(f), "content": "two\n"})
     assert meta["pre_state_sha256"] == state_sha256(desc) and meta["existed"] and meta["post_state_sha256"] is None
-    assert plan_revert(store, "d-1", FilesystemAdapter())["reason"] == REF_REVERT_UNKNOWN        # not finished yet
+    assert plan_revert(store, "d-1", FilesystemAdapter())["reason"] == REF_REVERT_NOT_ATTESTED   # not finished yet
     f.write_bytes(b"two\n"); store.record_post("d-1", state_sha256(describe(str(f), b"two\n")))
     plan = plan_revert(store, "last", FilesystemAdapter())
     assert plan["reverts"] == "d-1" and plan["params"] == {"name": "write_file", "arguments": {"path": str(f), "content": "one\n"}}

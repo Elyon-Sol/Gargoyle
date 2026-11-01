@@ -242,7 +242,15 @@ absolute against the upstream's root before the rules, the state probe
 and the upstream see it (`GARGOYLE_MCP_STATE_ROOT`, or the root in a
 `mcp://filesystem/<root>` target id), and without a known root a
 state-bound tool with a relative path is refused rather than bound to a
-file beside the gate (`REF_TARGET_RELATIVE_PATH`).
+file beside the gate (`REF_TARGET_RELATIVE_PATH`). A name the target's filesystem would rewrite before creating it, on
+Windows a trailing dot or space, a `name:stream` or `::$DATA` suffix, or a
+reserved device name, is refused with `REF_TARGET_PATH_NOT_CANONICAL`
+before the rules see it, and rule and plan globs are matched against the
+canonical name as well as the name sent (soak test 2026-11-01: three such
+names slipped a hold on `*.ps1` and landed as `.ps1` files). A target that
+exists but cannot be read when the state is probed refuses the call with
+`REF_TARGET_STATE_UNREADABLE` rather than letting it run unbound. The
+witness's `issued` event carries `state_bound`.
 
 A description may also carry `summary`, a sentence for the approver in
 the target's own terms, and `irreversible`, true when no later call can

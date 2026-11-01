@@ -190,7 +190,7 @@ class IssuerClient:
             sys.stderr.write("gargoyle: issuer unreachable for a plan: %s\n" % exc)
             return {"plan": None, "reason": REF_TARGET_ISSUER_UNAVAILABLE}
         if not body.get("issued"):
-            return {"plan": None, "reason": body.get("reason") or REF_TARGET_ISSUER_UNAVAILABLE}
+            return {"plan": None, "reason": body.get("reason") or REF_TARGET_ISSUER_UNAVAILABLE, "step": body.get("step")}
         return {"plan": body["plan"], "held": bool(body.get("held")), "reason": None}
 
     def report_sidedoors(self, target_url: str, findings: List[Dict[str, Any]]) -> bool:
@@ -528,7 +528,12 @@ def _gate(state: ServerState, params: Dict[str, Any]) -> Dict[str, Any]:
         # verified against the pinned issuer key like any other. The
         # target's current state goes with the request (gargoyle.state), so
         # a hold is approved against it and bound to it.
-        probed = state.adapter.probe(name, args) if state.adapter is not None else None
+        from gargoyle.state import REF_TARGET_STATE_UNREADABLE, StateUnreadable
+        try:
+            probed = state.adapter.probe(name, args) if state.adapter is not None else None
+        except StateUnreadable as exc:
+            sys.stderr.write("gargoyle: target unreadable, call refused: %s\n" % exc)
+            return refused(REF_TARGET_STATE_UNREADABLE)
         if probed is not None:
             gate_ref["ref"] = probed[0].get("ref")
         # An approved plan may already cover this call; say so, and the
@@ -561,8 +566,12 @@ def _gate(state: ServerState, params: Dict[str, Any]) -> Dict[str, Any]:
     live_state, now_probe = None, None
     if isinstance(envelope, dict) and isinstance(envelope.get("request_context"), dict) \
             and "state_sha256" in envelope["request_context"] and state.adapter is not None:
-        from gargoyle.state import state_sha256 as _state_hash
-        now_probe = state.adapter.probe(name, args)
+        from gargoyle.state import REF_TARGET_STATE_UNREADABLE, StateUnreadable, state_sha256 as _state_hash
+        try:
+            now_probe = state.adapter.probe(name, args)
+        except StateUnreadable as exc:
+            sys.stderr.write("gargoyle: target unreadable at execution, call refused: %s\n" % exc)
+            return refused(REF_TARGET_STATE_UNREADABLE, envelope)
         live_state = _state_hash(now_probe[0]) if now_probe is not None else None
     from gargoyle.plans import is_plan_release
     if is_plan_release(grant):
@@ -643,7 +652,7 @@ def _touches_gate_files(args: Any, gate_dir: str) -> bool:
     Deeper subfolders are left alone: a deployment folder may hold the
     project it serves."""
     import fnmatch
-    from gargoyle.globs import is_pathlike, normalize_path
+    from gargoyle.globs import canonical_path, is_pathlike, normalize_path
     values = []
     if isinstance(args, dict):
         for v in args.values():
@@ -654,14 +663,14 @@ def _touches_gate_files(args: Any, gate_dir: str) -> bool:
     for v in values:
         if not is_pathlike(v):
             continue
-        n = normalize_path(v)
-        if n == gate_dir:
-            return True
-        if n.startswith(gate_dir + "/"):
-            first = n[len(gate_dir) + 1:].split("/")[0]
-            direct = "/" not in n[len(gate_dir) + 1:]
-            if first == "snapshots" or (direct and any(fnmatch.fnmatchcase(first, g) for g in _GATE_FILE_GLOBS)):
+        for n in {normalize_path(v), canonical_path(v)}:     # the name as sent and the name Windows would use
+            if n == gate_dir:
                 return True
+            if n.startswith(gate_dir + "/"):
+                first = n[len(gate_dir) + 1:].split("/")[0]
+                direct = "/" not in n[len(gate_dir) + 1:]
+                if first == "snapshots" or (direct and any(fnmatch.fnmatchcase(first, g) for g in _GATE_FILE_GLOBS)):
+                    return True
     return False
 
 
@@ -703,9 +712,25 @@ def _handle_plan(state: ServerState, params: Dict[str, Any]) -> Dict[str, Any]:
         return {"content": [{"type": "text", "text": "refused: plans need self-issue mode"}], "isError": True,
                 "_meta": {EXECUTED_META_KEY: False, REASON_META_KEY: REF_TARGET_NOT_CONFIGURED}}
     args = params.get("arguments") or {}
-    res = state.issuer_client.plan(state.config["target_id"], args.get("steps") or [], str(args.get("note") or ""))
+    steps = args.get("steps") or []
+    from gargoyle.adapters import FilesystemAdapter
+    if isinstance(state.adapter, FilesystemAdapter):
+        # Steps are resolved exactly as calls are, or the plan is judged by the
+        # wrong rules and releases nothing.
+        from gargoyle.state import resolve_steps
+        steps, why = resolve_steps(steps, state.state_root)
+        if why is not None:
+            return {"content": [{"type": "text", "text": "refused: " + why}], "isError": True,
+                    "_meta": {EXECUTED_META_KEY: False, REASON_META_KEY: why}}
+        if state.gate_dir is not None and any(isinstance(s, dict) and _touches_gate_files(s.get("args"), state.gate_dir) for s in steps):
+            return {"content": [{"type": "text", "text": "refused: " + REF_TARGET_GATE_FILES}], "isError": True,
+                    "_meta": {EXECUTED_META_KEY: False, REASON_META_KEY: REF_TARGET_GATE_FILES}}
+    res = state.issuer_client.plan(state.config["target_id"], steps, str(args.get("note") or ""))
     if res["plan"] is None:
-        return {"content": [{"type": "text", "text": "refused: " + str(res["reason"])}], "isError": True,
+        step, where = res.get("step"), ""
+        if isinstance(step, int) and 0 <= step < len(steps) and isinstance(steps[step], dict):
+            where = " (step %d: %s)" % (step + 1, steps[step].get("tool"))
+        return {"content": [{"type": "text", "text": "refused: %s%s" % (res["reason"], where)}], "isError": True,
                 "_meta": {EXECUTED_META_KEY: False, REASON_META_KEY: res["reason"]}}
     plan, grants = res["plan"], []
     if res["held"]:
@@ -764,7 +789,12 @@ def _attest(state: ServerState, envelope: Optional[Dict[str, Any]], outputs: Any
     post, post_data = None, None
     if params is not None and state.adapter is not None and "state_sha256" in (envelope.get("request_context") or {}):
         from gargoyle.state import state_sha256 as _state_hash
-        probed = state.adapter.probe(str(params.get("name")), params.get("arguments", {}))
+        from gargoyle.state import StateUnreadable
+        try:
+            probed = state.adapter.probe(str(params.get("name")), params.get("arguments", {}))
+        except StateUnreadable as exc:
+            sys.stderr.write("gargoyle: target unreadable after execution, no post-state attested: %s\n" % exc)
+            probed = None
         if probed is not None:
             post, post_data = _state_hash(probed[0]), probed[1]
     if post is not None and state.snapshots is not None and isinstance(envelope.get("decision_id"), str):
@@ -856,12 +886,19 @@ def handle_message(state: ServerState, msg: Dict[str, Any]) -> Optional[Dict[str
         if params.get("name") == REVERT_TOOL:
             # An undo is a write the middleware composes from its snapshot; it
             # then goes through the gate exactly as the assistant's own writes.
+            from gargoyle.revert import REF_REVERT_DISABLED, revert_text
+            from gargoyle.state import REF_TARGET_STATE_UNREADABLE, StateUnreadable
             if state.snapshots is None:
-                return _success(msg_id, {"content": [{"type": "text", "text": "refused: undo is not enabled"}], "isError": True,
-                                         "_meta": {EXECUTED_META_KEY: False, REASON_META_KEY: "REF_REVERT_UNKNOWN"}})
-            plan = plan_revert(state.snapshots, str((params.get("arguments") or {}).get("decision_id") or "last"), state.adapter)
+                return _success(msg_id, {"content": [{"type": "text", "text": revert_text(REF_REVERT_DISABLED)}], "isError": True,
+                                         "_meta": {EXECUTED_META_KEY: False, REASON_META_KEY: REF_REVERT_DISABLED}})
+            rargs = params.get("arguments") or {}
+            try:
+                plan = plan_revert(state.snapshots, str(rargs.get("decision_id") or "last"), state.adapter,
+                                   ref=rargs.get("path") if isinstance(rargs.get("path"), str) else None)
+            except StateUnreadable:
+                plan = {"reason": REF_TARGET_STATE_UNREADABLE}
             if "reason" in plan:
-                return _success(msg_id, {"content": [{"type": "text", "text": "refused: " + plan["reason"]}], "isError": True,
+                return _success(msg_id, {"content": [{"type": "text", "text": revert_text(plan["reason"])}], "isError": True,
                                          "_meta": {EXECUTED_META_KEY: False, REASON_META_KEY: plan["reason"]}})
             params = plan["params"]
             msg = dict(msg, params=params)
@@ -1107,7 +1144,8 @@ if __name__ == "__main__":
                              audit_log=_os.environ.get(ENV_AUDIT_LOG) or None,
                              state_probe=_os.environ.get(ENV_STATE_PROBE) or "filesystem",
                              adapter_spec=_os.environ.get(ENV_ADAPTER_SPEC) or None,
-                             state_root=_os.environ.get(ENV_STATE_ROOT) or None)
+                             state_root=_os.environ.get(ENV_STATE_ROOT) or None,
+                             snapshot_dir=_os.environ.get(ENV_SNAPSHOT_DIR) or None)   # documented since 0.17, read since 2026-11-01
         # Discovery mode: once the gate is up, look around it for the other
         # ways into its files (gargoyle.sidedoors) when the last look is older
         # than GARGOYLE_MCP_DISCOVERY_HOURS. Off the serving thread; the gate
