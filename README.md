@@ -275,6 +275,7 @@ hold and deny rules):
     gargoyle approve --watch 2                  # where the approver sits (terminal)
     gargoyle witness --follow                   # the issuer's witness as a table, on its host (what an observe week records)
     gargoyle doctor --env middleware.env        # on a workstation: is this gate ready, one PASS/WARN/FAIL line per concern
+    gargoyle rules test --rules rules.json --calls calls.jsonl   # what the file would do with these calls, vs. what you expect; then lint
 
 or approve in a browser: open the issuer's `/approve` page and load
 `approver-web.json`, or, with Entra configured, sign in with Microsoft;
@@ -355,6 +356,21 @@ a line typed with the `!` prefix runs in the user's shell with no hook at
 all (verified 2026-10-31), and no setting changes that.
 [docs/claude-code-hook.md](docs/claude-code-hook.md) has the setup and the
 limits.
+
+### Rules before they are the policy: `gargoyle rules`
+
+First match wins, so a rule one line too late never fires; a glob written
+for `path` never sees `move_file`, which sends `source` and `destination`;
+a role name typed once wrong routes a hold to nobody. Three commands answer
+such questions from the file alone, with the issuer's own `decide_rules`:
+
+    gargoyle rules explain --rules rules.json --tool move_file --arg destination=/x/run.ps1   # every rule, matched or why not
+    gargoyle rules test --rules rules.json --calls calls.jsonl --roles Approver,Approver.Business  # one row per call vs `expect`, then lint
+    gargoyle rules lint --rules rules.json          # UNREACHABLE, ARG_KEY_UNKNOWN, ROLE_UNKNOWN
+
+`examples/rules/` holds a Windows observe-mode pilot's rules and the fourteen
+calls it decided live, as a `calls.jsonl` the suite runs. The matching model
+is one page: `docs/rules.md`.
 
 ### Preflight: `gargoyle doctor`
 

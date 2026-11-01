@@ -1,0 +1,16 @@
+# The calls a Windows observe-mode pilot with one routed folder must decide as it did live (2026-10-30 to 2026-11-01).
+# One JSON object per line. `expect` names what the issuer did; `gargoyle rules test` fails when the file says otherwise.
+{"note": "routed folder: content change held for the business approver (witness seq 532/533)", "tool": "write_file", "args": {"path": "C:\\gargoyle-share\\routed\\trial-2.md", "content": "# Trial 2"}, "expect": {"action": "hold", "rule": 0, "roles": ["Approver.Business"], "approvals": 1}}
+{"note": "a script anywhere on the share is held (declined live with a reason relayed)", "tool": "write_file", "args": {"path": "C:\\gargoyle-share\\probe\\t5.ps1", "content": "Write-Host hi"}, "expect": {"action": "hold", "rule": 1}}
+{"note": "a script by any other name is still a script", "tool": "write_file", "args": {"path": "C:\\gargoyle-share\\soak\\TICKET-1009-cleanup.bat", "content": "del *.*"}, "expect": {"action": "hold", "rule": 3}}
+{"note": "observe: an ordinary file on a drive letter is allowed and recorded", "tool": "write_file", "args": {"path": "C:\\gargoyle-share\\probe\\note.txt", "content": "hello"}, "expect": {"action": "allow", "rule": 14}}
+{"note": "observe does not reach deletes: deny comes first (soak finding B)", "tool": "delete_file", "args": {"path": "C:\\gargoyle-share\\hello.txt"}, "expect": {"action": "deny", "rule": 13, "reason": "DESTRUCTIVE_TOOL"}}
+{"note": "renaming into a script name is held like writing one (the move_file gap, closed)", "tool": "move_file", "args": {"source": "C:\\gargoyle-share\\it-test\\log.txt", "destination": "C:\\gargoyle-share\\it-test\\run.ps1"}, "expect": {"action": "hold", "rule": 7}}
+{"note": "any other move on the share is observed", "tool": "move_file", "args": {"source": "C:\\gargoyle-share\\it-test\\log.txt", "destination": "C:\\gargoyle-share\\it-test\\log-renamed.txt"}, "expect": {"action": "allow", "rule": 15}}
+{"note": "reads are free", "tool": "read_file", "args": {"path": "C:\\gargoyle-share\\hello.txt"}, "expect": {"action": "allow", "rule": 14}}
+{"note": "a script written with a trailing dot is the same script once canonical (gate refuses the name before the policy; the policy agrees)", "tool": "write_file", "args": {"path": "C:\\gargoyle-share\\soak\\t1.ps1.", "content": "x"}, "expect": {"action": "hold", "rule": 1}}
+{"note": "Linux side: the routed folder goes to the business approver", "tool": "write_file", "args": {"path": "/srv/shared/plan.md", "content": "x"}, "expect": {"action": "hold", "rule": 17, "roles": ["Approver.Business"]}}
+{"note": "Linux side: every other content change is a plain hold", "tool": "write_file", "args": {"path": "/home/vboxuser/notes.md", "content": "x"}, "expect": {"action": "hold", "rule": 18}}
+{"note": "Linux side: listing is free", "tool": "list_directory", "args": {"path": "/srv/shared"}, "expect": {"action": "allow", "rule": 16}}
+{"note": "Linux side: a delete is refused before anything else", "tool": "delete_file", "args": {"path": "/srv/shared/plan.md"}, "expect": {"action": "deny", "rule": 13}}
+{"note": "a tool the file never names falls to the default (allow, observe mode)", "tool": "git_push", "args": {"remote": "origin"}, "expect": {"action": "allow", "rule": null}}
