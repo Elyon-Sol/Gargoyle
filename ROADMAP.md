@@ -1,4 +1,4 @@
-# Gargoyle roadmap (2026-10-16)
+# Gargoyle roadmap (opened 2026-10-16, last entry 2026-11-01)
 
 Where this comes from: a comparison of Gargoyle against the products and
 drafts that overlap it most (ActionProxy, Vestige, the MCP "work contract"
@@ -595,3 +595,73 @@ outside.
   evidence log 4 entries 0 failed. Docs: docs/claude-code-hook.md. Not covered:
   Claude Desktop, claude.ai, hosted connectors; and the hook is evidence, not
   containment, on a workstation the user administers.
+- EMILIA accepted the interop pack (2026-10-28): emiliaprotocol/emilia-protocol#924,
+  filed 2026-10-20 with the redacted live export, was closed as completed by the
+  maintainer's PR #931, which added `interop/gargoyle-emilia/` to their repository
+  (the fixture byte for byte, an offline runner with four tamper cases, the field
+  mapping). The reverse direction, EMILIA's conformance harness invoking Gargoyle's
+  verifier, is gargoyle/emilia_runner.py (`python -m gargoyle.emilia_runner
+  VECTORS.json`, EP-RECEIPT-v1 and EP-CANONICALIZATION-v1, 49 rows; Gargoyle PR #1)
+  and EMILIA PR #948, open, which pins the Gargoyle commit it ran.
+- OAuth broker for hosted connectors (2026-10-30, PR #2): gargoyle/oauth_broker.py.
+  `gargoyle remote` is the OAuth authorization server a hosted MCP client expects
+  (RFC 8414 and 9728 metadata, RFC 7591 registration limited to allowed callbacks,
+  code flow with PKCE); the sign-in happens at the tenant; the gate holds the user's
+  Entra token for the issuer and refreshes it. docs/guide-production-entra.md is the
+  production build for one tenant. Deployed on the reference host, metadata and
+  redirect checks verified; a human sign-in through a connector has not been run.
+- Operability from the second host (2026-10-30, PRs #3-#6): audit usage errors
+  instead of tracebacks; relative path arguments resolved against the upstream's
+  root before binding state (`GARGOYLE_MCP_STATE_ROOT`); every operator revoke
+  witnessed, live holds counted in /health, both keys named on a refused
+  enrollment; per-target reconciliation; `--env FILE` on the gate so a managed MCP
+  entry carries no key; the managed-folder docs for Claude Code.
+- Approval views by role (2026-10-31, PRs #7, #8): one signed hold rendered three
+  ways (technical, deputy, business; gargoyle/holdtext.py computes the one-line
+  description from the held arguments and the bound state), the view chosen by the
+  sign-in's Entra app role, holds routed by `approver_roles` with the role attested
+  on the grant and refused by the executor without it, every Activity row opening
+  its witness entry. Live 2026-11-01 20:35Z: a routed write held, released under
+  `Approver.Business`, witness granted with the role attestation. The negative case
+  and the two-signature deputy release are built and tested, not yet run live.
+- Approver registry reload (2026-10-31, PR #9): re-read on the file's content hash,
+  not its mtime, after Windows CI caught a revoke in the same mtime tick going unread.
+- Discovery mode (2026-10-31, PRs #10-#12): gargoyle/sidedoors.py and `gargoyle
+  sidedoors`; the gate finds its own side doors at startup and the hook on its next
+  run, records them beside the evidence log and in the witness (`sidedoors` event),
+  and the console and `audit --summary` show them. Windows: plain names,
+  administrative shares skipped.
+- From the Windows trial (2026-10-31, PR #13): the approver's decline reason is
+  relayed to the assistant verbatim; repeated declines of the same tool and path put
+  the principal on a cooldown (`REF_ISSUER_DECLINED_RECENTLY`, no new card); the
+  outcome line the model sees is honest about what ran; two new side-door kinds (a
+  script written through the gate then run outside it, the client's `!` prefix).
+  Live on the Windows client: two declines relayed, the third request refused by
+  cooldown with the second reason.
+- Soak review and hardening (2026-11-01, PR #14): two concurrent Claude Code
+  sessions under one account, 34 minutes, 120 receipts. Findings, by severity: a
+  Windows name the OS rewrites (trailing dot or space, `::$DATA`, a device name)
+  slipped the `*.ps1` hold globs and the gate-folder guard (critical; fixed:
+  `REF_TARGET_PATH_NOT_CANONICAL` at the gate, globs matched on the canonical name
+  too, proven live with four such names refused before reaching the issuer); the
+  observe rule shadowed the delete deny on Windows (rules reordered, docs
+  corrected); a probe OSError silently unbound held calls (now fails closed); undo
+  reported no reason when it could not run (reasons added); plan steps left
+  unresolved in evidence (resolved and indexed); the client's own `.claude/` state
+  inside the gated root (new side-door kind, managed deny in the installer).
+- Pre-install set (2026-11-01, PRs #15-#17), after the first install lost an
+  afternoon to four perimeter faults none of which were in the gate (Entra
+  "Assignment required" on the wrong app, a lost console key, Claude Code's
+  auto-mode classifier refusing the gate's write first, endpoint protection
+  flagging the signed Claude Code binary): `gargoyle doctor` (gargoyle/doctor.py,
+  one PASS/WARN/FAIL line per concern with the fix, /health gains `witness_head`);
+  `gargoyle rules test|explain|lint` (gargoyle/rulecheck.py, docs/rules.md,
+  examples/rules with fourteen live decisions reproduced); `gargoyle backup` and
+  `restore` (gargoyle/operations.py, docs/operations.md). All three accepted on the
+  reference host the same day: doctor 0 fail on both hosts, rules test gating the
+  policy apply, a backup archive at witness seq 633 restored with `--verify-only`
+  clean. 561 tests; CI green on Linux and Windows.
+- Next (set 2026-11-01): the first client install, files gate only, then a second
+  target type (Microsoft Graph mail through the adapter, against a real server),
+  the approver key lifecycle with a second approver, and the client-side mandate
+  (what the gate cannot close, said once). No new primitive is planned.

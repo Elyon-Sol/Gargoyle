@@ -1,12 +1,16 @@
 # Security policy
 
-Gargoyle is pre-release software by one author, proven in one deployment.
-It was reviewed twice on 2026-10-20 by outside, model-driven reviewers
-with repository access; their ten security findings are fixed as of
-0.17.0 and recorded in ROADMAP.md. No independent human review has been
-completed. Treat every release as alpha. The
-threat model and the limits of the design are in SPEC.md section 15.1
-and in the technical report's section 9; read those before deploying.
+Gargoyle is pre-release software by one author, run so far on the
+author's own tenant and hosts. It was reviewed twice on 2026-10-20 by
+outside, model-driven reviewers with repository access; their ten
+security findings are fixed as of 0.17.0 and recorded in ROADMAP.md. A
+two-session soak on 2026-11-01 found one critical defect (Windows file
+names the OS rewrites, such as a trailing dot or an alternate data
+stream, slipped the hold globs) and several lesser ones; all are fixed as
+of 0.20.0.dev0 and recorded in ROADMAP.md. No independent human review
+has been completed. Treat every release as alpha. The threat model and
+the limits of the design are in SPEC.md section 15.1 and in README.md
+under "What Gargoyle does not do"; read those before deploying.
 
 ## Supported versions
 
