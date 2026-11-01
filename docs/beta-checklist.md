@@ -34,6 +34,15 @@ console, a handful of workstations, files or Microsoft 365 behind the gate.
 - [ ] The client's own side doors closed (guide Part 8): Claude Desktop's Filesystem
       extension off, Claude Code's Edit/Write/Bash denied in the project, no second
       connector to the same data.
+- [ ] `gargoyle doctor --env <middleware.env>` reports `ready` (0 fail). Fix what it
+      names before anything else; each line carries its fix.
+- [ ] Claude Code's permission rules allow the gate's server (`mcp__<server>`), or the
+      session is not in auto mode: the auto-mode classifier can refuse the gate's writes
+      before the gate sees them, and the model reports a block with no reason.
+- [ ] If endpoint protection flags `claude.exe` on first launch: check the Authenticode
+      signature (signer "Anthropic, PBC", status Valid), exclude that exact path, note it.
+- [ ] Launch Claude Code from the user profile, never from the gated folder (discovery
+      mode reports `CLIENT_STATE_IN_ROOT` otherwise).
 - [ ] One free read, one held write, one audit, before handing over.
 
 ## What to tell users

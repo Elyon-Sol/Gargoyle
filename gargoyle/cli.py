@@ -688,6 +688,20 @@ def cmd_emilia(args) -> int:
     return 0
 
 
+def cmd_doctor(args) -> int:
+    """The client-side preflight (gargoyle.doctor): one PASS/WARN/FAIL line
+    per concern, each failure with the one fix that applies. Exit 0 when
+    nothing fails, 1 otherwise."""
+    from gargoyle.doctor import Context, format_report, run
+    ctx = Context(server_name=args.server, timeout=args.timeout)
+    result = run(args.env, ctx=ctx)
+    if args.json:
+        print(json.dumps(result, indent=2))
+    else:
+        print(format_report(result))
+    return 0 if result["ok"] else 1
+
+
 def cmd_audit(args) -> int:
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
     from gargoyle.execution import verify_chain
@@ -877,6 +891,13 @@ def main(argv=None) -> int:
     p.add_argument("--refs", action="store_true", help="also print the decision, plan or hold id of each row")
     p.add_argument("--utc", action="store_true", help="show the file's UTC clock instead of this machine's local time")
     p.set_defaults(fn=cmd_witness)
+    p = sub.add_parser("doctor", help="preflight a workstation's gate: env, trust, issuer, clock, rules pin, sign-in, local state, Claude Code layers")
+    p.add_argument("--env", required=True, help="the middleware.env the gate's MCP entry names")
+    p.add_argument("--server", default="filesystem-gargoyle", help="the MCP server name the client knows the gate by (default filesystem-gargoyle)")
+    p.add_argument("--timeout", type=float, default=10.0)
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(fn=cmd_doctor)
+
     p = sub.add_parser("audit", help="verify a receipt chain offline, or a whole evidence log")
     p.add_argument("receipt", nargs="?"); p.add_argument("execution", nargs="?"); p.add_argument("grant", nargs="?")
     p.add_argument("--log", help="the middleware's audit.jsonl: verify every entry")

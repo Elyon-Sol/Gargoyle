@@ -190,6 +190,7 @@ def test_holds_grants_and_declines_survive_a_restart(tmp_path):
     arid = env["approval_request_id"]
     h = c1.get("/health").json()
     assert h["ok"] and h["pending_receipts"] == 1 and h["persistent"] is True and h["policy"] == PIN
+    assert "witness_head" in h                                      # the chain's tail, or null without a witness
     c2 = TestClient(app_on(path))                                   # restart
     assert c2.get("/health").json()["pending_receipts"] == 1
     assert c2.get("/pending", headers=auth()).json()["pending"][0]["envelope"]["approval_request_id"] == arid

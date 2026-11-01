@@ -253,8 +253,13 @@ def test_a_hold_without_roles_is_for_any_approver_and_the_week_is_counted(site):
     assert me["roles"] == ["Approver.Deputy"] and me["approver_role"] == "Approver"
     assert me["released_7d"] == 1 and me["released_by_tool_7d"] == {"write_file": 1}
     assert c.get("/me", headers=c.h("owner@contoso.com", ["Approver.Business"])).json()["released_7d"] == 0
-    week = c.get("/health").json()["week"]
+    health = c.get("/health").json()
+    week = health["week"]
     assert week["held_7d"] == 1 and week["released_7d"] == 1 and week["released_by_role_7d"] == {"*": 1}
+    # The witness head names the chain's tail (the grant just recorded), nothing of its content.
+    head = health["witness_head"]
+    assert head["seq"] == c.get("/witness", headers=c.h("deputy@contoso.com", ["Approver.Deputy"])).json()["seq"]
+    assert set(head) == {"seq", "entry_sha256"} and len(head["entry_sha256"]) == 64
     assert isinstance(week["median_release_seconds"], float)
 
 

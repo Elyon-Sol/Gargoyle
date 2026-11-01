@@ -274,6 +274,7 @@ hold and deny rules):
     gargoyle issuer                             # the issuing service, on rules.json
     gargoyle approve --watch 2                  # where the approver sits (terminal)
     gargoyle witness --follow                   # the issuer's witness as a table, on its host (what an observe week records)
+    gargoyle doctor --env middleware.env        # on a workstation: is this gate ready, one PASS/WARN/FAIL line per concern
 
 or approve in a browser: open the issuer's `/approve` page and load
 `approver-web.json`, or, with Entra configured, sign in with Microsoft;
@@ -354,6 +355,41 @@ a line typed with the `!` prefix runs in the user's shell with no hook at
 all (verified 2026-10-31), and no setting changes that.
 [docs/claude-code-hook.md](docs/claude-code-hook.md) has the setup and the
 limits.
+
+### Preflight: `gargoyle doctor`
+
+A gate that fails closed looks broken to the person installing it. The
+first tenant's install lost an afternoon to four things, none of them in
+the gate: the submitter's Entra token could not be refreshed (the API's
+enterprise application had "Assignment required" on), the console's
+browser key was no longer the one enrolled, Claude Code's own auto-mode
+classifier refused the gate's write before the gate saw it, and the
+workstation's endpoint protection flagged the signed Claude Code binary.
+The doctor reads the same `middleware.env` the gate reads and says, per
+concern, PASS, WARN or FAIL with the one fix that applies:
+
+    gargoyle doctor --env C:\gargoyle\middleware.env      # Windows workstation (the installer runs it last)
+    gargoyle doctor --env ~/.gargoyle/hook/middleware.env  # a hook host
+    gargoyle doctor --env middleware.env --json            # for a script
+
+Checks, in the order a person debugs: the env file is complete and
+private; the CA bundle is a certificate that names the issuer's host and
+has not expired; the issuer answers `/health` through Python's trust (a
+TLS failure says to set `REQUESTS_CA_BUNDLE`); the clock is within a
+minute of the issuer's; the rules pin the gate will enforce is the one the
+issuer runs (a static `record.json` that drifted is named as the reason
+every receipt will be refused); the submitter gets a token silently, now,
+as the named user (an `AADSTS50105` is translated into the Entra setting
+that causes it); the state root exists and does not hold the client's own
+state; the evidence log and snapshot folder are writable and discovery is
+not overdue; Claude Code's layers are right (side doors denied by managed
+settings or hooked, the gate's MCP tools allowed by rule so the auto-mode
+classifier never gets a vote, the hook registered with this env file);
+and Node, where present, trusts the issuer too (`NODE_EXTRA_CA_CERTS`,
+which a remote https gate needs and `REQUESTS_CA_BUNDLE` does not cover).
+It ends with the note the installer needs before the EDR alert arrives.
+Exit 0 when nothing fails. It changes nothing and sends nothing but two
+GETs and one silent token refresh.
 
 ### Side doors: discovery mode
 
@@ -473,6 +509,7 @@ cannot attach receipts work unchanged. Configuration is by environment:
 | issuer `GARGOYLE_HOLDS_PATH` | SQLite file for holds, grants, declines and plans, so a restart loses nothing a person is acting on (`gargoyle issuer` sets `holds.sqlite` beside the keys); `GET /health` reports it |
 | issuer `GARGOYLE_MAX_OPEN_HOLDS` | how many held receipts and plans one principal may have waiting at once (default 20); the call over the cap is `REF_ISSUER_TOO_MANY_HOLDS` and nothing is stored |
 | issuer `GARGOYLE_ALLOW_SELF_APPROVAL` | `1` lets a person release their own call; by default the approver may be neither the hold's principal nor the party acted for (`REF_ISSUER_SELF_APPROVAL`). A grant for an expired hold is `REF_ISSUER_HOLD_EXPIRED` and the hold is dropped |
+| issuer `GET /health` | public: `ok`, the policy pin, pending counts, approver counts, `entra`, `persistent`, `witness_head` (the chain's tail sequence and entry hash, so a client can tell it talks to the issuer whose witness it will later reconcile against), and the week's hold and release figures |
 | issuer `GARGOYLE_WITNESS_PATH` | the issuer's signed, hash-chained record of every decision (`gargoyle issuer` sets `witness.jsonl` beside the keys); `gargoyle audit --witness` reconciles a client's evidence against it, `--check-tree DIR` finds files changed outside the gate |
 | issuer `GARGOYLE_LOG_JSON` | one JSON line per decision on stderr: issued, refused, granted, declined, plan, enrolled |
 | `GARGOYLE_HOLD_WEBHOOK_URL`, `GARGOYLE_APPROVE_URL` | issuer: POST a notice of every new hold (Slack incoming-webhook shape, `text` plus the hold) with a link to the console; notice only, the grant still needs the approver's key |
