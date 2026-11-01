@@ -344,6 +344,26 @@ def _read_json(path: Path) -> Any:
         return None
 
 
+def _hook_commands(doc: Any) -> List[str]:
+    hooks = doc.get("hooks") if isinstance(doc, dict) else None
+    out: List[str] = []
+    if not isinstance(hooks, dict):
+        return out
+    for groups in hooks.values():
+        for g in groups if isinstance(groups, list) else []:
+            for h in (g.get("hooks") or []) if isinstance(g, dict) else []:
+                if isinstance(h, dict) and h.get("command"):
+                    out.append(str(h["command"]))
+    return out
+
+
+def _same_path_in(command: str, path: str) -> bool:
+    """Does a hook command name this file; slashes compared one way, since
+    Windows paths appear with either kind and JSON doubles the backslash."""
+    norm = lambda t: t.replace("\\", "/").lower()
+    return norm(path) in norm(command)
+
+
 def _allow_rules(doc: Any) -> List[str]:
     perms = doc.get("permissions") if isinstance(doc, dict) else None
     allow = perms.get("allow") if isinstance(perms, dict) else None
@@ -400,7 +420,8 @@ def check_claude_code(env: Dict[str, str], ctx: Context) -> List[Check]:
     # 3. hook points at this env file (where a hook exists)
     if hooked:
         env_path = env.get("_GARGOYLE_DOCTOR_ENV_PATH", "")
-        names_env = any(env_path and env_path in json.dumps(d) for d in all_docs) if env_path else True
+        commands = [c for d in all_docs for c in _hook_commands(d) if "gargoyle" in c.lower()]
+        names_env = any(_same_path_in(c, env_path) for c in commands) if env_path else True
         out.append(Check("claude code hook", PASS if names_env else WARN,
                          "registered" + ("" if names_env else ", but not with --env %s" % env_path),
                          "" if names_env else "the hook runs with a different env file than the one checked here"))

@@ -4,6 +4,9 @@ four blockers of 2026-11-01 are the fixtures)."""
 
 import json
 import datetime as dt
+import os
+
+import pytest
 from pathlib import Path
 
 from cryptography import x509
@@ -94,6 +97,7 @@ def test_env_file_needs_an_identity(tmp_path):
     assert c.status == FAIL and "gargoyle login" in c.fix
 
 
+@pytest.mark.skipif(os.name != "posix", reason="file modes are a POSIX concern; Windows ACLs are not read")
 def test_env_file_warns_when_world_readable(tmp_path):
     env = _env(tmp_path); p = _write_env(tmp_path, env); p.chmod(0o644)
     c = check_env_file(str(p), env)
@@ -235,6 +239,15 @@ def test_claude_code_hook_host_passes_and_skips_allow(tmp_path):
     assert checks["claude code deny"].status == PASS and "hook" in checks["claude code deny"].detail
     assert checks["claude code hook"].status == PASS
     assert checks["claude code allow"].status == SKIP
+
+
+def test_claude_code_hook_binds_a_windows_path(tmp_path):
+    ctx = _ctx(tmp_path)
+    hook = {"hooks": {"PreToolUse": [{"hooks": [{"type": "command", "command": "python -m gargoyle hook --env C:\\gargoyle\\middleware.env"}]}]}}
+    _claude_host(ctx, settings=hook)
+    env = _env(tmp_path); env["_GARGOYLE_DOCTOR_ENV_PATH"] = "C:\\gargoyle\\middleware.env"
+    checks = {c.name: c for c in check_claude_code(env, ctx)}
+    assert checks["claude code hook"].status == PASS
 
 
 def test_claude_code_hook_with_other_env_warns(tmp_path):
