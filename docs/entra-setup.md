@@ -79,6 +79,19 @@ By default any user in the tenant can sign in to User-Client-Flow. To
 restrict it: **Identity**, **Applications**, **Enterprise applications**,
 open **User-Client-Flow**, **Properties**, set **Assignment required** to
 **Yes**, then under **Users and groups** assign the people or a group.
+
+Put that switch on the **client** app only. Leave **Assignment required**
+at **No** on **Gargoyle-Issuer-API**: that app's assignments are its app
+roles (`Approver`, `Approver.Business`, `Approver.Deputy`), and submitters
+hold none by design. With it on, every submitter's token request fails with
+`AADSTS50105` ("blocked because they are not a direct member of a group
+with access"), which the gate reports as `REF_TARGET_LOGIN_REQUIRED` and
+`gargoyle doctor` names. Two more portal facts, learned the slow way: a
+user can hold one direct assignment to an app, so to change an approver's
+role **Edit assignment** on the existing row rather than adding a second
+("Application assignment failed"); and a role change needs no re-enrolment
+of the approver's key, only a fresh console sign-in, because the issuer
+reads roles from the token at grant time.
 Conditional Access policies apply to this sign-in like any other, so MFA
 and device requirements are enforced by the tenant, not by Gargoyle.
 

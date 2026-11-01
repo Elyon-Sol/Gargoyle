@@ -878,6 +878,10 @@ def build_issuer_app(
                 "max_open_holds": max_open_holds,
                 "enrolled_approvers": len(registry.public_hex()), "static_approvers": len(static_approvers),
                 "entra": bool(console_entra), "persistent": store.path != ":memory:", "started_at": app.state.started_at,
+                # The chain's tail, so a client can tell at a glance it talks to the issuer whose
+                # witness it will later reconcile against (G7): sequence and entry hash, no content.
+                "witness_head": ({"seq": witness.entries[-1].get("seq"), "entry_sha256": witness.entries[-1].get("entry_sha256")}
+                                 if witness is not None and witness.entries else None),
                 "week": _week_stats(current)}
 
     @app.get("/approve-config")
