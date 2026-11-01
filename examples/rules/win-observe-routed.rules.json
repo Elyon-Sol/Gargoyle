@@ -1,0 +1,224 @@
+{
+  "version": "2-routed-win-scripts-deny-first",
+  "default": "allow",
+  "rules": [
+    {
+      "tools": [
+        "write_file",
+        "edit_file"
+      ],
+      "args": {
+        "path": "C:\\gargoyle-share\\routed\\*"
+      },
+      "action": "hold",
+      "approvals": 1,
+      "approver_roles": [
+        "Approver.Business"
+      ],
+      "comment": "trial: the one Windows folder that is not observe; content changes here go to the business approver"
+    },
+    {
+      "tools": [
+        "write_file",
+        "edit_file"
+      ],
+      "args": {
+        "path": "*.ps1"
+      },
+      "action": "hold",
+      "approvals": 1,
+      "comment": "scripts are run by a person later, outside any receipt: a human sees them land, even where writes are otherwise observed"
+    },
+    {
+      "tools": [
+        "write_file",
+        "edit_file"
+      ],
+      "args": {
+        "path": "*.psm1"
+      },
+      "action": "hold",
+      "approvals": 1,
+      "comment": "scripts are run by a person later, outside any receipt: a human sees them land, even where writes are otherwise observed"
+    },
+    {
+      "tools": [
+        "write_file",
+        "edit_file"
+      ],
+      "args": {
+        "path": "*.bat"
+      },
+      "action": "hold",
+      "approvals": 1,
+      "comment": "scripts are run by a person later, outside any receipt: a human sees them land, even where writes are otherwise observed"
+    },
+    {
+      "tools": [
+        "write_file",
+        "edit_file"
+      ],
+      "args": {
+        "path": "*.cmd"
+      },
+      "action": "hold",
+      "approvals": 1,
+      "comment": "scripts are run by a person later, outside any receipt: a human sees them land, even where writes are otherwise observed"
+    },
+    {
+      "tools": [
+        "write_file",
+        "edit_file"
+      ],
+      "args": {
+        "path": "*.vbs"
+      },
+      "action": "hold",
+      "approvals": 1,
+      "comment": "scripts are run by a person later, outside any receipt: a human sees them land, even where writes are otherwise observed"
+    },
+    {
+      "tools": [
+        "write_file",
+        "edit_file"
+      ],
+      "args": {
+        "path": "*.exe"
+      },
+      "action": "hold",
+      "approvals": 1,
+      "comment": "scripts are run by a person later, outside any receipt: a human sees them land, even where writes are otherwise observed"
+    },
+    {
+      "tools": [
+        "move_file"
+      ],
+      "args": {
+        "destination": "*.ps1"
+      },
+      "action": "hold",
+      "approvals": 1,
+      "comment": "a rename into a script name is the same door"
+    },
+    {
+      "tools": [
+        "move_file"
+      ],
+      "args": {
+        "destination": "*.psm1"
+      },
+      "action": "hold",
+      "approvals": 1,
+      "comment": "a rename into a script name is the same door"
+    },
+    {
+      "tools": [
+        "move_file"
+      ],
+      "args": {
+        "destination": "*.bat"
+      },
+      "action": "hold",
+      "approvals": 1,
+      "comment": "a rename into a script name is the same door"
+    },
+    {
+      "tools": [
+        "move_file"
+      ],
+      "args": {
+        "destination": "*.cmd"
+      },
+      "action": "hold",
+      "approvals": 1,
+      "comment": "a rename into a script name is the same door"
+    },
+    {
+      "tools": [
+        "move_file"
+      ],
+      "args": {
+        "destination": "*.vbs"
+      },
+      "action": "hold",
+      "approvals": 1,
+      "comment": "a rename into a script name is the same door"
+    },
+    {
+      "tools": [
+        "move_file"
+      ],
+      "args": {
+        "destination": "*.exe"
+      },
+      "action": "hold",
+      "approvals": 1,
+      "comment": "a rename into a script name is the same door"
+    },
+    {
+      "tools": [
+        "delete_*",
+        "remove_*",
+        "rm*"
+      ],
+      "action": "deny",
+      "reason": "DESTRUCTIVE_TOOL",
+      "comment": "first: the observe rule below admits every drive-letter path, so a deny placed after it never fires (soak review 2026-11-01)"
+    },
+    {
+      "tools": [
+        "*"
+      ],
+      "args": {
+        "path": "[A-Za-z]:*"
+      },
+      "action": "allow",
+      "comment": "observe: Windows gate (drive-letter paths) records everything, holds nothing"
+    },
+    {
+      "tools": [
+        "*"
+      ],
+      "args": {
+        "source": "[A-Za-z]:*"
+      },
+      "action": "allow",
+      "comment": "observe: Windows gate, move_file"
+    },
+    {
+      "tools": [
+        "read_*",
+        "list_*",
+        "get_*",
+        "search_*",
+        "directory_tree"
+      ],
+      "action": "allow"
+    },
+    {
+      "tools": [
+        "write_file",
+        "edit_file"
+      ],
+      "args": {
+        "path": "/srv/shared/*"
+      },
+      "action": "hold",
+      "approvals": 1,
+      "approver_roles": [
+        "Approver.Business"
+      ],
+      "comment": "routed: content changes under /srv/shared go to the business approver's view; deletes and moves stay technical (next rules)"
+    },
+    {
+      "tools": [
+        "write_file",
+        "edit_file",
+        "create_directory",
+        "move_file"
+      ],
+      "action": "hold",
+      "approvals": 1
+    }
+  ]
+}

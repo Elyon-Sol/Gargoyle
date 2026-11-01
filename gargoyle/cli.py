@@ -702,6 +702,42 @@ def cmd_doctor(args) -> int:
     return 0 if result["ok"] else 1
 
 
+def cmd_rules(args) -> int:
+    """`gargoyle rules test|explain|lint` (gargoyle.rulecheck): what a rules
+    file would do, from the file alone, with the issuer's own decide_rules."""
+    from gargoyle.rulecheck import explain, format_calls, format_explain, format_lint, lint, read_calls, run_calls
+    doc = json.loads(Path(args.rules).read_text(encoding="utf-8-sig"))
+    roles = [r.strip() for r in args.roles.split(",") if r.strip()] if getattr(args, "roles", None) else None
+    if args.rules_cmd == "explain":
+        call: Dict[str, Any] = {"tool": args.tool, "args": {}, "groups": [], "roles": []}
+        for kv in args.arg or []:
+            if "=" not in kv:
+                print("gargoyle rules explain: --arg takes KEY=VALUE, got %r" % kv, file=sys.stderr); return 2
+            k, v = kv.split("=", 1); call["args"][k] = v
+        if args.principal:
+            call["principal"] = args.principal
+        if args.role:
+            call["roles"] = list(args.role)
+        if args.group:
+            call["groups"] = list(args.group)
+        ex = explain(doc, call)
+        print(json.dumps(ex, indent=2) if args.json else format_explain(ex))
+        return 0 if "error" not in ex else 1
+    if args.rules_cmd == "lint":
+        findings = lint(doc, known_roles=roles)
+        print(json.dumps(findings, indent=2) if args.json else format_lint(findings))
+        return 1 if findings else 0
+    rows = run_calls(doc, read_calls(args.calls))
+    findings = [] if args.no_lint else lint(doc, known_roles=roles)
+    if args.json:
+        print(json.dumps({"calls": rows, "lint": findings}, indent=2))
+    else:
+        print(format_calls(rows))
+        if not args.no_lint:
+            print(format_lint(findings))
+    return 1 if any(not r["ok"] for r in rows) or findings else 0
+
+
 def cmd_audit(args) -> int:
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
     from gargoyle.execution import verify_chain
@@ -897,6 +933,22 @@ def main(argv=None) -> int:
     p.add_argument("--timeout", type=float, default=10.0)
     p.add_argument("--json", action="store_true")
     p.set_defaults(fn=cmd_doctor)
+
+    p = sub.add_parser("rules", help="what a rules file would do: test a calls file, explain one call, lint for rules that never fire")
+    rs = p.add_subparsers(dest="rules_cmd", required=True)
+    q = rs.add_parser("test", help="one row per call in CALLS (JSON Lines; optional `expect`), then lint; exit 1 on any difference or finding")
+    q.add_argument("--rules", required=True); q.add_argument("--calls", required=True)
+    q.add_argument("--roles", help="comma-separated app roles that exist in the tenant (approver_roles are checked against them)")
+    q.add_argument("--no-lint", action="store_true"); q.add_argument("--json", action="store_true")
+    q = rs.add_parser("explain", help="one call: every rule in order, matched or why not, and the decision")
+    q.add_argument("--rules", required=True); q.add_argument("--tool", required=True)
+    q.add_argument("--arg", action="append", metavar="KEY=VALUE"); q.add_argument("--principal")
+    q.add_argument("--role", action="append", help="a role the caller's token carries (repeatable)")
+    q.add_argument("--group", action="append", help="a group the caller's token carries (repeatable)")
+    q.add_argument("--json", action="store_true")
+    q = rs.add_parser("lint", help="unreachable rules, argument keys the tool never sends, unknown approver roles")
+    q.add_argument("--rules", required=True); q.add_argument("--roles"); q.add_argument("--json", action="store_true")
+    p.set_defaults(fn=cmd_rules)
 
     p = sub.add_parser("audit", help="verify a receipt chain offline, or a whole evidence log")
     p.add_argument("receipt", nargs="?"); p.add_argument("execution", nargs="?"); p.add_argument("grant", nargs="?")
