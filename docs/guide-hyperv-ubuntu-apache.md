@@ -584,8 +584,9 @@ connector, paste the URL. Reads, holds, cards, refusals, undo and the
 audit work as in Parts 4 to 6, now for every client that connector is
 used from. To front a Microsoft 365 MCP server instead, pass
 `--upstream-url https://.../mcp --upstream-token ...` in place of the
-command; state binding then needs that server's adapter (not yet built),
-so start it with `--state-probe none`. Put Apache in front as in Part 3
+command; state binding then uses the Graph adapter (Part 9,
+`--state-probe graph`), or `--state-probe none` to record without
+binding. Put Apache in front as in Part 3
 and publish the gate only to the networks that need it; a hosted
 connector must reach it from the internet, so this is the one Gargoyle
 port that faces outward.
@@ -702,9 +703,13 @@ are persistent.
   credential the assistant holds outside the gate.
 - Judge the change. The console proves you saw the exact arguments and
   signed; whether the file should be written is your call.
-- Survive a VM restart with holds intact, or share holds across issuers.
-- Distinguish approvers. One key approves everything; roles are on the
-  roadmap.
-- Replace Entra ID. The identity key here is the one `init` minted; the
-  issuer can trust a tenant's keys instead (`GARGOYLE_ENTRA_TENANT`), which
-  needs the middleware's token to come from Entra, a step still to build.
+- Share holds across issuers. One issuer holds them (in `holds.sqlite`,
+  so a restart keeps them); there is no cluster.
+- Name people without a directory. With the `init`-minted keys one approver
+  key approves everything and the client token names a service principal.
+  Routing by role, revocation and per-person receipts need Entra ID
+  (docs/entra-setup.md: `gargoyle login` on each workstation,
+  `GARGOYLE_ENTRA_TENANT` on the issuer, app roles for the approvers).
+- Stop a user who owns the workstation from acting around the gate.
+  Discovery mode (Part 8) names the side doors; the witness and the tree
+  check detect what used them; nothing prevents it.

@@ -1,5 +1,10 @@
 # Gargoyle - design directive and handoff (2026-10-08)
 
+> Historical record. This is the directive the repository was started from on
+> 2026-10-08 and the log of the first eight days against it. Paths, counts and
+> "not pushed" notes describe that moment, not the repository today; for the
+> current state read README.md and ROADMAP.md.
+
 Gargoyle is the stripped-down successor of Elyon-Sol (/elyon/Elyon-Sol, HEAD f73f806,
 clean, 3 commits ahead of origin/main, NOT pushed). This directory is the Gargoyle
 git repository (fresh history). Owner: Justin LaPorte, sole copyright holder of the source

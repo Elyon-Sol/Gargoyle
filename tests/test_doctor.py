@@ -65,7 +65,7 @@ def _env(tmp_path, **over):
            "GARGOYLE_MCP_RECORD_URL": ISSUER + "/record", "GARGOYLE_MCP_STATE_ROOT": str(root),
            "GARGOYLE_MCP_AUDIT_LOG": str(tmp_path / "audit.jsonl"), "REQUESTS_CA_BUNDLE": str(ca),
            "GARGOYLE_MCP_ENTRA_TENANT": "t", "GARGOYLE_MCP_ENTRA_CLIENT_ID": "c", "GARGOYLE_MCP_ENTRA_SCOPE": "api://x/access",
-           "GARGOYLE_MCP_ENTRA_TOKEN_CACHE": str(tmp_path / "entra-token-cache.json"), "GARGOYLE_MCP_PRINCIPAL": "claude@hearthcorp.com"}
+           "GARGOYLE_MCP_ENTRA_TOKEN_CACHE": str(tmp_path / "entra-token-cache.json"), "GARGOYLE_MCP_PRINCIPAL": "claude@contoso.com"}
     env.update(over)
     return env
 
@@ -171,7 +171,7 @@ def test_submitter_without_cache_says_login(tmp_path):
 def test_submitter_assignment_required_is_named(tmp_path):
     env = _env(tmp_path); Path(env["GARGOYLE_MCP_ENTRA_TOKEN_CACHE"]).write_text("{}")
     class Src:
-        principal = "claude@hearthcorp.com"
+        principal = "claude@contoso.com"
         def token(self):
             raise Exception("Entra token could not be refreshed (AADSTS50105: Your administrator has configured the application "
                                                  "Gargoyle-Issuer-API to block users unless they are specifically granted access); run: gargoyle login")
@@ -182,16 +182,16 @@ def test_submitter_assignment_required_is_named(tmp_path):
 def test_submitter_silent_refresh_passes_and_names_the_user(tmp_path):
     env = _env(tmp_path); Path(env["GARGOYLE_MCP_ENTRA_TOKEN_CACHE"]).write_text("{}")
     class Src:
-        principal = "claude@hearthcorp.com"
+        principal = "claude@contoso.com"
         def token(self): return "t"
     c = check_submitter(env, _ctx(tmp_path, token_source_factory=lambda e: Src()))
-    assert c.status == PASS and "claude@hearthcorp.com" in c.detail
+    assert c.status == PASS and "claude@contoso.com" in c.detail
 
 
 def test_submitter_principal_drift_warns(tmp_path):
     env = _env(tmp_path, GARGOYLE_MCP_PRINCIPAL="someone@else"); Path(env["GARGOYLE_MCP_ENTRA_TOKEN_CACHE"]).write_text("{}")
     class Src:
-        principal = "claude@hearthcorp.com"
+        principal = "claude@contoso.com"
         def token(self): return "t"
     c = check_submitter(env, _ctx(tmp_path, token_source_factory=lambda e: Src()))
     assert c.status == WARN and "someone@else" in c.detail
@@ -288,7 +288,7 @@ def test_run_all_green_and_report_shape(tmp_path):
     http = Http({ISSUER + "/health": Resp(200, HEALTH, {"Date": "Sun, 01 Nov 2026 20:35:12 GMT"}),
                  ISSUER + "/record": Resp(200, {"policy_sha256": HEALTH["policy"]["policy_sha256"], "publisher_key_id": "issuer-1"})})
     class Src:
-        principal = "claude@hearthcorp.com"
+        principal = "claude@contoso.com"
         def token(self): return "t"
     base = dt.datetime(2026, 11, 1, 20, 35, 12, tzinfo=dt.timezone.utc).timestamp()
     ctx = _ctx(tmp_path, http, now=lambda: base + 1, token_source_factory=lambda e: Src())

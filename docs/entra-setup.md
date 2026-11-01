@@ -98,7 +98,7 @@ and device requirements are enforced by the tenant, not by Gargoyle.
 ## 4. The issuer on the VM
 
 Add to the issuer's environment file (`/opt/gargoyle/deploy/issuer.env`
-in the guide; `/elyon/gargoyle-poc/deploy/issuer.env` in the PoC):
+in the guide):
 
 ```
 GARGOYLE_ENTRA_TENANT=TENANT_ID
@@ -175,7 +175,7 @@ In Entra admin center:
    `Approver`, the plain-language views for the other two.
 3. **App registrations**, open **User-Client-Flow**, **Authentication**,
    **Add a platform**, **Single-page application**, redirect URI
-   `https://<issuer host>/approve` (the PoC: `https://192.168.56.101:8443/approve`).
+   `https://<issuer host>/approve` (for example `https://gargoyle.lan/approve`).
    **Configure**. Add one entry per hostname the console is opened at.
 
 On the VM, add to `issuer.env` and restart the issuer:
