@@ -115,14 +115,14 @@ def test_report_command_snapshots_verifies_and_hashes(tmp_path, capsys):
     rc = main(["report", "--witness", str(witness), "--out", str(out), "--preface", str(tmp_path / "preface.md"), "--title", "Pilot quarter", "--prepared-by", "Surftech"])
     printed = capsys.readouterr().out
     assert rc == 0, printed
-    assert "1 answer" in (out / "REPORT.md").read_text() or True
+    assert "1 answer" in (out / "REPORT.md").read_text(encoding="utf-8") or True
     assert "ok   Issuer witness, chain and signatures: 15 entries, `WITNESS_VERIFIED`" in printed
-    md = (out / "REPORT.md").read_text()
+    md = (out / "REPORT.md").read_text(encoding="utf-8")
     assert md.startswith("# Pilot quarter") and "The record verifies." in md and "Create run.ps1 (47 bytes) in C:\\share" in md
     # The snapshot is the witness as it was, and every raw file plus the report is hashed.
     snap = out / "raw" / "witness-snapshot.jsonl"
     assert snap.read_bytes() == witness.read_bytes()
-    sums = dict(line.split("  ", 1) for line in (out / "SHA256SUMS").read_text().splitlines())
+    sums = dict(line.split("  ", 1) for line in (out / "SHA256SUMS").read_text(encoding="utf-8").splitlines())
     assert sums == {hashlib.sha256((out / "raw" / "witness-snapshot.jsonl").read_bytes()).hexdigest(): "raw/witness-snapshot.jsonl",
                     hashlib.sha256((out / "raw" / "run-started.txt").read_bytes()).hexdigest(): "raw/run-started.txt",
                     hashlib.sha256((out / "REPORT.md").read_bytes()).hexdigest(): "REPORT.md"}
@@ -132,8 +132,8 @@ def test_report_command_snapshots_verifies_and_hashes(tmp_path, capsys):
     forged = json.loads(lines[2]); forged["why"] = "fine by me"; lines[2] = json.dumps(forged, sort_keys=True)
     witness.write_text("\n".join(lines) + "\n")
     rc = main(["report", "--witness", str(witness), "--out", str(tmp_path / "report2"), "--keys", str(out)])
-    assert rc == 1 and "REF_WITNESS_HASH_MISMATCH" in (tmp_path / "report2" / "REPORT.md").read_text()
+    assert rc == 1 and "REF_WITNESS_HASH_MISMATCH" in (tmp_path / "report2" / "REPORT.md").read_text(encoding="utf-8")
     # Without keys the witness row says so and the run is not a failure.
     assert main(["report", "--witness", str(witness), "--out", str(tmp_path / "report3")]) == 0
-    assert "not verified: no public-keys.json" in (tmp_path / "report3" / "REPORT.md").read_text()
+    assert "not verified: no public-keys.json" in (tmp_path / "report3" / "REPORT.md").read_text(encoding="utf-8")
     assert main(["report", "--witness", str(tmp_path / "nope.jsonl"), "--out", str(tmp_path / "r4")]) == 2
