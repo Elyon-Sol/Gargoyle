@@ -56,7 +56,7 @@ STATIC = Path(__file__).resolve().parent / "static"
 from gargoyle.approval import (REF_APPROVAL_APPROVER_NOT_ELIGIBLE, REF_APPROVAL_DUPLICATE_APPROVER,
                                REF_APPROVAL_ROLE_NOT_ELIGIBLE, attest_roles, verify_grant)
 from gargoyle.envelope import approval_terms
-from gargoyle.holdtext import describe_hold, describe_plan
+from gargoyle.holdtext import describe_hold, describe_plan, request_fields
 from gargoyle.emilia import EMILIA_MEMBER, verify_embedded_signoff
 from gargoyle.state import state_sha256, text_consistent, valid_description
 from gargoyle.holdstore import ENV_HOLDS_PATH, HoldStore
@@ -180,6 +180,7 @@ def build_issuer_app(
     app.state.declined_why = store.dict("declined_why")   # approval_request_id -> the approver's words, for the submitter
     app.state.recent_declines = store.dict("recent_declines")  # decline key -> [{"at", "why"}], the cooldown's memory
     app.state.pending_plans = store.dict("pending_plans") # approval_request_id -> signed plan (gargoyle.plans)
+    app.state.pending_about = store.dict("pending_about") # approval_request_id -> who asked for what, in words (for the witness)
     app.state.started_at = now().isoformat()
 
     def event(kind: str, **fields: Any) -> None:
@@ -428,8 +429,16 @@ def build_issuer_app(
             # signed envelope is dropped, the client reports the reason.
             event("refused", principal=who["principal"], tool=body["tool"], reason=REF_ISSUER_TOO_MANY_HOLDS)
             return {"issued": False, "reason": REF_ISSUER_TOO_MANY_HOLDS}
+        about: Dict[str, Any] = {}
+        if result.envelope["requires_approval"] and not covered:
+            # The witness says what was asked, not only that something was:
+            # the same sentence the card shows, and the paths, never the
+            # payload (the hash binds that). A declined move reads as a
+            # declined move of a named file a quarter later.
+            about = {"summary": describe_hold(body["tool"], body["args"], state)["sentence"],
+                     "request": request_fields(body["tool"], body["args"])}
         event("issued", principal=who["principal"], tool=body["tool"], held=bool(result.envelope["requires_approval"]),
-              **({"oid": who["oid"]} if who.get("oid") else {}),
+              **({"oid": who["oid"]} if who.get("oid") else {}), **about,
               target_url=body["target_url"],         # one issuer, several gates: an audit of one gate's log skips the others' receipts
               covered=covered, state_bound=state is not None,   # whether the receipt binds the target's state (asked by the 2026-11-01 soak)
               decision_id=result.envelope.get("decision_id"), decision_sha256=result.envelope["decision_sha256"],
@@ -438,6 +447,7 @@ def build_issuer_app(
             arid = result.envelope["approval_request_id"]
             app.state.pending[arid] = result.envelope
             app.state.pending_args[arid] = body["args"]
+            app.state.pending_about[arid] = {"requested_by": who["principal"], "tool": body["tool"], "target_url": body["target_url"], **about}
             if state is not None:
                 app.state.pending_state[arid] = state
             if on_hold is not None:
@@ -516,9 +526,15 @@ def build_issuer_app(
                                     principal=who["principal"], policy_pin=policy.pin(), steps=norm,
                                     not_after=now() + timedelta(seconds=min(ttl_seconds * 6, 3600)), note=body.get("note", ""),
                                     approval=approval), signing_key, key_id)
+        about = {}
         if held:
             app.state.pending_plans[plan["approval_request_id"]] = plan
-        event("plan", principal=who["principal"], steps=len(norm), held=held, plan_id=plan["plan_id"])
+            about = {"summary": describe_plan(plan)["sentence"],
+                     "request": {"steps": [{"tool": st.get("tool"), **request_fields(st.get("tool"), st.get("args") if isinstance(st.get("args"), dict) else st.get("match"))}
+                                           for st in steps if isinstance(st, dict)]}}
+            app.state.pending_about[plan["approval_request_id"]] = {"requested_by": who["principal"], "tool": "plan", "target_url": body["target_url"],
+                                                                    "plan_id": plan["plan_id"], **about}
+        event("plan", principal=who["principal"], steps=len(norm), held=held, plan_id=plan["plan_id"], **about)
         return {"issued": True, "plan": plan, "held": held}
 
     def _plan_terms(plan):
@@ -605,9 +621,16 @@ def build_issuer_app(
                               "eligible": _eligible(who, approval_terms(env))}
         return {"pending": list(live.values())}
 
+    def _about(arid: Any) -> Dict[str, Any]:
+        """Who asked for the hold and for what, to put on the entry that
+        answers it, so a release or a decline reads on its own."""
+        a = app.state.pending_about.get(arid) if isinstance(arid, str) else None
+        return dict(a) if isinstance(a, dict) else {}
+
     def _forget(arid: str) -> None:
         """Drop a hold or plan and everything kept for it."""
         app.state.pending.pop(arid, None)
+        app.state.pending_about.pop(arid, None)
         app.state.pending_args.pop(arid, None)
         app.state.pending_state.pop(arid, None)
         app.state.pending_plans.pop(arid, None)
@@ -636,7 +659,7 @@ def build_issuer_app(
             # A release that did not happen is a decision too: a revoked or
             # unknown key trying to release a hold belongs in the witness.
             kid = grant.get("approver_key_id")
-            event("grant_refused", approval_request_id=arid, reason=reason, **({"approver": kid} if isinstance(kid, str) else {}))
+            event("grant_refused", approval_request_id=arid, reason=reason, **({"approver": kid} if isinstance(kid, str) else {}), **_about(arid))
             return {"accepted": False, "reason": reason}
         if datetime.fromisoformat((env or plan)["not_after"]) <= now():
             # An expired hold can never be released: the executor refuses the
@@ -691,7 +714,7 @@ def build_issuer_app(
         have.append(grant)
         app.state.grants[arid] = have                      # written back: the store persists on assignment
         event("granted", approval_request_id=arid, approver=grant["approver_key_id"], collected=len(have), required=terms["required"],
-              hold_kind="plan" if plan else "receipt", **({"roles": sorted(roles_held)} if terms.get("roles") else {}))
+              hold_kind="plan" if plan else "receipt", **({"roles": sorted(roles_held)} if terms.get("roles") else {}), **_about(arid))
         return {"accepted": True, "reason": g["reason"], "collected": len(have), "required": terms["required"],
                 "complete": len(have) >= terms["required"]}
 
@@ -718,13 +741,15 @@ def build_issuer_app(
             remember_decline(arid, why)
             if why:
                 app.state.declined_why[arid] = why
+        about = _about(arid)
         app.state.pending_plans.pop(arid, None)
         app.state.pending.pop(arid, None)
         app.state.pending_args.pop(arid, None)
         app.state.pending_state.pop(arid, None)
+        app.state.pending_about.pop(arid, None)
         app.state.grants.pop(arid, None)
         app.state.declined.add(arid)
-        event("declined", approval_request_id=arid, by=who["principal"], **({"why": why} if why else {}))
+        event("declined", approval_request_id=arid, by=who["principal"], **({"why": why} if why else {}), **about)
         return {"declined": True, "reason": None}
 
     @app.post("/sidedoors")

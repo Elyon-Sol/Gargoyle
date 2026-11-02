@@ -167,7 +167,14 @@ def describe(entry: Any) -> Dict[str, str]:
         ref = str(entry.get("target_url") or "")[:40]
     else:
         outcome, ref = ev, ""
-    return {"at": str(entry.get("at", "")), "event": ev, "who": who, "tool": tool, "outcome": outcome, "ref": ref}
+    summary = entry.get("summary") if isinstance(entry.get("summary"), str) else ""
+    asked = entry.get("requested_by") if isinstance(entry.get("requested_by"), str) else ""
+    if summary and ev in ("issued", "plan"):
+        outcome += ": " + summary                         # what was asked, in the card's words
+    elif summary and ev in ("granted", "declined", "grant_refused"):
+        outcome += " (%s%s)" % (("asked by %s: " % asked) if asked else "", summary)   # the answer names the question
+    return {"at": str(entry.get("at", "")), "event": ev, "who": who, "tool": tool, "outcome": outcome, "ref": ref,
+            "summary": summary, "requested_by": asked}
 
 
 def read_witness(path: str) -> List[Any]:

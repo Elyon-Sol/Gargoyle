@@ -438,6 +438,10 @@ function describeEntry(e) {
       ref = (e.target_url || "").slice(0, 40); break;
     }
   }
+  if (typeof e.summary === "string" && e.summary) {
+    if (e.event === "issued" || e.event === "plan") outcome += `: ${e.summary}`;
+    else if (e.event === "granted" || e.event === "declined" || e.event === "grant_refused") outcome += ` (${e.requested_by ? `asked by ${e.requested_by}: ` : ""}${e.summary})`;
+  }
   return { who, tool, outcome, ref };
 }
 

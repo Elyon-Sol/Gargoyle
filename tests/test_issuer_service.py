@@ -295,7 +295,10 @@ def test_a_refused_release_is_an_event_and_sign_in_codes_leave_the_access_log():
     assert c.post("/grants", json=g, headers=auth()).json() == {"accepted": False, "reason": REF_APPROVAL_KEY_UNKNOWN}
     refused = [e for e in events if e["event"] == "grant_refused"]
     assert refused == [{"event": "grant_refused", "at": NOW.isoformat(), "approval_request_id": arid,
-                        "approver": "mallory@example.org", "reason": REF_APPROVAL_KEY_UNKNOWN}]
+                        "approver": "mallory@example.org", "reason": REF_APPROVAL_KEY_UNKNOWN,
+                        # ... and, like every answer to a hold, who asked and for what
+                        "requested_by": "spiffe://example.org/agents/coder", "tool": "write_file", "target_url": TARGET,
+                        "summary": "Write a.txt (1 bytes)", "request": {"path": "a.txt", "bytes": 1}}]
     assert c.get("/pending", headers=auth()).json()["pending"][0]["envelope"]["approval_request_id"] == arid   # the hold stands
 
     redact_access_log("test.access")
@@ -304,3 +307,60 @@ def test_a_refused_release_is_an_event_and_sign_in_codes_leave_the_access_log():
     for f in logging.getLogger("test.access").filters:
         f.filter(rec)
     assert rec.args[2] == "/approve?<redacted>" and rec.args[1] == "GET"
+
+
+def test_the_witness_says_what_was_asked_on_the_hold_and_on_its_answer():
+    """A quarter later the record must read "declined: move notes.txt to
+    archive", not "declined: move_file". The hold's entry carries the card's
+    sentence and the paths; the release or decline repeats them with who
+    asked, so each answer reads on its own. The payload never goes in: the
+    arguments' hash binds it (2026-11-02 evidence review)."""
+    events = []
+    app = build_issuer_app(policy=ToolPolicy(), signing_key=issuer, key_id="issuer-1", idp_public_keys={"idp-1": idp.public_key()},
+                           approver_public_keys={"approver-alice": approver.public_key()}, audience="gargoyle-issuer",
+                           log_events=events.append, now=lambda: NOW)
+    c = TestClient(app)
+    secret = "Write-Host 'the content is not for the witness'"
+    env = c.post("/issue", json={"target_url": TARGET, "tool": "write_file", "args": {"path": "C:\\share\\run.ps1", "content": secret}},
+                 headers=auth()).json()["envelope"]
+    arid = env["approval_request_id"]
+    held = [e for e in events if e["event"] == "issued"][-1]
+    assert held["held"] is True and held["summary"] == "Write run.ps1 (47 bytes) in C:\\share"
+    assert held["request"] == {"path": "C:\\share\\run.ps1", "bytes": 47}
+    assert c.post("/decline", json={"approval_request_id": arid, "reason": "no scripting"}, headers=auth()).json()["declined"] is True
+    declined = [e for e in events if e["event"] == "declined"][-1]
+    assert {k: declined[k] for k in ("by", "why", "requested_by", "tool", "target_url", "summary", "request")} == {
+        "by": "spiffe://example.org/agents/coder", "why": "no scripting", "requested_by": "spiffe://example.org/agents/coder", "tool": "write_file",
+        "target_url": TARGET, "summary": "Write run.ps1 (47 bytes) in C:\\share", "request": {"path": "C:\\share\\run.ps1", "bytes": 47}}
+    # A release says the same.
+    env = c.post("/issue", json={"target_url": TARGET, "tool": "move_file", "args": {"source": "C:\\share\\notes.txt", "destination": "C:\\share\\archive\\notes.txt"}},
+                 headers=auth()).json()["envelope"]
+    arid = env["approval_request_id"]
+    g = sign_grant(build_grant(decision_sha256=env["decision_sha256"], approval_request_id=arid, grant_id="g-1", not_after=NOW + timedelta(minutes=5)),
+                   approver, "approver-alice")
+    assert c.post("/grants", json=g, headers=auth()).json()["accepted"] is True
+    granted = [e for e in events if e["event"] == "granted"][-1]
+    assert granted["requested_by"] == "spiffe://example.org/agents/coder" and granted["tool"] == "move_file"
+    assert granted["summary"] == "Move notes.txt from C:\\share to C:\\share\\archive"
+    assert granted["request"] == {"source": "C:\\share\\notes.txt", "destination": "C:\\share\\archive\\notes.txt"}
+    # Nothing in the record carries the payload.
+    import json
+    assert secret not in json.dumps(events)
+    # The witness reads it back in words, on the hold and on the answer.
+    from gargoyle.witness import describe
+    assert describe(held)["outcome"] == "held for approval (unbound): Write run.ps1 (47 bytes) in C:\\share"
+    assert describe(declined)["outcome"] == "declined: no scripting (asked by spiffe://example.org/agents/coder: Write run.ps1 (47 bytes) in C:\\share)"
+    assert describe(granted)["who"] == "approver-alice" and describe(granted)["requested_by"] == "spiffe://example.org/agents/coder"
+    # A plan's hold and its answer say what the steps would do, and name the plan.
+    plan = c.post("/plans", json={"target_url": TARGET, "note": "tidy the share",
+                                  "steps": [{"tool": "write_file", "args": {"path": "C:\\share\\a.txt", "content": "aa"}},
+                                            {"tool": "move_file", "args": {"source": "C:\\share\\a.txt", "destination": "C:\\share\\b.txt"}}]},
+                  headers=auth()).json()["plan"]
+    planned = [e for e in events if e["event"] == "plan"][-1]
+    assert planned["held"] is True and planned["summary"] == "Plan of 2 steps: tidy the share (1 move_file, 1 write_file)"
+    assert planned["request"] == {"steps": [{"tool": "write_file", "path": "C:\\share\\a.txt", "bytes": 2},
+                                            {"tool": "move_file", "source": "C:\\share\\a.txt", "destination": "C:\\share\\b.txt"}]}
+    assert c.post("/decline", json={"approval_request_id": plan["approval_request_id"], "reason": "needs sean"}, headers=auth()).json()["declined"] is True
+    declined = [e for e in events if e["event"] == "declined"][-1]
+    assert declined["plan_id"] == plan["plan_id"] and declined["tool"] == "plan" and declined["summary"] == planned["summary"]
+    assert describe(declined)["outcome"].startswith("declined: needs sean (asked by spiffe://example.org/agents/coder: Plan of 2 steps")
