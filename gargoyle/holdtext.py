@@ -139,6 +139,33 @@ def describe_hold(tool: Any, args: Any, state: Optional[Dict[str, Any]] = None) 
                 readable=False, irreversible=irreversible, verb=tool)
 
 
+def request_fields(tool: Any, args: Any) -> Dict[str, Any]:
+    """What was asked, without the payload: the paths a call names, the
+    size of what it would write, how many edits. This is what the witness
+    keeps beside the arguments' hash, so a quarter's declines read as
+    "move notes.txt to archive" and not as a tool name. File contents,
+    mail bodies and anything else that is not a path stay out: the hash
+    binds them, the hold's live card showed them."""
+    args = args if isinstance(args, dict) else {}
+    out: Dict[str, Any] = {}
+    for k in ("path", "source", "destination"):
+        if isinstance(args.get(k), str) and args[k]:
+            out[k] = args[k][:512]
+    if isinstance(args.get("content"), str):
+        out["bytes"] = len(args["content"].encode("utf-8"))
+    if isinstance(args.get("edits"), list):
+        out["edits"] = len(args["edits"])
+    if isinstance(args.get("paths"), list):
+        out["paths"] = [p[:512] for p in args["paths"] if isinstance(p, str)][:20]
+    if tool == "send_mail":
+        to = args.get("to") or args.get("recipients") or args.get("toRecipients")
+        if isinstance(to, list):
+            out["to"] = [t[:254] for t in to if isinstance(t, str)][:20]
+        if isinstance(args.get("subject"), str):
+            out["subject"] = args["subject"][:200]
+    return out
+
+
 def describe_plan(plan: Any) -> Dict[str, Any]:
     """The line for a scoped grant (gargoyle.plans): the plan's own note and
     what its steps are made of."""
