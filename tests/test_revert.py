@@ -137,5 +137,14 @@ def test_revert_restores_an_approved_write_through_the_gate(tmp_path):
         assert call(state, 6, "write_file", {"path": str(new), "content": "x"})["result"]["_meta"][EXECUTED_META_KEY]
         r = call(state, 7, REVERT_TOOL, {"decision_id": "last"})
         assert r["result"]["_meta"][REASON_META_KEY] == REF_REVERT_NEEDS_DELETE and new.exists()
+
+        # Both refusals are in the trail: the assistant asked to undo, and why it could not.
+        log = read_log(str(tmp_path / "audit.jsonl"))
+        refused = [(e["tool"], e["reason"]) for e in log if e["kind"] == "refused"]
+        assert refused == [(REVERT_TOOL, REF_REVERT_STATE_CHANGED), (REVERT_TOOL, REF_REVERT_NEEDS_DELETE)]
+        assert log[-1]["receipt"] is None and log[-1]["principal"]
+        v = verify_log(log, issuer_public_keys={"issuer-1": issuer.public_key()},
+                       executor_public_keys={"executor-1": executor.public_key()}, approver_public_keys={"approver-1": approver.public_key()})
+        assert v["accepted"] and v["refused"] == 2
     finally:
         up.close()

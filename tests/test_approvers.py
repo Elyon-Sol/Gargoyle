@@ -330,3 +330,21 @@ def test_a_revoke_inside_the_same_timestamp_tick_is_still_noticed(tmp_path):
     os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))     # the write is invisible by mtime
     assert path.stat().st_mtime_ns == before.st_mtime_ns
     assert "dana@contoso.com" not in reg and reg.revoked_entries()["dana@contoso.com"]["revoked_by"] == "operator:root"
+
+
+def test_approvers_audit_endpoint_lists_every_key_an_approver_held(tmp_path):
+    """GET /approvers/audit is what `gargoyle audit --issuer` reads: the current
+    key first, then replaced and revoked ones, so grants signed under any of
+    them verify; GET /approvers keeps listing only the current, trusted key."""
+    reg = ApproverRegistry(str(tmp_path / "approvers.json"))
+    app = build_issuer_app(policy=Hold(), signing_key=issuer, key_id="issuer-1", idp_public_keys={"idp-1": idp.public_key()},
+                           approver_registry=reg)
+    c = TestClient(app)
+    h = {"Authorization": "Bearer " + token("dana@contoso.com", roles=["Approver"])}
+    k1, k2 = Ed25519PrivateKey.generate(), Ed25519PrivateKey.generate()
+    assert c.post("/approvers/enroll", json={"public_key_hex": pub_hex(k1)}, headers=h).json()["enrolled"]
+    assert c.post("/approvers/revoke", json={"upn": "dana@contoso.com"}, headers=h).json() == {"revoked": True}
+    assert c.post("/approvers/enroll", json={"public_key_hex": pub_hex(k2)}, headers=h).json()["enrolled"]
+    assert c.get("/approvers").json() == {"approvers": {"dana@contoso.com": pub_hex(k2)}}
+    audit = c.get("/approvers/audit").json()["approvers"]
+    assert audit["dana@contoso.com"][0] == pub_hex(k2) and set(audit["dana@contoso.com"]) == {pub_hex(k1), pub_hex(k2)}

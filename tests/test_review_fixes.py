@@ -134,7 +134,7 @@ def test_every_path_after_the_claim_leaves_evidence(tmp_path, capsys):
     assert report["accepted"] and [e["verdict"] for e in report["entries"]][:3] == [TOOL_ERROR, UPSTREAM_ERROR, UPSTREAM_UNAVAILABLE]
     _audit_summary(report["entries"], log)
     out = capsys.readouterr().out
-    assert "failed" in out and "%-24s %7d %7d %7d" % ("write_file", 1, 3, 0) in out
+    assert "errored" in out and "upstream reported an error" in out and "%-24s %7d %7d %7d" % ("write_file", 1, 3, 0) in out
     # The spent receipts are spent: a retry of the failed one is a replay.
     again = handle_message(state, _call(envs[0], {"path": "/gargoyle-test-root/f0"}, 5))
     assert again["result"]["_meta"][REASON_META_KEY] == REF_VERIFY_REPLAY

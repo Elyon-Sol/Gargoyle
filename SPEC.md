@@ -1053,6 +1053,10 @@ compares them by `decision_id`. Findings, never resolved silently:
   approval, or evidence signed around it);
 - `MISSING_EVIDENCE`: the issuer issued a receipt to this principal and the
   client recorded nothing (dropped or suppressed evidence);
+- `PREDATES_EVIDENCE`: the issuer issued it before the evidence log's first
+  entry, so this log was never in a position to record it (a fresh install, a
+  rotated log); reported with a count as information, not a failure. Whether
+  the log should have begun earlier is the reviewer's question;
 - `REPLAYED_RECEIPT`: the evidence honors one decision id twice (a replay
   the executor's cache did not catch: a second process, a lost cache);
 - `EVIDENCE_BEFORE_ISSUE`: the client's entry predates the issuance.
