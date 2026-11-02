@@ -53,7 +53,7 @@ against a fake Graph server); the OAuth broker for hosted connectors
 (deployed, metadata and redirect checks verified, no human sign-in through a
 connector yet).
 
-**Assurance.** 563 Python tests on Linux and Windows across Python 3.12,
+**Assurance.** 564 Python tests on Linux and Windows across Python 3.12,
 3.13 and 3.14, at dependency floors and at a lock file; a TypeScript suite
 that recomputes the conformance vectors byte for byte; two outside,
 model-driven security reviews on 2026-10-20 (ten findings, all fixed); the

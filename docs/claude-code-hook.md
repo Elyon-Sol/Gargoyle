@@ -76,7 +76,13 @@ waits inside the hook for the approver.
   was honored, the tool never ran. The honored receipt crosses from the
   PreToolUse process to the PostToolUse one through
   `audit.hook-pending.json` beside the evidence log, keyed by Claude
-  Code's `tool_use_id`.
+  Code's `tool_use_id`. Parallel tool calls (subagents, batched calls) run
+  their hooks as separate processes at once, so every read-modify-write of
+  that file holds a lock; the honored entry is written over the arguments
+  PreToolUse gated, which the receipt bound, not over PostToolUse's copy of
+  the input (Claude Code presents some tools' input differently afterwards).
+  A reaped entry is written up to an hour after a five-minute receipt, so
+  the audit checks its receipt as of issuance.
 
 `gargoyle audit --log audit.jsonl` verifies the whole log offline, as for
 the MCP gate; rows name the Claude Code session that made each call.

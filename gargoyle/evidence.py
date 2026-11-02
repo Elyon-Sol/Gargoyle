@@ -127,6 +127,37 @@ def build_entry(*, seq: int, prev_sha256: str, kind: str, tool: str, args: Any, 
     return entry
 
 
+def locked(lock_path: Any):
+    """An exclusive, blocking lock on `lock_path` (POSIX flock, Windows
+    byte-range lock), released on exit. Processes that share a file on one
+    workstation, the hook's PreToolUse and PostToolUse among them, hold it
+    across their read-modify-write so neither loses the other's update."""
+    import contextlib
+
+    @contextlib.contextmanager
+    def hold():
+        with open(lock_path, "a+b") as lock:
+            try:
+                import fcntl
+                fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+                unlock = lambda: fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+            except ImportError:                       # Windows
+                import msvcrt
+                lock.seek(0)
+                while True:
+                    try:
+                        msvcrt.locking(lock.fileno(), msvcrt.LK_LOCK, 1)   # retries about ten seconds, then raises
+                        break
+                    except OSError:
+                        continue
+                unlock = lambda: (lock.seek(0), msvcrt.locking(lock.fileno(), msvcrt.LK_UNLCK, 1))
+            try:
+                yield
+            finally:
+                unlock()
+    return hold()
+
+
 class EvidenceLog:
     """Appends entries to a JSON Lines file, continuing the chain found at
     its tail. Several gate processes may share one log (a Claude Code and
@@ -156,33 +187,8 @@ class EvidenceLog:
                     self._seq, self._tail = int(last["seq"]), str(last["entry_sha256"])
 
     def _locked(self):
-        """An exclusive, blocking lock on the log's lock file (POSIX flock,
-        Windows byte-range lock), released on exit."""
-        import contextlib
-
-        @contextlib.contextmanager
-        def hold():
-            lock_path = self.path.with_name(self.path.name + ".lock")
-            with open(lock_path, "a+b") as lock:
-                try:
-                    import fcntl
-                    fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
-                    unlock = lambda: fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
-                except ImportError:                       # Windows
-                    import msvcrt
-                    lock.seek(0)
-                    while True:
-                        try:
-                            msvcrt.locking(lock.fileno(), msvcrt.LK_LOCK, 1)   # retries about ten seconds, then raises
-                            break
-                        except OSError:
-                            continue
-                    unlock = lambda: (lock.seek(0), msvcrt.locking(lock.fileno(), msvcrt.LK_UNLCK, 1))
-                try:
-                    yield
-                finally:
-                    unlock()
-        return hold()
+        """An exclusive, blocking lock on the log's lock file, released on exit."""
+        return locked(self.path.with_name(self.path.name + ".lock"))
 
     def append(self, kind: str, tool: str, args: Any, principal: str, reason: str, *,
                receipt: Any = None, grant: Any = None, execution: Any = None,
@@ -287,8 +293,13 @@ def verify_log(
         else:
             reason = ACCEPT_ENTRY_VERIFIED
             if e["receipt"] is not None:
+                # Provenance only: a refused entry says the receipt was issued and
+                # the call did not run. It may be written long after the receipt
+                # expired (an honored call nobody came back for is reaped an hour
+                # on), so it is checked as of its own issuance, not the entry's.
+                issued_at = e["receipt"].get("timestamp_utc") if isinstance(e["receipt"], dict) else None
                 p = verify_provenance(e["receipt"], pinned_public_keys=issuer_public_keys,
-                                      now=_parse_at(e["at"]), historical=True)
+                                      now=_parse_at(issued_at if isinstance(issued_at, str) else e["at"]), historical=True)
                 ok, reason = p["accepted"], (ACCEPT_ENTRY_VERIFIED if p["accepted"] else p["reason"])
         counts[e["kind"]] += 1
         plan_ref = None
