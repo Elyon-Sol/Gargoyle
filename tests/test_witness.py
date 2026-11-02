@@ -211,6 +211,9 @@ def test_audit_names_a_missing_witness_or_folder_plainly(tmp_path, capsys):
     assert "pass --log" in capsys.readouterr().err
     assert main(["audit", "--out", str(out), "--check-tree", str(tmp_path)]) == 2
     assert "pass --log" in capsys.readouterr().err
+    # A log that is not there (rotated, or never written) is named, not a traceback.
+    assert main(["audit", "--log", str(tmp_path / "gone.jsonl"), "--out", str(out)]) == 2
+    assert "evidence log not found" in capsys.readouterr().err
     assert main(["audit", "--out", str(out)]) == 2
     assert "nothing to verify" in capsys.readouterr().err
     # The issuer creates the witness file at start, before any decision.
