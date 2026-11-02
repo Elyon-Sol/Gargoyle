@@ -129,3 +129,32 @@ rotation, because the chain is one sequence and the archive is the
 backup. When a tenant outgrows that, a `witness rotate` that seals the
 file and starts a new one from the old tail hash is the right tool; it is
 not written yet.
+
+## The evidence report
+
+`gargoyle report` produces the periodic (quarterly) evidence report from the
+record, so the report is a thing a third party can regenerate, not a document
+someone assembled:
+
+    gargoyle report --witness /opt/gargoyle/deploy/witness.jsonl --out report-2026Q4 \
+        --log ~/.gargoyle/hook/audit.jsonl --check-tree /home/vboxuser \
+        --env ~/.gargoyle/hook/middleware.env --issuer https://issuer:8443 \
+        --rules /opt/gargoyle/deploy/rules.json --since 2026-10-01 --until 2026-12-31 \
+        --preface verdict.md --title "Client: evidence report, Q4" --prepared-by "Operator"
+
+It copies the witness once into `OUT/raw/witness-snapshot.jsonl` and reads
+every check from that copy, so the numbers agree with each other; verifies the
+witness with the issuer key from `public-keys.json` (`--keys DIR`, else beside
+the first `--log`, else `OUT`); runs `audit --summary` for each `--log` (and
+`--check-tree`), `doctor` and `sidedoors --json` for `--env`, and fetches
+`/health`, `/keys` and `/approvers/audit` for `--issuer`, each into `OUT/raw/`.
+`OUT/REPORT.md` holds the optional hand-written preface (the verdict, findings
+and charter status are judgment, so they are never generated), the
+verification table, the activity tables (by account, by day, by tool; declines,
+releases and service refusals with who asked, the tool, the target, what was
+asked, who answered and the reason), approver key events, routes around the
+gate, the commands to repeat the run, an attestation line and the hash
+appendix. `OUT/SHA256SUMS` covers everything in `raw/` and the report. Exit 0
+when every check accepted, 1 when any failed (the report is still written), 2
+on usage. On a workstation run it with that workstation's log and
+`--check-tree` on its share; the operator collects the folder.
