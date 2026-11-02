@@ -209,3 +209,25 @@ def test_entries_name_the_client_and_older_versions_still_verify(tmp_path):
     assert not _well_formed(v4_missing)
     with pytest.raises(ValueError):
         build_entry(seq=1, prev_sha256=GENESIS, kind=REFUSED, tool="t", args={}, principal=PRINCIPAL, reason="x", client=7)
+
+
+def test_lock_wait_is_bounded(tmp_path):
+    # A holder that never lets go must not hang every later hook; the wait ends
+    # in an OSError the caller turns into a refusal.
+    import threading
+    from gargoyle.evidence import locked
+    lock_path = tmp_path / "audit.jsonl.lock"
+    held = threading.Event(); release = threading.Event()
+
+    def holder():
+        with locked(lock_path):
+            held.set(); release.wait(5)
+    t = threading.Thread(target=holder); t.start(); held.wait(5)
+    try:
+        with pytest.raises(OSError, match="not acquired"):
+            with locked(lock_path, wait_seconds=0.2):
+                pass
+    finally:
+        release.set(); t.join()
+    with locked(lock_path, wait_seconds=0.2):
+        pass

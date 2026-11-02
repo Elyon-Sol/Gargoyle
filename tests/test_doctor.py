@@ -53,7 +53,7 @@ class Http:
 
 ISSUER = "https://192.168.56.101:8443"
 HEALTH = {"ok": True, "policy": {"policy_id": "gargoyle.rules/1", "policy_sha256": "71145c21" + "0" * 56}, "entra": True,
-          "persistent": True, "pending_receipts": 0, "enrolled_approvers": 1, "witness_head": {"seq": 533, "entry_sha256": "ab" * 32}}
+          "persistent": True, "pending_receipts": 0, "enrolled_approvers": 2, "witness_head": {"seq": 533, "entry_sha256": "ab" * 32}}
 
 
 def _env(tmp_path, **over):
@@ -131,10 +131,14 @@ def test_issuer_tls_failure_points_at_requests_ca_bundle(tmp_path):
 
 
 def test_issuer_health_detail_and_date(tmp_path):
+    http = Http({ISSUER + "/health": Resp(200, dict(HEALTH, enrolled_approvers=1), {"Date": "Sun, 01 Nov 2026 20:35:12 GMT"})})
+    r = check_issuer(_env(tmp_path), _ctx(tmp_path, http))
+    # One enrolled approver is a warning: one browser key between every hold and its release.
+    assert r["check"].status == WARN and "rules 71145c21" in r["check"].detail and "witness seq 533" in r["check"].detail
+    assert "second approver" in r["check"].fix and r["date"].startswith("Sun")
     http = Http({ISSUER + "/health": Resp(200, HEALTH, {"Date": "Sun, 01 Nov 2026 20:35:12 GMT"})})
     r = check_issuer(_env(tmp_path), _ctx(tmp_path, http))
-    assert r["check"].status == PASS and "rules 71145c21" in r["check"].detail and "witness seq 533" in r["check"].detail
-    assert r["date"].startswith("Sun")
+    assert r["check"].status == PASS and r["date"].startswith("Sun")
 
 
 def test_clock_skew_levels(tmp_path):

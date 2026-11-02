@@ -97,6 +97,25 @@ held and released, a `rm` was refused by rule and Claude reported the
 refusal verbatim, the file state change was bound to the Write, and the
 evidence log verified: 4 entries, 3 honored, 1 refused, 0 failed.
 
+## Self-audit
+
+The hook host's own log is the cheapest evidence there is that the executor
+side is honest. Run it against the live issuer on a schedule:
+
+```
+REQUESTS_CA_BUNDLE=/opt/gargoyle/tls/gate.crt gargoyle audit \
+  --log ~/.gargoyle/hook/audit.jsonl --witness /opt/gargoyle/deploy/witness.jsonl \
+  --issuer https://<issuer>:8443 --summary
+```
+
+The first such run (2026-11-02, 498 entries) found three executor faults the
+gate's decisions had been right about all along (ROADMAP.md). A weekly
+systemd user timer that writes a dated report is in the deployment
+repository (`deploy/selfaudit.sh`, `gargoyle-selfaudit.timer`); its exit
+status is 0 only when every entry verifies and nothing is missing. The
+audit's own command is hooked, so the newest issuance shows as `IN_FLIGHT`
+(a note), never as missing evidence.
+
 ## What this does not do
 
 - Claude Desktop, claude.ai and hosted connectors have no hook. This

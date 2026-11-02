@@ -53,7 +53,7 @@ against a fake Graph server); the OAuth broker for hosted connectors
 (deployed, metadata and redirect checks verified, no human sign-in through a
 connector yet).
 
-**Assurance.** 564 Python tests on Linux and Windows across Python 3.12,
+**Assurance.** 565 Python tests on Linux and Windows across Python 3.12,
 3.13 and 3.14, at dependency floors and at a lock file; a TypeScript suite
 that recomputes the conformance vectors byte for byte; two outside,
 model-driven security reviews on 2026-10-20 (ten findings, all fixed); the
@@ -644,6 +644,8 @@ keys (both at once when a pinned key is also set).
 | `GARGOYLE_APPROVERS_PATH`, `GARGOYLE_APPROVER_ROLE`, `GARGOYLE_APPROVER_GROUPS` | where enrolled approvers persist (default `approvers.json` beside the keys, with a `revoked` list, re-read when its content changes) and which Entra app role (default `Approver`) or groups may enroll, see every hold and the witness |
 | `GARGOYLE_HOLDS_PATH` | SQLite file for holds, grants, declines and plans, so a restart loses nothing a person is acting on (`gargoyle issuer` sets `holds.sqlite` beside the keys); `GET /health` reports `persistent` |
 | `GARGOYLE_MAX_OPEN_HOLDS` | how many held receipts and plans one principal may have waiting at once (default 20); the call over the cap is `REF_ISSUER_TOO_MANY_HOLDS` and nothing is stored |
+| `GARGOYLE_DECLINE_LIMIT`, `GARGOYLE_DECLINE_WINDOW_HOURS` | the decline cooldown: after this many declines of the same (principal, tool, path) within the window (defaults 2 and 24), the issuer refuses the next ask with `REF_ISSUER_DECLINED_RECENTLY` instead of holding it again, so an approver is not asked the same question a third time in a day; `0` disables |
+| `GARGOYLE_RECEIPT_TTL_SECONDS` | how long an issued receipt stays presentable (default 300); a held receipt's hold lives up to six times that, capped at an hour |
 | `GARGOYLE_ALLOW_SELF_APPROVAL` | `1` lets a person release their own call; by default the approver may be neither the hold's principal nor the party acted for (`REF_ISSUER_SELF_APPROVAL`). A grant for an expired hold is `REF_ISSUER_HOLD_EXPIRED` and the hold is dropped |
 | `GARGOYLE_WITNESS_PATH` | the issuer's signed, hash-chained record of every decision (`gargoyle issuer` sets `witness.jsonl` beside the keys) |
 | `GARGOYLE_HOLD_WEBHOOK_URL`, `GARGOYLE_APPROVE_URL` | POST a notice of every new hold (Slack incoming-webhook shape, `text` plus the hold) with a link to the console; notice only, the grant still needs the approver's key |

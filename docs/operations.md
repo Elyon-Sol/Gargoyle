@@ -106,6 +106,19 @@ when the backup is daily and a restore from the archive takes under an
 hour on a fresh box: install-opt.sh, restore, start. The exposure is one
 day of decisions and the holds open at the moment of loss.
 
+## Self-audit
+
+Each workstation audits its own evidence log against the issuer weekly
+(`gargoyle audit --log ... --witness ... --issuer URL --summary`; the
+deployment repository's `deploy/selfaudit.sh` and `gargoyle-selfaudit.timer`
+run it on the hook host and keep twelve dated reports). Read a report the
+way the audit prints it: a failed entry or a `MISSING_EVIDENCE` finding is
+the finding; `PREDATES_EVIDENCE` and `IN_FLIGHT` notes are information. On
+the issuer host, `gargoyle doctor` warns while only one approver is
+enrolled: one browser key between every hold and its release is an
+availability risk, not a security one, and a second approver (a deputy
+role) removes it.
+
 ## Witness size
 
 One entry is about 880 bytes. The pilot recorded 614 entries in three
