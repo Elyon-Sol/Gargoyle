@@ -914,8 +914,9 @@ def cmd_audit(args) -> int:
             r = reconcile(entries, read_witness(args.witness), principal=principal, target_url=target)
             older = [f for f in r["findings"] if f["finding"] == "PREDATES_WITNESS"]
             before_log = [f for f in r["findings"] if f["finding"] == "PREDATES_EVIDENCE"]
+            in_flight = [f for f in r["findings"] if f["finding"] == "IN_FLIGHT"]
             for f in r["findings"]:
-                if f["finding"] in ("PREDATES_WITNESS", "PREDATES_EVIDENCE"):
+                if f["finding"] in ("PREDATES_WITNESS", "PREDATES_EVIDENCE", "IN_FLIGHT"):
                     continue
                 print("  FINDING %-22s %s" % (f["finding"], " ".join("%s=%s" % (k, str(v)[:40]) for k, v in f.items() if k != "finding")))
             if older:
@@ -926,7 +927,11 @@ def cmd_audit(args) -> int:
                 print("  note: %d receipt(s) the issuer issued to this principal predate this evidence log (first entry %s; %d of them held): "
                       "a log that began later cannot be asked about them. If the log was not meant to start then, that is the finding."
                       % (len(before_log), (r.get("log_start") or "?")[:19], held_n))
-            hard = len(r["findings"]) - len(older) - len(before_log)
+            if in_flight:
+                print("  note: %d receipt(s) issued after this log's last entry (%s) have no row yet: in flight when the log was read "
+                      "(this audit's own gated command, a call still held). Audit again later; one still missing then is MISSING_EVIDENCE."
+                      % (len(in_flight), (r.get("log_end") or "?")[:19]))
+            hard = len(r["findings"]) - len(older) - len(before_log) - len(in_flight)
             print("reconciled: %d issued by the issuer, %d in evidence, %d finding(s)%s"
                   % (r["issued"], r["evidence_with_receipt"], hard,
                      " (%d issued for other targets, not this gate's)" % r["issued_elsewhere"] if r.get("issued_elsewhere") else ""))

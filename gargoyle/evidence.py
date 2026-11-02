@@ -127,29 +127,46 @@ def build_entry(*, seq: int, prev_sha256: str, kind: str, tool: str, args: Any, 
     return entry
 
 
-def locked(lock_path: Any):
-    """An exclusive, blocking lock on `lock_path` (POSIX flock, Windows
-    byte-range lock), released on exit. Processes that share a file on one
-    workstation, the hook's PreToolUse and PostToolUse among them, hold it
-    across their read-modify-write so neither loses the other's update."""
+LOCK_WAIT_SECONDS = 60.0      # a lock not acquired in this long means a stuck holder; the caller fails closed
+
+
+def locked(lock_path: Any, wait_seconds: float = LOCK_WAIT_SECONDS):
+    """An exclusive lock on `lock_path` (POSIX flock, Windows byte-range
+    lock), released on exit. Processes that share a file on one workstation,
+    the hook's PreToolUse and PostToolUse among them, hold it across their
+    read-modify-write so neither loses the other's update. The wait is
+    bounded: a holder that never lets go (a hung process) raises OSError
+    after `wait_seconds` rather than hanging every later call, and a gate
+    that cannot record does not let the call through."""
     import contextlib
+    import time as _time
 
     @contextlib.contextmanager
     def hold():
         with open(lock_path, "a+b") as lock:
+            deadline = _time.monotonic() + wait_seconds
             try:
                 import fcntl
-                fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+                while True:
+                    try:
+                        fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        break
+                    except OSError:
+                        if _time.monotonic() >= deadline:
+                            raise OSError("lock not acquired within %.0f s: %s (a stuck holder?)" % (wait_seconds, lock_path))
+                        _time.sleep(0.02)
                 unlock = lambda: fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
             except ImportError:                       # Windows
                 import msvcrt
                 lock.seek(0)
                 while True:
                     try:
-                        msvcrt.locking(lock.fileno(), msvcrt.LK_LOCK, 1)   # retries about ten seconds, then raises
+                        msvcrt.locking(lock.fileno(), msvcrt.LK_NBLCK, 1)
                         break
                     except OSError:
-                        continue
+                        if _time.monotonic() >= deadline:
+                            raise OSError("lock not acquired within %.0f s: %s (a stuck holder?)" % (wait_seconds, lock_path))
+                        _time.sleep(0.02)
                 unlock = lambda: (lock.seek(0), msvcrt.locking(lock.fileno(), msvcrt.LK_UNLCK, 1))
             try:
                 yield

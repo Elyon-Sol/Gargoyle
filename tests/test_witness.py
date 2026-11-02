@@ -114,6 +114,15 @@ def test_honest_evidence_reconciles_and_tampering_is_found(tmp_path):
     page = c.get("/witness?limit=1", headers=approver_h).json()
     assert [e["seq"] for e in page["entries"]] == [4] and page["seq"] == 4
     assert c.get("/witness?after=4", headers=approver_h).json() == {"entries": [], "seq": 4}
+    # An issuance newer than the log's last entry is in flight (the audit's own
+    # gated command, a call still held): information, settled by a later audit.
+    late = dict(witness[1], decision_id="just-issued", at=(datetime.now(timezone.utc) + timedelta(seconds=30)).isoformat())
+    r = reconcile(evidence, witness + [late], principal=PRINCIPAL)
+    assert r["accepted"] and [f["finding"] for f in r["findings"]] == ["IN_FLIGHT"] and r["log_end"]
+    # The same issuance older than the log's last entry is missing: its row had its chance.
+    early = dict(late, at=(datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat())
+    r = reconcile(evidence, witness + [early], principal=PRINCIPAL)
+    assert not r["accepted"] and [f["finding"] for f in r["findings"]] == ["MISSING_EVIDENCE"]
     # Evidence from before the witness began is information, not a finding.
     old = dict(evidence[0], at="2026-01-01T00:00:00+00:00", receipt=dict(evidence[0]["receipt"], decision_id="before-the-witness"))
     r = reconcile(evidence + [old], witness, principal=PRINCIPAL)      # beside the real rows, not in place of one
@@ -139,7 +148,8 @@ def test_honest_evidence_reconciles_and_tampering_is_found(tmp_path):
                    at=(datetime.fromisoformat(evidence[0]["at"]) - timedelta(days=2)).isoformat())
     r = reconcile(evidence, witness + [ancient], principal=PRINCIPAL)
     assert r["accepted"] and [f["finding"] for f in r["findings"]] == ["PREDATES_EVIDENCE"] and r["log_start"] == evidence[0]["at"]
-    later = dict(ancient, decision_id="d-later", at=(datetime.fromisoformat(evidence[0]["at"]) + timedelta(seconds=1)).isoformat())
+    # Inside the log's span (before its last entry) and unrecorded: missing, not in flight.
+    later = dict(ancient, decision_id="d-later", at=(datetime.fromisoformat(evidence[-1]["at"]) - timedelta(microseconds=1)).isoformat())
     r = reconcile(evidence, witness + [later], principal=PRINCIPAL)
     assert not r["accepted"] and [f["finding"] for f in r["findings"]] == ["MISSING_EVIDENCE"]
 

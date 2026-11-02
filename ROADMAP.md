@@ -693,3 +693,11 @@ outside.
   carried into the entry, provenance checked at issuance; three regression tests,
   564 total. The rows already written stay as they are (the log is append-only) and
   are explained in the run record rather than rewritten.
+- Hardening after the first self-audit (2026-11-02): the lock around the evidence log
+  and the hook's pending store waits at most sixty seconds and then fails closed, so one
+  stuck process cannot hang every later call; an issuance newer than the evidence log's
+  last entry reconciles as `IN_FLIGHT` (information) rather than `MISSING_EVIDENCE`, which
+  removes the audit's own gated command from its findings; `gargoyle doctor` warns while
+  one approver is enrolled; the README documents the decline cooldown and the receipt TTL;
+  a weekly self-audit of the hook host's log is scripted in the deployment repository and
+  described in the hook guide and docs/operations.md.

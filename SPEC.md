@@ -1057,6 +1057,10 @@ compares them by `decision_id`. Findings, never resolved silently:
   entry, so this log was never in a position to record it (a fresh install, a
   rotated log); reported with a count as information, not a failure. Whether
   the log should have begun earlier is the reviewer's question;
+- `IN_FLIGHT`: the issuer issued it after the evidence log's last entry (strictly
+  later), so the executor had not written its row when the log was read (the audit's own
+  gated command, a call still waiting on its approver); information, not a
+  failure. A later audit of a longer log settles it either way;
 - `REPLAYED_RECEIPT`: the evidence honors one decision id twice (a replay
   the executor's cache did not catch: a second process, a lost cache);
 - `EVIDENCE_BEFORE_ISSUE`: the client's entry predates the issuance.

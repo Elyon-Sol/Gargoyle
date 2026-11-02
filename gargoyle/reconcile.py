@@ -64,6 +64,12 @@ def reconcile(evidence: Iterable[Any], witness: Iterable[Any], *, principal: Opt
         # a log missing its head is a chain failure, and what the head would
         # have held stays MISSING_EVIDENCE.
         log_start = _parse(first.get("at"))
+    # The log's last entry: an issuance newer than it is a call whose evidence
+    # row the executor had not written when this log was read (the audit's own
+    # gated command, a call still waiting for its approver). Reported as
+    # IN_FLIGHT, information, not failure; the next audit settles it.
+    last = next((e for e in reversed(evidence) if isinstance(e, dict)), None)
+    log_end: Optional[datetime] = _parse(last.get("at")) if last is not None else None
     for e in evidence:
         if not isinstance(e, dict):
             continue
@@ -115,13 +121,18 @@ def reconcile(evidence: Iterable[Any], witness: Iterable[Any], *, principal: Opt
         at_w = _parse(w.get("at"))
         # Every issuance precedes its own evidence entry by a little; only one
         # older than the log's first entry by more than the window predates it.
-        kind = ("PREDATES_EVIDENCE" if (log_start is not None and at_w is not None
-                                        and (log_start - at_w).total_seconds() > window_seconds) else "MISSING_EVIDENCE")
+        if log_start is not None and at_w is not None and (log_start - at_w).total_seconds() > window_seconds:
+            kind = "PREDATES_EVIDENCE"
+        elif log_end is not None and at_w is not None and at_w > log_end:
+            kind = "IN_FLIGHT"
+        else:
+            kind = "MISSING_EVIDENCE"
         findings.append({"finding": kind, "decision_id": did, "tool": w.get("tool"), "principal": w.get("principal"),
                          "held": bool(w.get("held")), "at": w.get("at")})
-    hard = [f for f in findings if f["finding"] not in ("PREDATES_WITNESS", "PREDATES_EVIDENCE")]
+    hard = [f for f in findings if f["finding"] not in ("PREDATES_WITNESS", "PREDATES_EVIDENCE", "IN_FLIGHT")]
     return {"accepted": not hard, "findings": findings, "horizon": horizon.isoformat() if horizon else None,
             "log_start": log_start.isoformat() if log_start else None,
+            "log_end": log_end.isoformat() if log_end else None,
             "issued": len(issued), "evidence_with_receipt": len(seen_decisions), "issued_elsewhere": elsewhere}
 
 

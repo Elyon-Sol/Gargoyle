@@ -181,6 +181,17 @@ def check_issuer(env: Dict[str, str], ctx: Context) -> Dict[str, Any]:
         date = r.headers.get("Date") if hasattr(r, "headers") else None
     except Exception:
         date = None
+    if h.get("enrolled_approvers") == 1:
+        # One browser key between every hold and its release: lost, re-enrolled
+        # or on leave, nothing is released until a second approver exists.
+        return {"check": Check("issuer", WARN, detail,
+                               "one approver enrolled: a lost or re-enrolled browser key, or an absence, leaves every hold waiting; enroll a second approver (a deputy role) and test a release by each"),
+                "health": h, "date": date}
+    date = None
+    try:
+        date = r.headers.get("Date") if hasattr(r, "headers") else None
+    except Exception:
+        date = None
     return {"check": Check("issuer", PASS, detail), "health": h, "date": date}
 
 
