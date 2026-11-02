@@ -26,7 +26,7 @@ by whom, and what changed.
 
 ## Status
 
-Pre-release `0.20.0.dev0` on PyPI as `gargoyle-receipts`. Wire format
+Pre-release `0.21.0.dev0` on PyPI as `gargoyle-receipts`. Wire format
 `gargoyle/3`, evidence log `gargoyle-evidence/4`, witness
 `gargoyle-witness/1`; all three are specified in [SPEC.md](SPEC.md) and may
 still change before a first release.
