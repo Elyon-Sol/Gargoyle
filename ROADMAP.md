@@ -665,3 +665,18 @@ outside.
   target type (Microsoft Graph mail through the adapter, against a real server),
   the approver key lifecycle with a second approver, and the client-side mandate
   (what the gate cannot close, said once). No new primitive is planned.
+- From the first 0.20 acceptance run on the Windows client (2026-11-02, PR #19): the
+  gate was right on every step; the audit tooling was not. A refused undo
+  (`REF_REVERT_NEEDS_DELETE`, `REF_REVERT_STATE_CHANGED`) left no evidence entry: now
+  recorded as a refused call. Thirteen MISSING_EVIDENCE findings were issuances older
+  than the client's evidence log, which began at a reinstall: now `PREDATES_EVIDENCE`,
+  counted as information when the log starts at its genesis entry and the issuance is
+  older than it by more than the window. `gargoyle audit` crashed with a traceback when
+  `--out` named no key file: it now looks beside the log and otherwise says what it needs.
+  Both releases in the log failed `REF_APPROVAL_SIGNATURE_INVALID` because the client's
+  copy of approvers.json predated the approver's re-enrolled browser key: the audit now
+  names the stale or unknown approver ids with the remedy, and `--issuer URL` takes the
+  issuer's keys and every approver key it has seen (new public `GET /approvers/audit`)
+  so no copied file is needed. The summary's "failed" column is "errored" (upstream
+  errors on admitted calls, not verification failures), with a footnote.
+

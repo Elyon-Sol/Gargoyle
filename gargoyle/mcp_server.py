@@ -888,16 +888,21 @@ def handle_message(state: ServerState, msg: Dict[str, Any]) -> Optional[Dict[str
             # then goes through the gate exactly as the assistant's own writes.
             from gargoyle.revert import REF_REVERT_DISABLED, revert_text
             from gargoyle.state import REF_TARGET_STATE_UNREADABLE, StateUnreadable
-            if state.snapshots is None:
-                return _success(msg_id, {"content": [{"type": "text", "text": revert_text(REF_REVERT_DISABLED)}], "isError": True,
-                                         "_meta": {EXECUTED_META_KEY: False, REASON_META_KEY: REF_REVERT_DISABLED}})
             rargs = params.get("arguments") or {}
-            try:
-                plan = plan_revert(state.snapshots, str(rargs.get("decision_id") or "last"), state.adapter,
-                                   ref=rargs.get("path") if isinstance(rargs.get("path"), str) else None)
-            except StateUnreadable:
-                plan = {"reason": REF_TARGET_STATE_UNREADABLE}
+            if state.snapshots is None:
+                plan = {"reason": REF_REVERT_DISABLED}
+            else:
+                try:
+                    plan = plan_revert(state.snapshots, str(rargs.get("decision_id") or "last"), state.adapter,
+                                       ref=rargs.get("path") if isinstance(rargs.get("path"), str) else None)
+                except StateUnreadable:
+                    plan = {"reason": REF_TARGET_STATE_UNREADABLE}
             if "reason" in plan:
+                # Refused before any receipt: the trail still says the assistant
+                # asked to undo something and why it could not (the Windows
+                # acceptance run of 2026-11-02 found this refusal unrecorded).
+                _record(state, "refused", {"reason": plan["reason"], "envelope": None, "grant": None,
+                                           "ref": rargs.get("path") if isinstance(rargs.get("path"), str) else None}, params)
                 return _success(msg_id, {"content": [{"type": "text", "text": revert_text(plan["reason"])}], "isError": True,
                                          "_meta": {EXECUTED_META_KEY: False, REASON_META_KEY: plan["reason"]}})
             params = plan["params"]

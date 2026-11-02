@@ -6,6 +6,7 @@ Findings, never silently fixed:
   UNWITNESSED_RECEIPT   evidence honors a decision the issuer never issued (forged or foreign)
   UNWITNESSED_RELEASE   a held call was honored but the issuer saw no grant for its hold (or plan)
   MISSING_EVIDENCE      the issuer issued a receipt to this principal and the client recorded nothing
+  PREDATES_EVIDENCE     issued more than the window before this log's genesis entry; the log cannot be asked about it (information)
   EVIDENCE_BEFORE_ISSUE the client's entry predates the issuer's issuance
   CHANGED_OUTSIDE_GATE  a file under the gated folder is not in the state the last gated write left it
 """
@@ -52,6 +53,17 @@ def reconcile(evidence: Iterable[Any], witness: Iterable[Any], *, principal: Opt
     findings: List[Dict[str, Any]] = []
     seen_decisions = set()
     honored_at: Dict[Any, Any] = {}          # decision_id -> seq of the entry that first honored it
+    # The evidence log's own beginning: an issuance older than its first entry
+    # is one this log was never in a position to record (a fresh install, a
+    # rotated log). Reported, counted, and kept apart from MISSING_EVIDENCE.
+    evidence = list(evidence)
+    log_start: Optional[datetime] = None
+    first = next((e for e in evidence if isinstance(e, dict)), None)
+    if first is not None and first.get("seq") == 1 and first.get("prev_sha256") == "0" * 64:
+        # Only a log that begins at its genesis entry can say when it began;
+        # a log missing its head is a chain failure, and what the head would
+        # have held stays MISSING_EVIDENCE.
+        log_start = _parse(first.get("at"))
     for e in evidence:
         if not isinstance(e, dict):
             continue
@@ -100,10 +112,16 @@ def reconcile(evidence: Iterable[Any], witness: Iterable[Any], *, principal: Opt
         if target_url is not None and isinstance(w.get("target_url"), str) and w["target_url"] != target_url:
             elsewhere += 1
             continue
-        findings.append({"finding": "MISSING_EVIDENCE", "decision_id": did, "tool": w.get("tool"), "principal": w.get("principal"),
+        at_w = _parse(w.get("at"))
+        # Every issuance precedes its own evidence entry by a little; only one
+        # older than the log's first entry by more than the window predates it.
+        kind = ("PREDATES_EVIDENCE" if (log_start is not None and at_w is not None
+                                        and (log_start - at_w).total_seconds() > window_seconds) else "MISSING_EVIDENCE")
+        findings.append({"finding": kind, "decision_id": did, "tool": w.get("tool"), "principal": w.get("principal"),
                          "held": bool(w.get("held")), "at": w.get("at")})
-    hard = [f for f in findings if f["finding"] != "PREDATES_WITNESS"]
+    hard = [f for f in findings if f["finding"] not in ("PREDATES_WITNESS", "PREDATES_EVIDENCE")]
     return {"accepted": not hard, "findings": findings, "horizon": horizon.isoformat() if horizon else None,
+            "log_start": log_start.isoformat() if log_start else None,
             "issued": len(issued), "evidence_with_receipt": len(seen_decisions), "issued_elsewhere": elsewhere}
 
 

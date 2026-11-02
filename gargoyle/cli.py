@@ -635,9 +635,11 @@ def _audit_summary(report, raw) -> None:
             releases[who] += 1
         clients[r.get("client") or "(client unnamed)"] += 1
     print("summary: %d call(s)%s" % (len(report), (", %s to %s" % (min(ats)[:19], max(ats)[:19])) if ats else ""))
-    print("  %-28s %-24s %7s %7s %7s" % ("principal", "tool", "honored", "failed", "refused"))
+    print("  %-28s %-24s %7s %7s %7s" % ("principal", "tool", "honored", "errored", "refused"))
     for (principal, tool), c in sorted(counts.items(), key=lambda kv: (kv[0][0], -sum(kv[1].values()), kv[0][1])):
         print("  %-28s %-24s %7d %7d %7d" % (principal[:28], tool[:24], c.get("honored", 0), c.get("failed", 0), c.get("refused", 0)))
+    if any(c.get("failed") for c in counts.values()):
+        print("  errored: admitted by the gate, then the upstream reported an error (a missing file, a bad argument); not a verification failure")
     if releases:
         print("  releases: " + ", ".join("%s %d" % (w, n) for w, n in releases.most_common()))
     print("  clients: " + ", ".join("%s %d" % (w, n) for w, n in clients.most_common()))
@@ -786,11 +788,54 @@ def cmd_restore(args) -> int:
     return 0 if (r.get("restored") or (args.verify_only and not r.get("refused"))) else 1
 
 
+def _issuer_trust(url: str) -> "tuple[Dict[str, str], Dict[str, list]]":
+    """The issuer's current signing keys (GET /keys) and every key each
+    enrolled approver has held (GET /approvers/audit), so an audit on a
+    workstation needs no copy of approvers.json that can go stale. Both are
+    public endpoints. REQUESTS_CA_BUNDLE names the issuer's CA as usual."""
+    import requests
+    base = url.rstrip("/")
+    keys = requests.get(base + "/keys", timeout=10); keys.raise_for_status()
+    appr = requests.get(base + "/approvers/audit", timeout=10); appr.raise_for_status()
+    return dict(keys.json()), dict(appr.json().get("approvers", {}))
+
+
+def _audit_trust_dir(args) -> "Path | None":
+    """Where public-keys.json is: --out, else the evidence log's own folder
+    (on a workstation the keys sit beside audit.jsonl). None when neither."""
+    out = Path(args.out).resolve()
+    if (out / "public-keys.json").exists():
+        return out
+    if getattr(args, "log", None):
+        beside = Path(args.log).resolve().parent
+        if (beside / "public-keys.json").exists():
+            return beside
+    return None
+
+
 def cmd_audit(args) -> int:
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
     from gargoyle.execution import verify_chain
 
-    keys, approvers = _trust_hex(Path(args.out).resolve())
+    out = _audit_trust_dir(args)
+    if out is None:
+        print("public-keys.json not found in %s%s: pass --out DIR, the folder that holds public-keys.json (and approvers.json), "
+              "on a workstation the one with middleware.env" % (Path(args.out).resolve(),
+              (" or beside %s" % Path(args.log).resolve().parent) if getattr(args, "log", None) else ""), file=sys.stderr)
+        return 2
+    keys, approvers = _trust_hex(out)
+    if getattr(args, "issuer", None):
+        try:
+            issuer_keys, issuer_approvers = _issuer_trust(args.issuer)
+        except Exception as exc:
+            print("issuer not reachable for keys: %s (%s)" % (args.issuer, exc), file=sys.stderr)
+            return 2
+        keys["issuer"] = dict(keys.get("issuer", {}), **issuer_keys)
+        # The issuer's list is current and complete; a local copy may be older.
+        for upn, hexes in issuer_approvers.items():
+            have = approvers.get(upn)
+            have = have if isinstance(have, list) else ([have] if have else [])
+            approvers[upn] = list(hexes) + [h for h in have if h not in hexes]
     one = lambda h: Ed25519PublicKey.from_public_bytes(bytes.fromhex(h))
     load = lambda m: {k: ([one(x) for x in v] if isinstance(v, list) else one(v)) for k, v in m.items()}
     trust = dict(issuer_public_keys=load(keys["issuer"]), executor_public_keys=load(keys["executor"]),
@@ -821,6 +866,17 @@ def cmd_audit(args) -> int:
         failed = sum(1 for r in v["entries"] if not r["accepted"])
         print("%d entries (%d honored, %d refused), %d failed; chain %s; tail %s"
               % (v["count"], v["honored"], v["refused"], failed, v["reason"], v["tail_sha256"][:16]))
+        from gargoyle.approval import REF_APPROVAL_KEY_UNKNOWN, REF_APPROVAL_SIGNATURE_INVALID
+        bad_sigs = [r for r in v["entries"] if not r["accepted"] and r["reason"] in (REF_APPROVAL_SIGNATURE_INVALID, REF_APPROVAL_KEY_UNKNOWN)]
+        if bad_sigs:
+            ids = sorted({k for r in bad_sigs for k in (r.get("released_by") or [])})
+            unknown = [k for k in ids if k not in approvers]
+            stale = [k for k in ids if k in approvers]
+            print("  note: %d release(s) failed the grant check%s%s. The approver keys here come from %s; an approver who "
+                  "re-enrolled a browser key since that copy was made signs with a key it does not list. Copy the issuer's "
+                  "current approvers.json beside public-keys.json, or pass --issuer URL to fetch every key the issuer has seen."
+                  % (len(bad_sigs), (": approver id(s) not known here: %s" % ", ".join(unknown)) if unknown else "",
+                     ("; known approver(s) whose listed key does not verify the grant: %s" % ", ".join(stale)) if stale else "", out))
         rc = 0 if v["accepted"] else 1
         entries = read_log(args.log)
         if args.summary:
@@ -851,14 +907,20 @@ def cmd_audit(args) -> int:
                            if isinstance(e, dict) and isinstance(e.get("receipt"), dict) and e["receipt"].get("target_url")), None)
             r = reconcile(entries, read_witness(args.witness), principal=principal, target_url=target)
             older = [f for f in r["findings"] if f["finding"] == "PREDATES_WITNESS"]
+            before_log = [f for f in r["findings"] if f["finding"] == "PREDATES_EVIDENCE"]
             for f in r["findings"]:
-                if f["finding"] == "PREDATES_WITNESS":
+                if f["finding"] in ("PREDATES_WITNESS", "PREDATES_EVIDENCE"):
                     continue
                 print("  FINDING %-22s %s" % (f["finding"], " ".join("%s=%s" % (k, str(v)[:40]) for k, v in f.items() if k != "finding")))
             if older:
                 print("  note: %d honored row(s) predate the witness (started %s) and cannot be vouched for either way: seq %s"
                       % (len(older), (r.get("horizon") or "?")[:19], ", ".join(str(f["seq"]) for f in older[:12]) + (" ..." if len(older) > 12 else "")))
-            hard = len(r["findings"]) - len(older)
+            if before_log:
+                held_n = sum(1 for f in before_log if f.get("held"))
+                print("  note: %d receipt(s) the issuer issued to this principal predate this evidence log (first entry %s; %d of them held): "
+                      "a log that began later cannot be asked about them. If the log was not meant to start then, that is the finding."
+                      % (len(before_log), (r.get("log_start") or "?")[:19], held_n))
+            hard = len(r["findings"]) - len(older) - len(before_log)
             print("reconciled: %d issued by the issuer, %d in evidence, %d finding(s)%s"
                   % (r["issued"], r["evidence_with_receipt"], hard,
                      " (%d issued for other targets, not this gate's)" % r["issued_elsewhere"] if r.get("issued_elsewhere") else ""))
@@ -1021,7 +1083,8 @@ def main(argv=None) -> int:
     p.add_argument("--witness", help="the issuer's witness.jsonl: reconcile the evidence against it")
     p.add_argument("--check-tree", metavar="DIR", help="verify every gated file under DIR is as the gate left it")
     p.add_argument("--summary", action="store_true", help="after the rows: calls by principal and tool with outcomes, releases, clients")
-    p.add_argument("--out", default="gargoyle-deploy")
+    p.add_argument("--out", default="gargoyle-deploy", help="folder with public-keys.json and approvers.json (default: gargoyle-deploy, else the log's own folder)")
+    p.add_argument("--issuer", metavar="URL", help="fetch the issuer's keys and every approver key it has seen (GET /keys, /approvers/audit) instead of relying on a copied approvers.json")
     p.set_defaults(fn=cmd_audit)
     p = sub.add_parser("emilia", help="export an evidence log's approved calls as EMILIA Trust Receipts")
     p.add_argument("--log", required=True, help="the middleware's audit.jsonl")

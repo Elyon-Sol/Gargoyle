@@ -53,7 +53,7 @@ against a fake Graph server); the OAuth broker for hosted connectors
 (deployed, metadata and redirect checks verified, no human sign-in through a
 connector yet).
 
-**Assurance.** 561 Python tests on Linux and Windows across Python 3.12,
+**Assurance.** 563 Python tests on Linux and Windows across Python 3.12,
 3.13 and 3.14, at dependency floors and at a lock file; a TypeScript suite
 that recomputes the conformance vectors byte for byte; two outside,
 model-driven security reviews on 2026-10-20 (ten findings, all fixed); the
@@ -340,6 +340,13 @@ enrollment, revocation and discovery report, on the operator's server.
     gargoyle audit --log audit.jsonl --witness witness.jsonl           # reconcile by decision id: unwitnessed receipts, releases without a grant, missing evidence
     gargoyle audit --log audit.jsonl --check-tree /srv/shared          # hash the gated folder against the recorded states; name files changed around the gate
     gargoyle audit --log audit.jsonl --summary                         # calls by principal and tool, side-door findings
+    gargoyle audit --log audit.jsonl --issuer https://gargoyle.lan      # take the issuer's keys and every approver key it has seen from the issuer, not from a copied file
+
+The audit needs the public keys (`public-keys.json`, by default beside the
+log or in `--out`). Grants verify against every key an approver has held,
+so an approver who re-enrolled a browser key is still audited; with
+`--issuer` that list comes from the issuer itself and a stale copy of
+`approvers.json` can no longer fail a valid grant.
 
 On a machine the user administers the gate constrains the assistant, not
 the user; these checks make the difference visible. SPEC.md section 15
@@ -623,7 +630,8 @@ receipts work unchanged. Configuration is by environment:
 **Issuing service** (`gargoyle.issuer_service`, run with uvicorn from
 `app_from_env()`, or `gargoyle issuer`): identity token in, receipt out,
 with the hold and grant exchange for flagged calls (`/issue`, `/pending`,
-`/grants`, `/decline`, `/record`, `/keys`, `/sidedoors`) and the browser
+`/grants`, `/decline`, `/record`, `/keys`, `/approvers`, `/approvers/audit`,
+`/sidedoors`) and the browser
 approval console at `/approve`. Policy from a rules file or OPA; identity
 from a pinned key or, with `GARGOYLE_ENTRA_TENANT`, the tenant's signing
 keys (both at once when a pinned key is also set).

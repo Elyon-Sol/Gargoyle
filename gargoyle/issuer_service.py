@@ -777,6 +777,14 @@ def build_issuer_app(
         _notice_revocations()
         return {"approvers": registry.public_hex()}
 
+    @app.get("/approvers/audit")
+    async def approvers_audit():
+        """Public, for `gargoyle audit --issuer`: every key each approver has
+        held, current first, then replaced and revoked ones. A grant signed
+        while a key was trusted still verifies; nothing here admits a key."""
+        _notice_revocations()
+        return {"approvers": registry.audit_keys_hex()}
+
     @app.post("/approvers/enroll")
     async def enroll(request: Request, authorization: Optional[str] = Header(default=None)):
         """Bind the caller's UPN to the public key their browser generated.
