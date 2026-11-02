@@ -222,8 +222,18 @@ def _table(header: List[str], rows: List[List[Any]]) -> str:
 
 
 def _when(iso: Any) -> str:
+    """"2 Nov 19:39" in UTC. No `%-d`: Windows strftime has no such flag."""
     t = _at({"at": iso})
-    return t.astimezone(timezone.utc).strftime("%-d %b %H:%M") if t else str(iso or "")
+    if not t:
+        return str(iso or "")
+    t = t.astimezone(timezone.utc)
+    return "%d %s" % (t.day, t.strftime("%b %H:%M"))
+
+
+def _day(d: str) -> str:
+    """"2 November 2026" from "2026-11-02"."""
+    t = datetime.fromisoformat(d)
+    return "%d %s" % (t.day, t.strftime("%B %Y"))
 
 
 def _plural(n: int, w: str) -> str:
@@ -283,7 +293,7 @@ def render_markdown(summary: Dict[str, Any], checks: List[Dict[str, Any]], *, ti
                    % (("1 answer is" if n == 1 else "%d answers are" % n), "it is" if n == 1 else "they are", "shows" if n == 1 else "show", NOT_RECORDED))
         out.append("")
     principals = [p for p, _ in sorted(s["accounts"].items(), key=lambda kv: -kv[1]["receipts"])]
-    day_rows = [[datetime.fromisoformat(d).strftime("%-d %B %Y")] + [x_["receipts"].get(p, 0) for p in principals] + [x_["released"], x_["declined"], x_["refused"]]
+    day_rows = [[_day(d)] + [x_["receipts"].get(p, 0) for p in principals] + [x_["released"], x_["declined"], x_["refused"]]
                 for d, x_ in s["by_day"].items()]
     out.append(_table(["Day (UTC)"] + ["Receipts: %s" % p for p in principals] + ["Released", "Declined", "Refused"], day_rows))
     out.append("")
@@ -424,7 +434,7 @@ def run_report(args: Any) -> int:
     shutil.copyfile(witness, snapshot)
     entries = read_witness(str(snapshot))
     checks: List[Dict[str, Any]] = []
-    commands: List[str] = ["cp %s raw/witness-snapshot.jsonl" % witness]
+    commands: List[str] = ["%s %s raw/witness-snapshot.jsonl" % ("copy" if os.name == "nt" else "cp", witness)]
     extras: Dict[str, Any] = {}
     gargoyle_cmd = [sys.executable, "-m", "gargoyle"]
 

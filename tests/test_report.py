@@ -77,6 +77,9 @@ def test_render_markdown_carries_every_table(tmp_path):
     md = render_markdown(s, checks, title="Report", prepared_by="Surftech", generated_at="2026-11-02T20:00:00Z", preface="## Verdict\n\nFine.",
                          commands=["gargoyle report --witness w --out o"], extras={"rules_pin": "71145c21" + "0" * 56, "issuer_key_id": "issuer-1"},
                          hashes=[["a" * 64, "raw/witness-snapshot.jsonl"]])
+    # Dates are spelled without strftime's "%-d", which Windows does not have.
+    from gargoyle.report import _day, _when
+    assert _when("2026-11-02T19:39:05+00:00") == "2 Nov 19:39" and _day("2026-11-02") == "2 November 2026"
     for needle in ("## Verdict", "Fine.", "| Check | What it proves | Result |", "WITNESS_VERIFIED", "| Who asked | Receipts | Held |",
                    "| Day (UTC) |", "What was asked", "Create run.ps1 (47 bytes) in C:\\share", NOT_RECORDED, "powershell is not allowed",
                    "Approver.Business", "DESTRUCTIVE_TOOL", "1 enrollment, 1 refused", "Rules pin: `71145c21`", "Issuer key: `issuer-1`",
