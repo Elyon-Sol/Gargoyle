@@ -177,3 +177,61 @@ def test_pending_store_is_bounded_and_survives_garbage(tmp_path):
     assert len(p._read()) == 200 and "t4" not in p._read() and "t204" in p._read()
     assert len(p.reap(now=1000.0, max_age=800.0)) == 195
     assert p.pop("t204")["params"]["name"] == "Read" and p.pop("t204") is None
+
+
+def test_post_event_input_differs_from_pre_and_the_entry_still_matches_the_receipt(tmp_path, monkeypatch):
+    # Claude Code presents some tools' input differently in PostToolUse than
+    # in PreToolUse (seen live with Artifact). The receipt bound what the gate
+    # saw; the honored entry must hash those arguments or the audit reports
+    # REF_EVIDENCE_RECEIPT_MISSING for a call that was gated correctly.
+    out, project, env, state, client = deployment(tmp_path, monkeypatch)
+    decide(event(PRE, "Bash", {"command": "true"}, "toolu_1"), state())
+    decide(event(POST, "Bash", {"command": "true", "description": "added afterwards"}, "toolu_1", tool_response={"stdout": ""}), state())
+    entries = read_log(env["GARGOYLE_MCP_AUDIT_LOG"])
+    assert [(e["kind"], e["tool"]) for e in entries] == [("honored", "Bash")]
+    assert entries[0]["args_sha256"] == entries[0]["receipt"]["request_context"]["args_sha256"]
+    assert main(["audit", "--log", env["GARGOYLE_MCP_AUDIT_LOG"], "--out", str(out)]) == 0
+
+
+def test_reaped_entry_written_after_the_receipt_expired_still_verifies(tmp_path, monkeypatch):
+    # An honored receipt nobody came back for is reaped REAP_SECONDS later,
+    # long after its TTL. The refused entry carries it as provenance of what
+    # was gated; it is checked as of issuance, not as of the entry.
+    import datetime as dt
+    from gargoyle import evidence as ev
+    out, project, env, state, client = deployment(tmp_path, monkeypatch)
+    decide(event(PRE, "Bash", {"command": "true"}, "toolu_1"), state(), now=1000.0)
+    later = dt.datetime.now(dt.timezone.utc) + dt.timedelta(seconds=REAP_SECONDS + 1)
+
+    class Clock(dt.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return later if tz is not None else later.replace(tzinfo=None)
+    monkeypatch.setattr(ev, "datetime", Clock)
+    decide(event(PRE, "Read", {"file_path": str(project / "a.txt")}, "toolu_2"), state(), now=1000.0 + REAP_SECONDS + 1)
+    monkeypatch.undo()
+    entries = read_log(env["GARGOYLE_MCP_AUDIT_LOG"])
+    reaped = [e for e in entries if e["reason"] == REF_HOOK_NOT_RUN]
+    assert len(reaped) == 1 and reaped[0]["at"] > reaped[0]["receipt"]["not_after"]
+    # The audit exits 1 when any entry fails verification.
+    assert main(["audit", "--log", env["GARGOYLE_MCP_AUDIT_LOG"], "--out", str(out)]) == 0
+
+
+def test_pending_store_survives_concurrent_hooks(tmp_path):
+    # Parallel tool calls run their Pre and Post hooks as separate processes
+    # at once. Without the lock a put can overwrite a concurrent pop (the
+    # honored receipt comes back and is reaped as never run) or a concurrent
+    # put (a call that ran leaves no evidence row).
+    import threading
+    p = PendingReceipts(str(tmp_path / "audit.hook-pending.json"))
+    gate = {"envelope": {"decision_id": "d"}, "grant": None, "self_issued": True, "reason": "ok", "ref": None}
+    ids = ["t%d" % i for i in range(120)]
+    threads = [threading.Thread(target=p.put, args=(i, gate, {"name": "Bash", "arguments": {}}, 1.0)) for i in ids]
+    for t in threads: t.start()
+    for t in threads: t.join()
+    assert sorted(p._read()) == sorted(ids)
+    popped = []
+    threads = [threading.Thread(target=lambda i=i: popped.append(p.pop(i))) for i in ids]
+    for t in threads: t.start()
+    for t in threads: t.join()
+    assert len(popped) == 120 and all(g is not None for g in popped) and p._read() == {}

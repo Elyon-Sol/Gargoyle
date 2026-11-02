@@ -116,6 +116,14 @@ class PendingReceipts:
     def __init__(self, path: str) -> None:
         self.path = Path(path)
 
+    def _locked(self):
+        """Pre- and PostToolUse hooks of parallel tool calls run as separate
+        processes at once; each read-modify-write holds the lock, or one
+        loses the other's entry (a call that ran with no evidence row, or an
+        honored one resurrected and reaped as never run)."""
+        from gargoyle.evidence import locked
+        return locked(self.path.with_name(self.path.name + ".lock"))
+
     def _read(self) -> Dict[str, Any]:
         try:
             doc = json.loads(self.path.read_text(encoding="utf-8"))
@@ -129,26 +137,29 @@ class PendingReceipts:
         os.replace(tmp, self.path)
 
     def put(self, tool_use_id: str, gate: Dict[str, Any], params: Dict[str, Any], now: float) -> None:
-        doc = self._read()
-        doc[tool_use_id] = {"envelope": gate["envelope"], "grant": gate["grant"], "self_issued": gate["self_issued"],
-                            "reason": gate["reason"], "ref": gate.get("ref"), "params": params, "at": now}
-        for old in list(doc)[:-PENDING_LIMIT]:
-            doc.pop(old, None)
-        self._write(doc)
+        with self._locked():
+            doc = self._read()
+            doc[tool_use_id] = {"envelope": gate["envelope"], "grant": gate["grant"], "self_issued": gate["self_issued"],
+                                "reason": gate["reason"], "ref": gate.get("ref"), "params": params, "at": now}
+            for old in list(doc)[:-PENDING_LIMIT]:
+                doc.pop(old, None)
+            self._write(doc)
 
     def pop(self, tool_use_id: str) -> Optional[Dict[str, Any]]:
-        doc = self._read()
-        gate = doc.pop(tool_use_id, None)
-        if gate is not None:
-            self._write(doc)
+        with self._locked():
+            doc = self._read()
+            gate = doc.pop(tool_use_id, None)
+            if gate is not None:
+                self._write(doc)
         return gate
 
     def reap(self, now: float, max_age: float) -> List[Dict[str, Any]]:
-        doc = self._read()
-        stale = [k for k, v in doc.items() if not isinstance(v.get("at"), (int, float)) or now - v["at"] > max_age]
-        out = [doc.pop(k) for k in stale]
-        if out:
-            self._write(doc)
+        with self._locked():
+            doc = self._read()
+            stale = [k for k, v in doc.items() if not isinstance(v.get("at"), (int, float)) or now - v["at"] > max_age]
+            out = [doc.pop(k) for k in stale]
+            if out:
+                self._write(doc)
         return out
 
 
@@ -256,6 +267,10 @@ def decide(event: Dict[str, Any], state: Any, *, final: bool = False, now: Optio
         gate = pending.pop(tool_use_id) if (pending is not None and tool_use_id) else None
         if gate is None:
             return {}
+        # The receipt bound the arguments PreToolUse saw; Claude Code may
+        # present some tools' input differently afterwards, so the entry is
+        # written over what was gated, not what PostToolUse carries.
+        params = gate["params"]
         outputs = event.get("tool_response") if kind == POST else {"error": event.get("error")}
         execution = _attest(state, gate["envelope"], outputs, params)
         _record(state, HONORED, gate, params, execution)

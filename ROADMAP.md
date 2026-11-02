@@ -1,4 +1,4 @@
-# Gargoyle roadmap (opened 2026-10-16, last entry 2026-11-01)
+# Gargoyle roadmap (opened 2026-10-16, last entry 2026-11-02)
 
 Where this comes from: a comparison of Gargoyle against the products and
 drafts that overlap it most (ActionProxy, Vestige, the MCP "work contract"
@@ -680,3 +680,16 @@ outside.
   so no copied file is needed. The summary's "failed" column is "errored" (upstream
   errors on admitted calls, not verification failures), with a footnote.
 
+- From the hook host's own evidence log (2026-11-02): 498 entries, every tool call of
+  the sessions that built #16-#19, audited against the live issuer with `--issuer`.
+  Three executor-side faults, none in the gate's decisions. The pending-receipts
+  file was read-modify-written without a lock, so parallel tool calls lost updates
+  (one call that ran left no evidence row; one honored receipt came back and was
+  reaped as never run). The honored entry hashed PostToolUse's copy of the input,
+  which Claude Code presents differently for some tools (Artifact), so one correctly
+  gated call audited as `REF_EVIDENCE_RECEIPT_MISSING`. A reaped `REF_HOOK_NOT_RUN`
+  entry was checked for expiry as of the entry rather than the receipt, so every
+  reaped entry failed. Fixed: a lock across the pending store, the gated arguments
+  carried into the entry, provenance checked at issuance; three regression tests,
+  564 total. The rows already written stay as they are (the log is append-only) and
+  are explained in the run record rather than rewritten.
