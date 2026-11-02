@@ -817,6 +817,12 @@ def cmd_audit(args) -> int:
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
     from gargoyle.execution import verify_chain
 
+    # A missing log is a usage error with the path named, not a traceback: a
+    # client whose evidence log was rotated or has not been written yet.
+    if getattr(args, "log", None) and not Path(args.log).is_file():
+        print("evidence log not found: %s (nothing recorded there yet, or the log was rotated under another name)"
+              % Path(args.log).resolve(), file=sys.stderr)
+        return 2
     out = _audit_trust_dir(args)
     if out is None:
         print("public-keys.json not found in %s%s: pass --out DIR, the folder that holds public-keys.json (and approvers.json), "
