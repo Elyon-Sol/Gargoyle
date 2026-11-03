@@ -88,7 +88,7 @@ def period_summary(entries: List[Any], since: Optional[datetime] = None, until: 
         tool = e.get("tool") or (hold or {}).get("tool") or ("plan" if (e.get("plan_id") or e.get("hold_kind") == "plan" or arid in plan_arids or hold is None) else "")
         held_at = _at(hold) if hold else None
         t = _at(e)
-        return {"at": e.get("at", ""), "event": e.get("event"), "asked_by": asked, "tool": tool or NOT_RECORDED,  # asked_by "" = not joinable
+        return {"at": e.get("at", ""), "seq": e.get("seq", 0), "event": e.get("event"), "asked_by": asked, "tool": tool or NOT_RECORDED,  # asked_by "" = not joinable
                 "target": _target(e.get("target_url") or (hold or {}).get("target_url")),
                 "what": e.get("summary") or NOT_RECORDED, "request": e.get("request") if isinstance(e.get("request"), dict) else None,
                 "by": e.get("by") or e.get("approver") or "", "why": e.get("why") or "", "reason": e.get("reason") or "",
@@ -96,12 +96,15 @@ def period_summary(entries: List[Any], since: Optional[datetime] = None, until: 
                 "approval_request_id": arid or "",
                 "seconds": (t - held_at).total_seconds() if (t and held_at) else None}
 
-    decline_rows = sorted((answer_row(e) for e in declined), key=lambda r: r["at"], reverse=True)
-    release_rows = sorted((answer_row(e) for e in granted), key=lambda r: r["at"], reverse=True)
-    grant_refused_rows = sorted((answer_row(e) for e in grant_refused), key=lambda r: r["at"], reverse=True)
-    refusal_rows = sorted(({"at": e.get("at", ""), "asked_by": e.get("principal") or "", "tool": e.get("tool") or "",
+    # Newest first. Two entries written in the same clock tick share a timestamp
+    # (seen on Windows), so the witness sequence breaks the tie.
+    newest = lambda r: (r["at"], r.get("seq") or 0)
+    decline_rows = sorted((answer_row(e) for e in declined), key=newest, reverse=True)
+    release_rows = sorted((answer_row(e) for e in granted), key=newest, reverse=True)
+    grant_refused_rows = sorted((answer_row(e) for e in grant_refused), key=newest, reverse=True)
+    refusal_rows = sorted(({"at": e.get("at", ""), "seq": e.get("seq", 0), "asked_by": e.get("principal") or "", "tool": e.get("tool") or "",
                             "reason": e.get("reason") or "", "why": e.get("why") or "", "declines": e.get("declines")}
-                           for e in refused), key=lambda r: r["at"], reverse=True)
+                           for e in refused), key=newest, reverse=True)
 
     accounts: Dict[str, Dict[str, Any]] = {}
 
@@ -146,9 +149,9 @@ def period_summary(entries: List[Any], since: Optional[datetime] = None, until: 
             day["refused"] += 1
 
     key_events = collections.Counter(e.get("event") for e in rows if e.get("event") in ("enrolled", "enroll_refused", "revoked"))
-    key_rows = sorted(({"at": e.get("at", ""), "event": e.get("event"), "who": e.get("by") or e.get("approver") or e.get("principal") or "",
+    key_rows = sorted(({"at": e.get("at", ""), "seq": e.get("seq", 0), "event": e.get("event"), "who": e.get("by") or e.get("approver") or e.get("principal") or "",
                         "reason": e.get("reason") or "", "replaced": bool(e.get("replaced"))}
-                       for e in rows if e.get("event") in ("enrolled", "enroll_refused", "revoked")), key=lambda r: r["at"], reverse=True)
+                       for e in rows if e.get("event") in ("enrolled", "enroll_refused", "revoked")), key=lambda r: (r["at"], r["seq"] or 0), reverse=True)
     sidedoor_rows = [{"at": e.get("at", ""), "target": _target(e.get("target_url")), "count": e.get("count"), "kinds": e.get("kinds") or {}}
                      for e in rows if e.get("event") == "sidedoors"]
     with_summary = sum(1 for r in decline_rows + release_rows if r["what"] != NOT_RECORDED)
