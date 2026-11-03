@@ -53,3 +53,13 @@ jobs:
           node-version: "22"
       - run: npm ci --no-audit --no-fund
       - run: npm test
+  ci-green:
+    # The one check the main branch ruleset requires. It succeeds only when
+    # every job above succeeded, so the matrix can grow or be renamed without
+    # editing the ruleset, and a merge cannot land while any job is pending.
+    needs: [python, floors, locked, typescript]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo '${{ toJSON(needs) }}'
+      - run: test "${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || contains(needs.*.result, 'skipped') }}" = "false"
