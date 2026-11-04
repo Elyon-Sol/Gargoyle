@@ -17,6 +17,12 @@ reviewer must be able to read, run and reimplement it:
 - the conformance vectors and the EMILIA interoperability runner and exports;
 - the client side: the MCP gate, the Claude Code hook, `gargoyle doctor`,
   `gargoyle sidedoors`, `gargoyle rules test|lint|explain`, `gargoyle report`;
+- the workstation installer, including the service-account gate, share permissions and
+  the Claude Desktop and Claude Code policy pack, so the free product protects a
+  workstation completely;
+- adapters that place the gate in front of other tools and hosted integration layers
+  (Composio and similar), because interoperability behind a paywall is not
+  interoperability;
 - the issuer and the approver console as published here.
 
 ## Commercial, from version 0.23: the operations layer
@@ -25,13 +31,13 @@ Code first published after 0.22 that exists to run the gate for someone else, ra
 to prove or verify a receipt, is developed in a separate repository under commercial terms
 and is not part of this package. Today that perimeter is:
 
+- a multi-tenant hosted issuer and its console;
 - warm standby, failover and the recovery tooling around them;
 - export of the witness to a tenant's SIEM or log workspace;
-- the workstation policy pack and service-account installer for Claude Desktop and
-  Claude Code;
-- adapters that place the gate in front of hosted integration layers (Composio and
-  similar);
-- a multi-tenant hosted issuer and its console.
+- support with a response time, and the evidence-report service.
+
+In one line: what proves, verifies or protects a workstation is open; running the gate for
+someone else is commercial.
 
 Nothing in that layer changes a receipt, a verifier or a format. A receipt produced by the
 commercial layer verifies with the open verifier, byte for byte, or the commercial layer is
