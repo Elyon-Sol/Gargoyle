@@ -275,6 +275,28 @@ def test_open_holds_per_principal_are_capped():
     assert c.get("/health").json()["max_open_holds"] == 2
 
 
+def test_the_witness_says_what_a_refusal_by_rule_refused():
+    """A refusal by rule names the gate, the sentence the card would have shown
+    and the paths, never the payload (issue #31): the first live refusal under
+    a script-prohibiting profile (2026-11-04, entry 1235) said only
+    "write_file refused: SCRIPT_PROHIBITED"."""
+    events = []
+    app = build_issuer_app(policy=ToolPolicy(), signing_key=issuer, key_id="issuer-1", idp_public_keys={"idp-1": idp.public_key()},
+                           approver_public_keys={"approver-alice": approver.public_key()}, audience="gargoyle-issuer",
+                           log_events=events.append, now=lambda: NOW)
+    c = TestClient(app)
+    r = c.post("/issue", json={"target_url": TARGET, "tool": "delete_file", "args": {"path": "C:\\share\\old.txt", "content": "the payload"}},
+               headers=auth())
+    assert r.json() == {"issued": False, "reason": "TOOL_NOT_ALLOWED"}
+    refused = [e for e in events if e["event"] == "refused"]
+    assert len(refused) == 1 and refused[0]["tool"] == "delete_file" and refused[0]["target_url"] == TARGET
+    assert "old.txt" in refused[0]["summary"] and refused[0]["request"].get("path") == "C:\\share\\old.txt"
+    import json
+    assert "the payload" not in json.dumps(refused[0])
+    from gargoyle.witness import describe
+    assert describe(refused[0])["outcome"].startswith("refused: TOOL_NOT_ALLOWED: ") and "old.txt" in describe(refused[0])["outcome"]
+
+
 def test_a_refused_release_is_an_event_and_sign_in_codes_leave_the_access_log():
     """A grant under an unknown or revoked key is refused and the refusal is
     recorded (log and witness) with the key id and the reason; the live

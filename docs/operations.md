@@ -142,6 +142,8 @@ someone assembled:
         --rules /opt/gargoyle/deploy/rules.json --since 2026-10-01 --until 2026-12-31 \
         --preface verdict.md --title "Client: evidence report, Q4" --prepared-by "Operator"
 
+A refusal by rule records what was refused as a hold records what was asked: the gate, the card's sentence and the paths, never the payload (issue #31). The report's refusals table shows them; rows from before that release read "not recorded".
+
 It copies the witness once into `OUT/raw/witness-snapshot.jsonl` and reads
 every check from that copy, so the numbers agree with each other; verifies the
 witness with the issuer key from `public-keys.json` (`--keys DIR`, else beside

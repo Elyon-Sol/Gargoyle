@@ -103,6 +103,8 @@ def period_summary(entries: List[Any], since: Optional[datetime] = None, until: 
     release_rows = sorted((answer_row(e) for e in granted), key=newest, reverse=True)
     grant_refused_rows = sorted((answer_row(e) for e in grant_refused), key=newest, reverse=True)
     refusal_rows = sorted(({"at": e.get("at", ""), "seq": e.get("seq", 0), "asked_by": e.get("principal") or "", "tool": e.get("tool") or "",
+                            "target": _target(e.get("target_url")), "what": e.get("summary") or NOT_RECORDED,
+                            "request": e.get("request") if isinstance(e.get("request"), dict) else None,
                             "reason": e.get("reason") or "", "why": e.get("why") or "", "declines": e.get("declines")}
                            for e in refused), key=newest, reverse=True)
 
@@ -322,10 +324,10 @@ def render_markdown(summary: Dict[str, Any], checks: List[Dict[str, Any]], *, ti
                       [[_when(r["at"]), r["asked_by"] or NOT_RECORDED, r["tool"], r["target"], r["what"], r["by"], "/".join(r["roles"]) or "before roles"] for r in s["releases"]]))
     out.append("")
     if s["refusals"]:
-        out.append("Refused by the service without a card, newest first. A repeat of a request declined twice that day is refused with the last reason quoted back; a destructive tool is refused by rule.")
+        out.append("Refused by the service without a card, newest first. A repeat of a request declined twice that day is refused with the last reason quoted back; a destructive tool, or a script where the rules prohibit one, is refused by rule. \"What was asked\" is recorded since the refusal-summary release; older rows show \"%s\"." % NOT_RECORDED)
         out.append("")
-        out.append(_table(["When (UTC)", "Asked by", "For", "Reason", "Last decline quoted"],
-                          [[_when(r["at"]), r["asked_by"], r["tool"], r["reason"], r["why"]] for r in s["refusals"]]))
+        out.append(_table(["When (UTC)", "Asked by", "For", "Target", "What was asked", "Reason", "Last decline quoted"],
+                          [[_when(r["at"]), r["asked_by"], r["tool"], r["target"], r["what"], r["reason"], r["why"]] for r in s["refusals"]]))
         out.append("")
     if s["grant_refusals"]:
         out.append("Releases refused by the service (a grant under a key it does not trust), newest first.")

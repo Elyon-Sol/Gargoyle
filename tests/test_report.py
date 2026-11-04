@@ -31,7 +31,8 @@ def _witness(tmp_path):
              summary="Move a.txt from C:\\share to C:\\share\\archive", request={"source": "C:\\share\\a.txt", "destination": "C:\\share\\archive\\a.txt"})
     w.record("granted", approval_request_id="r-rel", approver=APPROVER, collected=1, required=1, hold_kind="receipt", roles=["Approver.Business"],
              requested_by=WS, tool="move_file", target_url=T, summary="Move a.txt from C:\\share to C:\\share\\archive")
-    w.record("refused", principal=WS, tool="delete_file", reason="DESTRUCTIVE_TOOL")
+    w.record("refused", principal=WS, tool="delete_file", reason="DESTRUCTIVE_TOOL", target_url=T,
+             summary="Delete old.txt from C:\\share", request={"path": "C:\\share\\old.txt"})
     w.record("plan", principal=WS, steps=2, held=True, plan_id="p-1", summary="Plan of 2 steps: tidy (1 move_file, 1 write_file)")
     w.record("declined", approval_request_id="r-plan", by=APPROVER, why="needs sean", requested_by=WS, tool="plan", target_url=T, plan_id="p-1",
              summary="Plan of 2 steps: tidy (1 move_file, 1 write_file)")
@@ -61,6 +62,7 @@ def test_period_summary_joins_answers_to_holds_and_counts_by_account(tmp_path):
     rel = s["releases"][0]
     assert (rel["asked_by"], rel["tool"], rel["by"], rel["roles"], rel["what"]) == (WS, "move_file", APPROVER, ["Approver.Business"], "Move a.txt from C:\\share to C:\\share\\archive")
     assert s["refusals"][0]["tool"] == "delete_file" and s["refusals"][0]["reason"] == "DESTRUCTIVE_TOOL"
+    assert (s["refusals"][0]["target"], s["refusals"][0]["what"], s["refusals"][0]["request"]) == ("C:\\share", "Delete old.txt from C:\\share", {"path": "C:\\share\\old.txt"})
     assert s["with_summary"] == 3 and s["without_summary"] == 2 and s["declines_without_reason"] == 0
     assert s["key_events"] == {"enrolled": 1, "enroll_refused": 1}
     assert s["answer_seconds"]["count"] == 3        # the three answers whose hold is in the record (the plan's is not an issued row)
