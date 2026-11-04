@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """RulesPolicy: a policy from a plain JSON file, for deployments that do
 not run a policy engine. First matching rule wins; no match is the default.
 

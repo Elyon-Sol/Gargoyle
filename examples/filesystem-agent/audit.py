@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Audit one honored call offline: paste the receipt and execution receipt
 the middleware returned (and the grant, for a flagged call) and the public
 keys, and verify_chain says what happened, with no service running.

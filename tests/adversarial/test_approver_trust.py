@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Approver trust comes from the signed key record, by role.
 
 resolve_approver_keys() turns a validated key-record trust view into the

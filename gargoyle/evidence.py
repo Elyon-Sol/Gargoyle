@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The evidence log: an append-only hash chain of what the gate decided.
 
 An execution receipt (gargoyle.execution) proves one honored call. It says

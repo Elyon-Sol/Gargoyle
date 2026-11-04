@@ -734,4 +734,4 @@ replicas of the remote gate; `.[entra]` adds MSAL for `gargoyle login`.
 
 ## License
 
-Apache License 2.0; see [LICENSE](LICENSE) and [NOTICE](NOTICE).
+Apache License 2.0; see [LICENSE](LICENSE) and [NOTICE](NOTICE). What stays open permanently, and where a commercial operations layer begins from 0.23, is stated once in [LICENSING.md](LICENSING.md); project decisions, marks and neutrality commitments are in [GOVERNANCE.md](GOVERNANCE.md); contributions need a DCO sign-off, see [CONTRIBUTING.md](CONTRIBUTING.md).

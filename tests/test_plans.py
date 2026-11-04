@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Scoped grants: one approval for a bounded plan, each step bound and
 single-use, the policy deciding what may be planned at all, the evidence
 naming the plan and step behind every released call."""

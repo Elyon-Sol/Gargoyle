@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The TypeScript implementation (ts/) must agree with this one byte for
 byte. Its own suite recomputes the conformance vectors; this test runs it
 when Node and its dependencies are present, and is skipped otherwise (CI

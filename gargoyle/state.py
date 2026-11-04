@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """State-bound approval: the world the human saw is the world the call runs in.
 
 A held call is approved against what the approver was shown. Without this

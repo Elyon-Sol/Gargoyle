@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """`gargoyle rules`: what a rules file would do, before it is the policy.
 
 Rules are hand-written JSON and first match wins, so a rule placed one

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The issuer's witness log: an independent record to check the client's evidence against.
 
 The evidence log (gargoyle.evidence) is the executor's own statement, and

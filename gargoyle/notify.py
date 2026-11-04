@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Approval transport (roadmap step 6): tell a human where the hold is.
 
 The approval itself never travels here. A grant is a signature made with a

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Persistent issuer state: holds, grants, declines and plans survive a restart.
 
 The issuing service keeps little state, but what it keeps is what a human

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """JWS compact serialization with EdDSA: the interoperable encoding of a
 receipt, verifiable by any JWT library and by Gargoyle itself."""
 

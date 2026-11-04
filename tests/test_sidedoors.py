@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Discovery mode: the gate finds every other way into the files it
 protects, records them beside the evidence log and in the issuer's
 witness, and never refuses on them."""

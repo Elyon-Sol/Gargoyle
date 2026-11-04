@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A stand-in upstream MCP server for the proxy tests: stdio JSON-RPC with
 one tool, `echo`, that returns its arguments. It also emits a notification
 after initialize (which the proxy must drop) and answers `fixture/calls`

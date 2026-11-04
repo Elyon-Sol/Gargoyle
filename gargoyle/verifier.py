@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Target-side receipt verification.
 
 verify_envelope(envelope, interaction, target_url) decides whether a target

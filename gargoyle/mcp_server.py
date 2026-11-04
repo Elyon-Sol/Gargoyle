@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """MCP middleware: a stdio MCP server that lets a tool call through only when
 it carries a valid receipt.
 

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The issuer-side identity input: who the receipt is for.
 
 An issuing service must put an authenticated principal into every receipt

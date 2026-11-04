@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Replay caches: the single-use check executors run on each receipt's decision_id.
 
 The contract is one atomic question per decision_id:

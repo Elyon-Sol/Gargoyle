@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Pending-approval stores: the hold half of human approval.
 
 When a policy marks a call requires_approval, the issuing service holds it

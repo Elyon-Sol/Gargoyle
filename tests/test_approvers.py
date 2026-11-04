@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Approvers who sign in with Entra: a browser-held key enrolled under the
 token's UPN, published by the issuer, trusted by the middleware and the
 audit, and usable in threshold rules by name."""

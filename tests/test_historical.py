@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Evidence outlives format changes. A gargoyle/2 receipt (the fixture
 frozen before the move to RFC 8785) is refused at admission but verifies in
 an audit under the serializer it was signed with, grants and execution

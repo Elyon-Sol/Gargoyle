@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Self-issue mode: an unmodified MCP client sends a bare tools/call; the
 middleware obtains the receipt from the issuing service, waits for the
 human's grant when the call is flagged, and still verifies everything

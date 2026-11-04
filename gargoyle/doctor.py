@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """`gargoyle doctor`: the client-side preflight, one line per check.
 
 A gate that fails closed looks broken to the person installing it: the

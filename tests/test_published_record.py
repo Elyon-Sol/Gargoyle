@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The signed published record: the live policy pin a remote consumer
 fetches, trusted by the publisher's signature, with freshness and a serial
 so a rolled-back record is refused."""

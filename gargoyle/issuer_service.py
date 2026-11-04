@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The issuing service: an HTTP front for gargoyle.issuer that a middleware
 or an agent harness calls to obtain receipts, with the hold and grant
 exchange for flagged calls.

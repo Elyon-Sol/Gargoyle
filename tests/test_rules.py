@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """RulesPolicy: a JSON file instead of a policy engine. First match wins,
 globs on tool, principal, delegation and string arguments; a malformed
 file or any error is a refusal; editing the file moves the pin."""

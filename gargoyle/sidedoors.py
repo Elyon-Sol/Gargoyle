@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Side doors: every other way into the files the gate protects, found and
 recorded during discovery.
 

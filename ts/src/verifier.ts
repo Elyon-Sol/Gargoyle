@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 /** Target-side receipt verification (SPEC.md section 6). Pure. */
 import type { KeyObject } from "node:crypto";
 import { canonicalJson, Json } from "./canonical.js";

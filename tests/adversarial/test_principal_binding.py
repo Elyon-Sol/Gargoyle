@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """
 The principal is bound into the receipt (hashed and signed) and checked by
 the verifier: a receipt is spendable only by the caller it was issued to,

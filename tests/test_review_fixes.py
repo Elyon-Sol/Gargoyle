@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Fixes from the second outside review (2026-10-20): caller claims stay apart
 from the bound fields (finding 3), evidence on every path after the claim
 (5), single use that survives the process and is checked after the fact (4),

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The decision interface and issue(): any object with pin() and decide()
 is a policy; a receipt is issued only for ELIGIBLE, carries the pin, a
 decision_id and an expiry, and a misbehaving policy is a refusal."""

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """`gargoyle rules`: explain, test and lint a rules file with the issuer's
 own decide_rules. The shipped example reproduces the pilot's live
 decisions; a shadowed rule, a key the tool never sends and a misspelt role

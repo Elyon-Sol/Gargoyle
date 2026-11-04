@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """One-time setup for the filesystem-agent example.
 
 Generates four Ed25519 keys (issuer, approver, identity provider, executor),

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """`python -m gargoyle` is the CLI: on a Windows Store Python the Scripts folder
 that holds gargoyle.exe is usually not on PATH."""
 

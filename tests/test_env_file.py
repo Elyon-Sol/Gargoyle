@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """`python -m gargoyle.mcp_server --env FILE`: the gate's settings from a
 file the managed MCP entry can name instead of carrying the executor key."""
 import pytest

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Approval grants: build, sign and verify against real Ed25519 keys.
 
 A grant releases one held decision. It must be bound to that decision and

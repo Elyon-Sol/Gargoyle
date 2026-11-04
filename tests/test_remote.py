@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Remote middleware mode: the same gate behind a Streamable HTTP endpoint,
 one capability URL per person, one shared upstream, shared single use."""
 

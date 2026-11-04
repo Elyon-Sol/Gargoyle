@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Enterprise identity: tokens signed with RS256 or ES256 by a provider's
 JWKS keys (Entra ID), the UPN as the principal, groups and app roles as
 claims a rules file can match by department."""

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """JWS compact serialization (RFC 7515) with EdDSA (RFC 8037), the one
 encoding Gargoyle shares with the rest of the world.
 

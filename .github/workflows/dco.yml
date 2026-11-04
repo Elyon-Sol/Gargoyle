@@ -1,0 +1,26 @@
+name: dco
+on:
+  pull_request:
+jobs:
+  dco:
+    # Every commit in the pull request carries a Signed-off-by trailer (Developer
+    # Certificate of Origin). See CONTRIBUTING.md.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: check sign-off on every commit
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          missing=0
+          for c in $(git rev-list "$BASE".."$HEAD"); do
+            if ! git log -1 --format=%B "$c" | grep -Eq '^Signed-off-by: .+ <.+@.+>$'; then
+              echo "no Signed-off-by: $(git log -1 --format='%h %s' "$c")"; missing=1
+            fi
+          done
+          [ "$missing" -eq 0 ] && echo "all $(git rev-list --count "$BASE".."$HEAD") commits signed off"
+          exit $missing

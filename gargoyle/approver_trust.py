@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Which keys may authorize an approval: signed role, not a key-id compare.
 
 verify_grant() refuses a grant signed under the issuer's own key id, but a

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The consumer side: everything a party that executes tool calls needs to
 honor a receipt at most once.
 

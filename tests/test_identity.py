@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The issuer-side identity input: a transaction token or bearer JWT becomes
 the receipt's principal (and on_behalf_of, for delegation)."""
 

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Key records: a root-signed list of issuer (and approver) keys.
 
 A target pins one root PUBLIC key out of band. The publisher signs a record

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Backup and restore of an issuer host's state: `gargoyle backup` and
 `gargoyle restore`.
 

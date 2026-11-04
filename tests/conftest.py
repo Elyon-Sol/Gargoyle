@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Shared test fixtures.
 
 `gate_signing` gives a test an ephemeral Ed25519 issuer keypair, created per

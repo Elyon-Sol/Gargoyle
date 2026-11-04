@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A decline carries the approver's words to the model; the same file asked
 for again and again stops reaching the approver; and the model is told which
 yes it got, so an observed call is never reported as approved."""

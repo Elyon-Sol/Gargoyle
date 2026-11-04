@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Adapters: what a held call changes, in a form the gate can bind, show,
 and undo. The gate itself knows only tool names and arguments. An adapter
 knows the target: it describes the target's state before and after a call

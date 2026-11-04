@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """gargoyle.fs_server: the Python filesystem MCP server stays inside its root
 and works behind the gate end to end."""
 

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The Graph adapter: Microsoft 365 objects behind the gate. A fake Graph
 MCP server with the reference tool names; mail rules created, updated,
 deleted and undone; a send that cannot be undone; an outside address

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """
 Tests for the published key record: the reader (key_record_source) and the
 verifier's key_record_view path.

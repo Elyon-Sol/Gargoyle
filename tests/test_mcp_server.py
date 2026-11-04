@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The MCP server's tools/call gate: a receipt is honored once, only for the
 tool, arguments and principal it was issued for, and only if it carries a
 decision_id to be single-used on."""

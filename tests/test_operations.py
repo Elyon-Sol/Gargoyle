@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """`gargoyle backup` / `gargoyle restore`: the issuer host's state comes back
 whole, the hold store copied consistently, the witness verified on both
 ends, nothing overwritten without --force, nothing written for a broken

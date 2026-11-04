@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """`gargoyle doctor`: each check names the real cause and the one fix, with
 the network, the clock and the client's files replaced (the first tenant's
 four blockers of 2026-11-01 are the fixtures)."""

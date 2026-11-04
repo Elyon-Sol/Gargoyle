@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A small filesystem MCP server over stdio, in Python, for deployments that
 have no Node: list, read, write, create directories, move and delete under
 one root. It exists so the gated workflow can be shown with nothing but

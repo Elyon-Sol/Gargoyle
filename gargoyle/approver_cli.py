@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Approver CLI: the human side of an approval hold.
 
 A grant only separates duties if a human produces it out of band, with a key

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Receipts: build, check against the live policy, and sign.
 
 A receipt (historically "envelope") records one ELIGIBLE decision: which

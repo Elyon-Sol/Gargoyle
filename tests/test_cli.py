@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """`gargoyle init` produces a working deployment: the issuer runs on the
 rules file, the middleware config is complete, and the audit command
 verifies a chain with the written public keys."""

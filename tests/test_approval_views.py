@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Approval views by role: one signed object, three renderings. The issuer
 describes every hold in plain words (gargoyle.holdtext), a rule routes a
 hold to a directory role (`approver_roles`), the issuer refuses a grant

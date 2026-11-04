@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Remote middleware mode: the gate as a Streamable HTTP MCP server.
 
 The stdio middleware sits on the workstation and fronts a local server.

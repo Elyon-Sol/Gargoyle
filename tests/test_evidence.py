@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The evidence log: every decision in one hash chain, checkable offline.
 
 Honored entries carry a full receipt chain; refused entries carry what was

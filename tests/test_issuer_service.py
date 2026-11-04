@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The issuing service: identity in, receipts out, holds and grants in between."""
 
 from datetime import datetime, timedelta, timezone

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 /**
  * The consumer: live pin, trusted keys, verify, grant, single-use claims,
  * attest (SPEC.md sections 6-8 and 13). Replay state is an in-memory cache

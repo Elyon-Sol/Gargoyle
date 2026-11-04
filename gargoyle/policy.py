@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The decision interface.
 
 Gargoyle does not decide whether a call is allowed. A Policy does. Gargoyle

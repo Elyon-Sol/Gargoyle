@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Every annotation in the package must evaluate eagerly. Python 3.14
 defers annotation evaluation, so a missing typing import only surfaces on
 3.12 and 3.13; this forces the evaluation on every version."""

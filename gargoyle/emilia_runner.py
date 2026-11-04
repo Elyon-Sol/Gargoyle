@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """EMILIA conformance runner for Gargoyle's verifier.
 
     python -m gargoyle.emilia_runner VECTORS.json

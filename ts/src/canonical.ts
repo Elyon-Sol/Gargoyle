@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 /**
  * Canonical JSON per RFC 8785 (JSON Canonicalization Scheme), byte-compatible
  * with the reference implementation: members sorted by UTF-16 code units, no

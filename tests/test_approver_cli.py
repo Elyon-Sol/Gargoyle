@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The approver CLI releases a flagged receipt: it shows the human what is
 inside the issuer's signature and emits a grant the consumer honors."""
 
