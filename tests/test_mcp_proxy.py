@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The MCP server as middleware: in front of an upstream stdio MCP server it
 relays everything except tools/call, which it forwards only once a receipt
 has been honored, with Gargoyle's own _meta keys stripped."""

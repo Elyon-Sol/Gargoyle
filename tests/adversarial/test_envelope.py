@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Receipt construction, the policy-pin reassertion check, and canonical JSON."""
 
 import json

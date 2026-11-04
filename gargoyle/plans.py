@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Scoped grants: one approval for a bounded plan, every step still bound.
 
 A card per held call is right for a mailbox rule and wrong for the

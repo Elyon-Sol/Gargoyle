@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 /** JWS compact serialization with EdDSA (RFC 7515, RFC 8037): the receipt's interoperable form. */
 import type { KeyObject } from "node:crypto";
 import { canonicalJson, Json } from "./canonical.js";

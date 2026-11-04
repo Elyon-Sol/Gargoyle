@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Undo: an approved write leaves a snapshot; gargoyle_revert composes the
 write that restores it and sends it through the gate, held and state-bound.
 Run against the real filesystem server as the upstream."""

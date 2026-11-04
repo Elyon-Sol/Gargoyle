@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 /** Receipts: build, hash, sign, and the currency check (SPEC.md sections 3-5). */
 import type { KeyObject } from "node:crypto";
 import { canonicalJson, Json } from "./canonical.js";

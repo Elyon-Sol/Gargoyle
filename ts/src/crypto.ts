@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 /** Ed25519 and SHA-256 over Node's crypto, with raw 32-byte keys as the reference does. */
 import { createHash, createPrivateKey, createPublicKey, KeyObject, sign, verify } from "node:crypto";
 

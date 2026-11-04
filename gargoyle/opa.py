@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A Policy backed by Open Policy Agent: the allow/deny decision comes from
 a real policy engine, and the receipt pins the exact policy set OPA held.
 

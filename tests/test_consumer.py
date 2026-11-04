@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """gargoyle.consumer.Consumer: the one check every executor runs. Trust
 material is required at construction, sources are consulted on every check
 and fail closed, serial high-water marks refuse rollback, and single use is

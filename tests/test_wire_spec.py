@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """SPEC.md is authoritative for the wire format, and this test keeps it so:
 every vector in its section 11 is recomputed from the seed labels with the
 reference implementation, compared to tests/fixtures/wire_vectors.json, and

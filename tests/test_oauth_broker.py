@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """OAuth on the remote gate: the hosted client signs the user in with the
 directory through the gate, and every receipt names the directory's UPN."""
 

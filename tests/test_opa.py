@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """OpaPolicy: a real policy engine behind the Policy interface, pinned by
 the exact module set OPA holds, failing closed on every doubt."""
 

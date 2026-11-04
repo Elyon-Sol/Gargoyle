@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """
 The bypass Gargoyle cannot close by itself: a caller that never asks the
 issuer for a receipt and calls the target directly.

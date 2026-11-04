@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // Gargoyle approval console: the browser-side half of a human approval.
 // The approver's Ed25519 key never leaves this page; the issuer receives only
 // the signed grant, exactly as it does from gargoyle-approver. canonicalJson,

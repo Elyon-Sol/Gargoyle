@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """canonical_json is RFC 8785 (JCS). The two examples from the RFC's section
 3.2.3 are reproduced byte for byte, plus the ECMAScript number cases that
 separate JCS from Python's own json.dumps."""

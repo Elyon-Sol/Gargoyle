@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The reference policy the tests issue and check receipts under.
 
 Gargoyle has no default policy: a deployment names its rules file. The

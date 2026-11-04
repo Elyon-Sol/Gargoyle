@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Second review, finding 6: the state text an approver reads must be the
 bytes the bound state hash names."""
 

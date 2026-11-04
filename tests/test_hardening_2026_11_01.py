@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Soak review 2026-11-01: names Windows rewrites must not slip a rule; an
 unreadable target must not run unbound; a refused undo must say why; plan
 steps resolve like calls; a client's state inside the root is a side door."""

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Entra ID login for the client: the middleware's token names a person.
 
 `gargoyle init` mints one shared client token. For a team, each workstation

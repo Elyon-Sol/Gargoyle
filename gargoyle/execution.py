@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Execution receipts: the executor's signed statement of what actually ran.
 
 An authorization receipt (gargoyle.envelope) says a policy allowed one call.

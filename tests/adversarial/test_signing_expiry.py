@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """
 Receipt expiry (not_after) on the signed path.
 

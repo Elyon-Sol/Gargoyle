@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The gate as a Claude Code hook: Claude Code's own tools (Bash, Edit,
 Write, Read, WebFetch, the MCP tools it calls directly) go through the
 same receipt, hold and evidence path as a call through the MCP gate.

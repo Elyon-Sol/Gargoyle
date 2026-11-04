@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """`gargoyle login`: the middleware's token names a person. MSAL is faked:
 a device flow that signs in alice, a cache that persists, a silent refresh
 that works until the account is gone."""

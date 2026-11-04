@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Replay caches: single use within one process, and across processes only
 with a shared store.
 

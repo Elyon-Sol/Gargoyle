@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 /**
  * Conformance: every vector in tests/fixtures/wire_vectors.json (and quoted
  * in SPEC.md section 11) is recomputed here from the seed labels. Byte

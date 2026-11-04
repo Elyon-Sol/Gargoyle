@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Interoperation with the EMILIA Protocol (draft-schrock-ep-authorization-
 receipts, https://github.com/emiliaprotocol/emilia-protocol).
 

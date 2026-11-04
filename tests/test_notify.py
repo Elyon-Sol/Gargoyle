@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Approval transport: a new hold is posted to a webhook as a notice with a
 console link; the grant still comes only from the approver's key."""
 

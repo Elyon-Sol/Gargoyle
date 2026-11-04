@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """EMILIA Protocol interoperation: their vectors against Gargoyle's canonical
 form, and Gargoyle exports in their two receipt profiles. When the EMILIA
 repository is checked out and GARGOYLE_EMILIA_REPO points at it, the exports

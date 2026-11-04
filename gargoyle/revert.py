@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Undo for an approved change: a revert is another state-bound write.
 
 Before a held, state-bound call runs, the executor keeps the target's

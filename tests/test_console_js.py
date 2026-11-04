@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The browser console's JavaScript must sign exactly what the reference
 signs: under Node (same WebCrypto), approve.js recomputes the conformance
 vectors' argument hash and approver signature from the seed label."""

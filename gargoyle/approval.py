@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Approval grants: a human's signed release of a held, high-impact call.
 
 When a Decision has requires_approval, the receipt is held until a human

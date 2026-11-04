@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """`gargoyle report`: the quarterly evidence report from the record (issue #27)."""
 import hashlib
 import json

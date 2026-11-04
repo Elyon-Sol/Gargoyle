@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Second review, finding 7: argument globs over paths are matched on a
 normalized form, so traversal, separators and letter case cannot slip a
 rule or a plan step."""

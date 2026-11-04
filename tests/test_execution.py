@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Execution receipts: the executor's signed statement that the authorized
 call ran, chained to the authorization receipt, verifiable offline together
 with the issuer's receipt and the approver's grant."""

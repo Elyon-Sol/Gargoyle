@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The `gargoyle` command: set up, run and operate a deployment without a
 policy engine, a container runtime, or any client changes.
 

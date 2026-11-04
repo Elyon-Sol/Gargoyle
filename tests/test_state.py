@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """State-bound approval: a held call is approved against the target's state
 and runs only in that state. The middleware probes the file before asking,
 the issuer binds the hash into the receipt, the approver sees the change,

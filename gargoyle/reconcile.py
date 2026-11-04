@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Reconciliation: the client's evidence against the issuer's witness, and
 the gated folder against the evidence.
 

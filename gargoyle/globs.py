@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Argument globs, as rules (gargoyle.rules) and plan steps (gargoyle.plans)
 use them: `fnmatch` patterns over one argument value, with paths made safe
 to match.

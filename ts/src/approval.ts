@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 /** Approval grants (SPEC.md section 8). */
 import type { KeyObject } from "node:crypto";
 import { canonicalJson, Json } from "./canonical.js";

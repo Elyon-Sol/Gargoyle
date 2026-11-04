@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Operability items from the second review: one evidence log shared by
 two gate processes, init that keeps keys, tokens minted alone, the gate's
 own files out of the model's reach, holds declined when the gate stops

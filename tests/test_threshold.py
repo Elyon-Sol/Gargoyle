@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Threshold approvals (roadmap step 4): a flagged receipt may say how many
 distinct approvers must sign and which keys count. The terms are hashed and
 signed in the receipt; the consumer, the chain verifier and the issuing

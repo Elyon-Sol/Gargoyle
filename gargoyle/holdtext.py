@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """One sentence per hold, for the approver who is not an engineer.
 
 The approver signs the receipt's args_sha256 and state_sha256; what the

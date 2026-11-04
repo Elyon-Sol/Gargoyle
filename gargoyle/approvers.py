@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Enrolled approvers: a person's Entra identity bound to a key they hold.
 
 `gargoyle init` writes approver key files. For a team, an approver should

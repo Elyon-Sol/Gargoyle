@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Pending-approval stores: a hold is consumed exactly once, only for its own
 decision, and only before it expires.
 

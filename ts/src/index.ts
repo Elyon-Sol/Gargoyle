@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 export * from "./canonical.js";
 export * from "./crypto.js";
 export * from "./envelope.js";

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Operability: a rule change on the issuer reaches every gate without a
 file copy or a restart. The issuer publishes its pin as a signed record
 (SPEC 9); the middleware follows it, cached a minute, and asks again at

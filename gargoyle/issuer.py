@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Issue receipts: ask the policy, and sign the answer if it is ELIGIBLE.
 
     interaction = {"tool": "transfer_funds", "args": {...},

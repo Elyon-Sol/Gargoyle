@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """python -m gargoyle.emilia_runner: EMILIA's two covered suites produce the
 rows EMILIA's harness expects, and anything else is a refusal, not a row."""
 import json

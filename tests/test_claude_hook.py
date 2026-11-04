@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The gate as a Claude Code hook: a PreToolUse event is decided against
 the issuer under middleware.env, a held Write waits for the approver, the
 PostToolUse event attests the run, and the evidence log verifies."""

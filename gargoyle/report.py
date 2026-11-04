@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """`gargoyle report`: the quarterly evidence report, produced from the record.
 
 The verification already lives in `gargoyle audit`, `doctor`, `sidedoors` and

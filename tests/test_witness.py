@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The issuer's witness log and reconciliation: client evidence checked
 against an independent, issuer-signed record; a gated folder checked
 against the evidence."""

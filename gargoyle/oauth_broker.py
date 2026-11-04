@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """OAuth on the remote gate: the hosted connector signs the user in with
 Entra ID, and the receipts name them.
 

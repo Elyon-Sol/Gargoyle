@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """MCP stdio is UTF-8 whatever the locale says.
 
 The first Claude Desktop run on Windows decoded the client's UTF-8 with
