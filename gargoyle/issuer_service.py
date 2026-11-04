@@ -400,8 +400,15 @@ def build_issuer_app(
             interaction["on_behalf_of"] = who["on_behalf_of"]
         result = issue(policy, body["target_url"], interaction, signing_key=signing_key, key_id=key_id,
                        ttl_seconds=ttl_seconds, now=now())
+        # What was asked, in the card's words and the paths it names, never the
+        # payload: recorded on a refusal exactly as on a hold (issue #31), so a
+        # quarter's refusals read as "Create run.ps1 in it-scripts: refused by
+        # rule" and not as a tool name.
+        asked = {"summary": describe_hold(body["tool"], body["args"], state)["sentence"],
+                 "request": request_fields(body["tool"], body["args"])}
         if result.envelope is None:
-            event("refused", principal=who["principal"], tool=body["tool"], reason=result.decision.reason)
+            event("refused", principal=who["principal"], tool=body["tool"], reason=result.decision.reason,
+                  target_url=body["target_url"], **asked)
             return {"issued": False, "reason": result.decision.reason}
         covered = False
         plan_id = body.get("plan_id")
@@ -422,12 +429,13 @@ def build_issuer_app(
         cooled = declined_recently(who["principal"], body["tool"], body["args"]) if result.envelope["requires_approval"] and not covered else None
         if cooled is not None:
             event("refused", principal=who["principal"], tool=body["tool"], reason=REF_ISSUER_DECLINED_RECENTLY,
-                  declines=cooled["count"], **({"why": cooled["why"]} if cooled["why"] else {}))
+                  declines=cooled["count"], target_url=body["target_url"], **asked, **({"why": cooled["why"]} if cooled["why"] else {}))
             return {"issued": False, "reason": REF_ISSUER_DECLINED_RECENTLY, "why": cooled["why"], "declines": cooled["count"]}
         if result.envelope["requires_approval"] and not covered and _open_holds(who["principal"]) >= max_open_holds:
             # A service limit, not a policy decision: nothing is stored, the
             # signed envelope is dropped, the client reports the reason.
-            event("refused", principal=who["principal"], tool=body["tool"], reason=REF_ISSUER_TOO_MANY_HOLDS)
+            event("refused", principal=who["principal"], tool=body["tool"], reason=REF_ISSUER_TOO_MANY_HOLDS,
+                  target_url=body["target_url"], **asked)
             return {"issued": False, "reason": REF_ISSUER_TOO_MANY_HOLDS}
         about: Dict[str, Any] = {}
         if result.envelope["requires_approval"] and not covered:
@@ -435,8 +443,7 @@ def build_issuer_app(
             # the same sentence the card shows, and the paths, never the
             # payload (the hash binds that). A declined move reads as a
             # declined move of a named file a quarter later.
-            about = {"summary": describe_hold(body["tool"], body["args"], state)["sentence"],
-                     "request": request_fields(body["tool"], body["args"])}
+            about = asked
         event("issued", principal=who["principal"], tool=body["tool"], held=bool(result.envelope["requires_approval"]),
               **({"oid": who["oid"]} if who.get("oid") else {}), **about,
               target_url=body["target_url"],         # one issuer, several gates: an audit of one gate's log skips the others' receipts
@@ -511,7 +518,8 @@ def build_issuer_app(
                     role_sets.append(set(d.approver_roles))
             norm.append(step)
         if held and _open_holds(who["principal"]) >= max_open_holds:
-            event("refused", principal=who["principal"], tool="plan", reason=REF_ISSUER_TOO_MANY_HOLDS)
+            event("refused", principal=who["principal"], tool="plan", reason=REF_ISSUER_TOO_MANY_HOLDS, steps=len(norm),
+                  **({"target_url": body["target_url"]} if isinstance(body.get("target_url"), str) else {}))
             return {"issued": False, "reason": REF_ISSUER_TOO_MANY_HOLDS}
         import uuid
         approval = None

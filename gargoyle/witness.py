@@ -169,8 +169,8 @@ def describe(entry: Any) -> Dict[str, str]:
         outcome, ref = ev, ""
     summary = entry.get("summary") if isinstance(entry.get("summary"), str) else ""
     asked = entry.get("requested_by") if isinstance(entry.get("requested_by"), str) else ""
-    if summary and ev in ("issued", "plan"):
-        outcome += ": " + summary                         # what was asked, in the card's words
+    if summary and ev in ("issued", "plan", "refused"):
+        outcome += ": " + summary                         # what was asked, in the card's words (a refusal names it too)
     elif summary and ev in ("granted", "declined", "grant_refused"):
         outcome += " (%s%s)" % (("asked by %s: " % asked) if asked else "", summary)   # the answer names the question
     return {"at": str(entry.get("at", "")), "event": ev, "who": who, "tool": tool, "outcome": outcome, "ref": ref,
