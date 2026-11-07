@@ -134,8 +134,24 @@ def keys_from_jwks(jwks: Any, source: str = "jwks") -> Dict[str, Dict[str, Any]]
     return out
 
 
+def key_valid_from(entries: Iterable[Any], kid: str) -> Optional[str]:
+    """The start of the issuer key's validity window (section 9.2): the `at`
+    of the witness's first `started` entry signed under `kid`, or of the first
+    `started` entry at all when none names it. Every receipt the export signs
+    is dated at or after it, so a verifier reports the key inside its window
+    rather than not established. None when the witness has no `started`."""
+    first = None
+    for e in entries:
+        if isinstance(e, dict) and e.get("event") == "started" and e.get("at"):
+            if e.get("issuer_key_id") == kid:
+                return str(e["at"])
+            first = first or str(e["at"])
+    return first
+
+
 def jwks_for(public_key: Any, kid: str, *, valid_from: Optional[str] = None) -> Dict[str, Any]:
-    """The issuer's JWK Set (section 5.3): one Ed25519 key."""
+    """The issuer's JWK Set (section 5.3): one Ed25519 key, with `valid_from`
+    (section 9.2) when the caller knows the window's start (key_valid_from)."""
     from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
     raw = public_key.public_bytes(Encoding.Raw, PublicFormat.Raw)
     key = {"kty": "OKP", "crv": "Ed25519", "kid": kid, "x": b64url_encode(raw), "use": "sig", "alg": "EdDSA"}

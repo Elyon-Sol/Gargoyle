@@ -22,6 +22,9 @@ an Acta verifier would.
 | Gargoyle export, Gargoyle verifier | An issuer run under the rules policy (allow, hold then release, refuse by rule, hold then decline) exported from its witness: six receipts, one chain, a signed commitment | every receipt valid under the issuer's own `/.well-known/acta-keys.json`; the sequence holds (1 chain, 0 breaks); the policy bundle served at `/.well-known/acta-policies/<hex>.json` recomputes to the receipts' digest; a tampered receipt is `signature_invalid` and breaks the link after it; a shortened set fails the commitment as `truncated` |
 | Gargoyle export, Acta's reference verifier (2026-11-07 04:05 UTC) | `@veritasacta/verify` 0.11.0, run by `tests/test_acta.py::test_export_verifies_under_an_outside_acta_verifier` over the six-receipt export with our JWK Set: each receipt alone (`--mode receipt`), each after its predecessor (`--previous`), and the file as a sequence (`--replay-chain`); run twice, through `npx` and from a local install | every invocation exit 0. The sequence report: 6 total, 6 verified, 0 failed, 0 undecidable, 0 chain breaks; per receipt `signing_input`, `signature`, `issuer_kid`, `chain_link` and `previous` pass; `key_window` is `not_established` because our JWK Set carries no validity window. Their output is kept in [interop-acta/](interop-acta/) |
 
+| Live issuer export, Gargoyle verifier (2026-11-07 04:15 UTC) | `gargoyle acta export` on the production issuer's witness, 1,487 entries (seq 1 to 1,487, gargoyle-witness/1 throughout; witness/2 begins at seq 1,488): 1,420 receipts (issued 1,378, refused 5, granted 5, declined 32; 65 skipped, 2 unresolved holds), signed commitment, terminal hash `sha256:57a89e6d...`; verified with `--replay-chain` against the live `/.well-known/acta-keys.json` | valid: 1 chain, 0 breaks; the commitment verifies. `no_policy` is 1,420 because every entry predates witness/2, so these receipts carry no `policy_digest`; receipts from seq 1,488 on will |
+| Microsoft agent-governance-toolkit as a consumer (probe, 2026-11-07) | Read on `main` at 2026-11-06T17:43Z (6,169 paths): the only receipt verifier is `agentmesh-integrations/mcp-receipt-governed/scripts/verify_receipts.py`, for its own `GovernanceReceipt` shape (`receipt_id`, `cedar_decision`, `args_hash`, hex `signature`, `signer_public_key` carried inside the receipt, optional `trusted_keys`); no JWK Set, no `{payload, signature{alg,kid,sig}}` envelope. The one Acta-format component, the sb-runtime skill of PR #1203 (merged 2026-04-19, producer side, verified against `@veritasacta/verify`), has no path on `main` since the 2026-04-26 flattening (#1459); the protect-mcp `ReceiptVerifier` of PR #667, cited by draft -03 appendix A.9 as Microsoft's consumer, has no path on `main` either | nothing in the toolkit accepts an outside Acta receipt with key resolution through a JWK Set, so no run was possible. The toolkit's receipts are self-attested in the sense of section 9.5 (key inside the record); its external-authorization profile (a second signer over the payload hash, nonce, expiry) is the nearest relative of the Gargoyle grant |
+
 The vectors are copied unmodified into `tests/fixtures/acta/` (commit
 5c749de5 of their repository, 2026-11-04) and run in CI. The `scripts/`
 generators are not copied; nothing from the vector repository executes here.
@@ -105,10 +108,14 @@ counts and the witness head.
   in.
 - Archival mode only (section 9.1): a receipt's age is reported, never
   judged. The timeliness suite's proposed commitment rule is not applied.
-- The issuer's JWK Set carries no `valid_from` / `valid_until`, so an Acta
-  verifier reports the key's validity at issuance as not established rather
-  than inside a window. A window from the witness's first `started` entry
-  is the natural value; not yet added.
+- The issuer's JWK Set carries `valid_from` (the witness's first `started`
+  entry; `gargoyle.acta.key_valid_from`) and no `valid_until`: the key is
+  in use. Since 2026-11-07; the reference-verifier run above predates it,
+  so its report says `key_window: not_established`. A re-run reports the
+  key inside its window.
+- Consumers found for an outside Acta receipt, as of 2026-11-07:
+  `@veritasacta/verify` and this verifier. The Microsoft toolkit is a
+  producer-side citation only (row above).
 - The policy bundle is served for the pin in force. A past pin's digest
   still verifies (it is in the witness and the receipts); its bundle is the
   operator's backup of that rules file.
