@@ -26,10 +26,14 @@ by whom, and what changed.
 
 ## Status
 
-Pre-release `0.22.0.dev0` on PyPI as `gargoyle-receipts`. Wire format
-`gargoyle/3`, evidence log `gargoyle-evidence/4`, witness
-`gargoyle-witness/1`; all three are specified in [SPEC.md](SPEC.md) and may
-still change before a first release.
+Release candidate `1.0.0rc1` on PyPI as `gargoyle-receipts`. Wire format
+`gargoyle/3`, execution receipt `gargoyle-execution/1`, plan
+`gargoyle-plan/1`, evidence log `gargoyle-evidence/4`, witness
+`gargoyle-witness/1`; all five are specified in [SPEC.md](SPEC.md) and
+frozen as of 2026-11-06 (SPEC.md section 12): a change to any of them is a
+new format name, and verifiers keep verifying the old one. The freeze is a
+statement about the formats; the software is still one author's, unreviewed
+by an independent human (see [SECURITY.md](SECURITY.md)).
 
 **Run live, on the author's own tenant and hosts (2026-10-16 to 2026-11-01).**
 One issuer host on Ubuntu behind Apache with TLS, Claude Code clients on

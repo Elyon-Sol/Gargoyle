@@ -1,6 +1,6 @@
 # Gargoyle wire specification
 
-Format version: `gargoyle/3` (pre-release; see section 12).
+Format version: `gargoyle/3` (frozen 2026-11-06; see section 12).
 This document defines the byte-level formats Gargoyle produces and checks:
 the receipt, its hash and signature regions, the verification procedure,
 replay semantics, the approval grant, the execution receipt and the offline
@@ -801,8 +801,35 @@ The complete objects are the `threshold` member of
   target honors only the current version. The TypeScript port verifies the
   current version only. `gargoyle/2` added `on_behalf_of`, the
   version check and the JWS form to `gargoyle/1`; nothing issued under
-  `gargoyle/1` is honored. The format is pre-release and may still change
-  before the first release.
+  `gargoyle/1` is honored.
+
+**Freeze (2026-11-06).** The five formats this document names are frozen
+at this date under these names: the receipt `gargoyle/3` with its grant
+(`grant_version` `"1.0"`), the execution receipt `gargoyle-execution/1`,
+the plan `gargoyle-plan/1`, the evidence log `gargoyle-evidence/4` and the
+witness `gargoyle-witness/1`. Under a frozen name nothing changes: not the
+field set, not a hash or signature region, not the verification order, not
+the canonical form. A new member means a new name, never an addition to a
+frozen one, so a verifier of a frozen version may keep rejecting what it
+does not list. Release 1.0.0 of the reference implementation ships these
+five as frozen; its version promises, from that release on, are:
+
+- a change to the receipt, grant, execution receipt or plan is a new
+  format name and a major release of the implementation; verifiers of the
+  new name keep verifying the old one in audit (`historical`, above),
+  while admission honors the current name only, as today;
+- the two records (evidence, witness) each name their version in every
+  entry and are verified under the version the entry names, so one log
+  may span versions. A new record version that only adds a member, keeping
+  every existing member, the hash region and the verifier's acceptance of
+  every earlier version, is a minor release; any other change to a record
+  is a major release;
+- a refusal or accept code is never renamed or reused; new codes may be
+  added in a minor release.
+
+The reference implementation and its TypeScript port recompute every
+vector of section 11 in CI, so a change that breaks the freeze fails the
+build before it ships.
 
 **Remote transport.** The reference middleware also runs as a Streamable
 HTTP MCP server (`gargoyle remote`) in front of a local or remote MCP
