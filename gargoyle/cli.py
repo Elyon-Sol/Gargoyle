@@ -43,7 +43,7 @@ the response metadata; `gargoyle audit` verifies them later, offline.
 
 import argparse
 import json
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 import os
 import re
 import stat
@@ -691,6 +691,100 @@ def cmd_emilia(args) -> int:
     return 0
 
 
+def cmd_acta(args) -> int:
+    """Acta signed receipts (gargoyle.acta, docs/interop-acta.md). `export`
+    turns the issuer's witness into a chain of protectmcp:decision receipts
+    signed by the issuer key, with a signed commitment to the chain; `verify`
+    checks receipts in the draft's envelope shape against a JWK Set, alone,
+    after a supplied predecessor, or as a sequence."""
+    from gargoyle import acta
+    if args.acta_cmd == "verify":
+        return _acta_verify(args, acta)
+    return _acta_export(args, acta)
+
+
+def _acta_keys(spec: Optional[str], ca: Optional[str], acta):
+    if not spec:
+        return None
+    if spec.startswith("http://") or spec.startswith("https://"):
+        import requests
+        r = requests.get(spec, timeout=10, verify=ca or True)
+        r.raise_for_status()
+        return acta.keys_from_jwks(r.json(), source="jwks:" + spec)
+    return acta.keys_from_jwks(json.loads(Path(spec).read_text(encoding="utf-8")), source="jwks:" + spec)
+
+
+def _acta_verify(args, acta) -> int:
+    keys = _acta_keys(args.jwks, args.ca, acta)
+    if args.replay_chain:
+        r = acta.verify_sequence(acta.read_jsonl(args.replay_chain), keys)
+        if args.json:
+            print(json.dumps(r, indent=1, default=str))
+        else:
+            print("%s %s: %d receipt(s), %d chain(s), %d break(s)%s" % (r["outcome"], r["code"] or "", r["count"], r["chains"], r["chain_breaks"],
+                                                                      (" (line %d)" % r["line"]) if r["line"] and r["outcome"] != acta.VALID else ""))
+        return r["exit"]
+    if not args.file:
+        print("gargoyle acta verify needs a receipt file, or --replay-chain FILE", file=sys.stderr)
+        return 2
+    receipt = json.loads(Path(args.file).read_text(encoding="utf-8"))
+    previous = json.loads(Path(args.previous).read_text(encoding="utf-8")) if args.previous else None
+    r = acta.verify_receipt(receipt, keys, previous=previous)
+    if args.json:
+        print(json.dumps(r, indent=1, default=str))
+    else:
+        bits = [r["outcome"], r["code"] or "", "kid=%s" % r["kid"], "key=%s" % (r["key_status"] or "unresolved")]
+        if r["age_seconds"] is not None:
+            bits.append("age=%ds" % r["age_seconds"])
+        if r["warnings"]:
+            bits.append("warnings=" + ",".join(r["warnings"]))
+        print(" ".join(b for b in bits if b))
+    return r["exit"]
+
+
+def _acta_export(args, acta) -> int:
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    from gargoyle.witness import read_witness, verify_witness
+    out = Path(args.out).resolve()
+    env_path = Path(args.env) if args.env else out / "issuer.env"
+    env = _read_env(env_path) if env_path.exists() else {}
+    key_hex, key_id = env.get("GARGOYLE_ISSUER_KEY_HEX"), env.get("GARGOYLE_ISSUER_KEY_ID", "issuer-1")
+    if not key_hex:
+        print("%s has no GARGOYLE_ISSUER_KEY_HEX; point --env at the issuer's issuer.env (the export is signed by the issuer key)" % env_path, file=sys.stderr)
+        return 2
+    signing_key = Ed25519PrivateKey.from_private_bytes(bytes.fromhex(key_hex))
+    entries = read_witness(args.witness)
+    w = verify_witness(entries, issuer_public_keys={key_id: signing_key.public_key()})
+    if not w["accepted"]:
+        print("the witness does not verify under this issuer key (%s at seq %s); nothing exported" % (w["reason"], next((e["seq"] for e in w["entries"] if not e["accepted"]), "?")), file=sys.stderr)
+        return 1
+    result = acta.export_witness(entries, signing_key=signing_key, key_id=key_id)
+    out.mkdir(parents=True, exist_ok=True)
+    with open(out / "receipts.jsonl", "w", encoding="utf-8") as f:
+        for r in result["receipts"]:
+            f.write(json.dumps(r, sort_keys=True) + "\n")
+    _write(out / "acta-keys.json", json.dumps(acta.jwks_for(signing_key.public_key(), key_id), indent=1) + "\n")
+    if result["commitment"] is not None:
+        _write(out / "commitment.json", json.dumps(result["commitment"], indent=1) + "\n")
+    bundle_name = None
+    rules = args.rules or env.get("GARGOYLE_RULES_PATH")
+    if rules and Path(rules).exists():
+        from gargoyle.rules import RULES_POLICY_ID
+        bundle = acta.policy_bundle(RULES_POLICY_ID, [(acta.RULES_FILE_NAME, Path(rules).read_text(encoding="utf-8"))], datetime.now(timezone.utc).isoformat())
+        bundle_name = "policy-bundle-%s.json" % bundle["policy_digest"].split(":", 1)[1]
+        _write(out / bundle_name, json.dumps(bundle, indent=1) + "\n")
+    summary = {"draft": acta.ACTA_DRAFT, "exported_at": datetime.now(timezone.utc).isoformat(), "witness": str(Path(args.witness).resolve()),
+               "witness_verified": w["count"], "witness_head": result["witness_head"], "receipts": len(result["receipts"]),
+               "terminal_hash": acta.receipt_link(result["receipts"][-1]) if result["receipts"] else None, "counts": result["counts"],
+               "files": [n for n in ("receipts.jsonl", "acta-keys.json", "commitment.json" if result["commitment"] else None, bundle_name) if n],
+               "verify": "gargoyle acta verify --replay-chain receipts.jsonl --jwks acta-keys.json (or --jwks https://<issuer>/.well-known/acta-keys.json)"}
+    _write(out / "EXPORT.json", json.dumps(summary, indent=1) + "\n")
+    c = result["counts"]
+    print("%d Acta receipts from %d witness entries -> %s (issued %d, refused %d, granted %d, declined %d; %d without a policy pin; %d skipped)"
+          % (len(result["receipts"]), w["count"], out, c["issued"], c["refused"], c["granted"], c["declined"], c["no_policy"], c["skipped"] + c["unresolved_hold"]))
+    return 0
+
+
 def cmd_doctor(args) -> int:
     """The client-side preflight (gargoyle.doctor): one PASS/WARN/FAIL line
     per concern, each failure with the one fix that applies. Exit 0 when
@@ -1114,6 +1208,22 @@ def main(argv=None) -> int:
     p.add_argument("--out", default="gargoyle-deploy", help="folder with public-keys.json and approvers.json (default: gargoyle-deploy, else the log's own folder)")
     p.add_argument("--issuer", metavar="URL", help="fetch the issuer's keys and every approver key it has seen (GET /keys, /approvers/audit) instead of relying on a copied approvers.json")
     p.set_defaults(fn=cmd_audit)
+    p = sub.add_parser("acta", help="Acta signed receipts: export the issuer's witness as a receipt chain, or verify receipts against a JWK Set")
+    asub = p.add_subparsers(dest="acta_cmd", required=True)
+    pe = asub.add_parser("export", help="the witness as protectmcp:decision receipts signed by the issuer key, plus a signed chain commitment")
+    pe.add_argument("--witness", required=True, help="the issuer's witness.jsonl")
+    pe.add_argument("--out", required=True, help="output folder: receipts.jsonl, commitment.json, acta-keys.json, policy bundle, EXPORT.json")
+    pe.add_argument("--env", help="the issuer's issuer.env (GARGOYLE_ISSUER_KEY_HEX signs the export); default <out>/issuer.env")
+    pe.add_argument("--rules", help="the rules file in force, for the policy bundle (default: GARGOYLE_RULES_PATH from --env)")
+    pv = asub.add_parser("verify", help="verify an envelope-shape receipt: alone, after --previous, or a .jsonl sequence with --replay-chain")
+    pv.add_argument("file", nargs="?", help="a receipt (JSON)")
+    pv.add_argument("--jwks", help="the issuer's JWK Set: a file, or https://<issuer>/.well-known/acta-keys.json")
+    pv.add_argument("--ca", help="CA bundle for an https --jwks")
+    pv.add_argument("--previous", help="the receipt this one must follow (section 6.7)")
+    pv.add_argument("--replay-chain", metavar="FILE", help="verify a .jsonl file of receipts as a sequence")
+    pv.add_argument("--mode", default="receipt", help=argparse.SUPPRESS)
+    pv.add_argument("--json", action="store_true", help="print the full result as JSON")
+    p.set_defaults(fn=cmd_acta)
     p = sub.add_parser("emilia", help="export an evidence log's approved calls as EMILIA Trust Receipts")
     p.add_argument("--log", required=True, help="the middleware's audit.jsonl")
     p.add_argument("--write", default="emilia-trust-receipts.json", help="output file, in the format EMILIA's conformance runners read")

@@ -1,0 +1,2 @@
+# Conformance fixtures are hashed byte for byte; no line-ending conversion on any platform.
+tests/fixtures/acta/** -text

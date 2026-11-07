@@ -409,7 +409,7 @@ def build_issuer_app(
                  "request": request_fields(body["tool"], body["args"])}
         if result.envelope is None:
             event("refused", principal=who["principal"], tool=body["tool"], reason=result.decision.reason,
-                  target_url=body["target_url"], **asked)
+                  target_url=body["target_url"], policy=policy.pin(), **asked)
             return {"issued": False, "reason": result.decision.reason}
         covered = False
         plan_id = body.get("plan_id")
@@ -430,13 +430,13 @@ def build_issuer_app(
         cooled = declined_recently(who["principal"], body["tool"], body["args"]) if result.envelope["requires_approval"] and not covered else None
         if cooled is not None:
             event("refused", principal=who["principal"], tool=body["tool"], reason=REF_ISSUER_DECLINED_RECENTLY,
-                  declines=cooled["count"], target_url=body["target_url"], **asked, **({"why": cooled["why"]} if cooled["why"] else {}))
+                  declines=cooled["count"], target_url=body["target_url"], policy=result.envelope["policy"], **asked, **({"why": cooled["why"]} if cooled["why"] else {}))
             return {"issued": False, "reason": REF_ISSUER_DECLINED_RECENTLY, "why": cooled["why"], "declines": cooled["count"]}
         if result.envelope["requires_approval"] and not covered and _open_holds(who["principal"]) >= max_open_holds:
             # A service limit, not a policy decision: nothing is stored, the
             # signed envelope is dropped, the client reports the reason.
             event("refused", principal=who["principal"], tool=body["tool"], reason=REF_ISSUER_TOO_MANY_HOLDS,
-                  target_url=body["target_url"], **asked)
+                  target_url=body["target_url"], policy=result.envelope["policy"], **asked)
             return {"issued": False, "reason": REF_ISSUER_TOO_MANY_HOLDS}
         about: Dict[str, Any] = {}
         if result.envelope["requires_approval"] and not covered:
@@ -447,6 +447,7 @@ def build_issuer_app(
             about = asked
         event("issued", principal=who["principal"], tool=body["tool"], held=bool(result.envelope["requires_approval"]),
               **({"oid": who["oid"]} if who.get("oid") else {}), **about,
+              policy=result.envelope["policy"],      # which policy version decided; gargoyle-witness/2 (the Acta export reads it)
               target_url=body["target_url"],         # one issuer, several gates: an audit of one gate's log skips the others' receipts
               covered=covered, state_bound=state is not None,   # whether the receipt binds the target's state (asked by the 2026-11-01 soak)
               decision_id=result.envelope.get("decision_id"), decision_sha256=result.envelope["decision_sha256"],
@@ -543,7 +544,7 @@ def build_issuer_app(
                                            for st in steps if isinstance(st, dict)]}}
             app.state.pending_about[plan["approval_request_id"]] = {"requested_by": who["principal"], "tool": "plan", "target_url": body["target_url"],
                                                                     "plan_id": plan["plan_id"], **about}
-        event("plan", principal=who["principal"], steps=len(norm), held=held, plan_id=plan["plan_id"], **about)
+        event("plan", principal=who["principal"], steps=len(norm), held=held, plan_id=plan["plan_id"], policy=plan.get("policy"), **about)
         return {"issued": True, "plan": plan, "held": held}
 
     def _plan_terms(plan):
@@ -960,6 +961,27 @@ def build_issuer_app(
     async def keys():
         from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
         return {key_id: signing_key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw).hex()}
+
+    @app.get("/.well-known/acta-keys.json")
+    async def acta_keys():
+        """The issuer key as a JWK Set (draft-farley-acta-signed-receipts
+        section 5.3), the anchor an Acta verifier resolves `kid` through for
+        receipts `gargoyle acta export` signs (gargoyle.acta)."""
+        from gargoyle.acta import jwks_for
+        return jwks_for(signing_key.public_key(), key_id)
+
+    @app.get("/.well-known/acta-policies/{digest_hex}.json")
+    async def acta_policy(digest_hex: str):
+        """The policy bundle (section 6.8.1) for the policy now in force,
+        when its source is a file this service can read: name, bytes and the
+        digest a verifier recomputes. Any other digest is 404, including an
+        earlier version of the rules: the witness records which pin decided
+        each call, and the bundle for a past pin is the operator's backup."""
+        from gargoyle.acta import bundle_for_policy
+        bundle = bundle_for_policy(policy, now().isoformat())
+        if bundle is None or bundle["policy_digest"] != "sha256:" + digest_hex:
+            raise HTTPException(status_code=404, detail={"reason": "no bundle for that digest"})
+        return bundle
 
     return app
 

@@ -807,7 +807,8 @@ The complete objects are the `threshold` member of
 at this date under these names: the receipt `gargoyle/3` with its grant
 (`grant_version` `"1.0"`), the execution receipt `gargoyle-execution/1`,
 the plan `gargoyle-plan/1`, the evidence log `gargoyle-evidence/4` and the
-witness `gargoyle-witness/1`. Under a frozen name nothing changes: not the
+witness `gargoyle-witness/2` (`gargoyle-witness/1`, which lacks the
+`policy` member, remains verifiable; section 15.1). Under a frozen name nothing changes: not the
 field set, not a hash or signature region, not the verification order, not
 the canonical form. A new member means a new name, never an addition to a
 frozen one, so a verifier of a frozen version may keep rejecting what it
@@ -1050,12 +1051,13 @@ with the issuer key, so a client can neither forge nor edit it.
 
 ```
 entry = {
-  "witness_version": "gargoyle-witness/1",
+  "witness_version": "gargoyle-witness/2",
   "seq": n, "prev_sha256": ..., "at": ...,
   "event": "started" | "issued" | "refused" | "granted" | "grant_refused" | "declined" | "plan"
          | "plan_granted" | "enrolled" | "enroll_refused" | "revoked" | "sidedoors",
   ... (issued: principal, tool, decision_id, decision_sha256, approval_request_id,
-       args_sha256, held, covered; granted: approval_request_id, approver,
+       args_sha256, held, covered, policy (the pin of section 3 the call was
+       decided under; also on refused and plan); granted: approval_request_id, approver,
        collected, required, hold_kind; grant_refused: approval_request_id, approver,
        reason; declined: approval_request_id, by; plan: principal, plan_id, steps,
        held; enrolled: approver, oid, replaced; enroll_refused: approver, reason;
@@ -1066,6 +1068,10 @@ entry = {
   "issuer_key_id":   ..., "issuer_signature": ed25519 over canonical_json(entry minus issuer_signature)
 }
 ```
+
+`gargoyle-witness/1` entries carry no `policy` member; a verifier accepts
+both versions in one file, each entry under the version it names, as for
+the evidence log.
 
 Reconciliation (`gargoyle audit --witness`) verifies both chains and
 compares them by `decision_id`. Findings, never resolved silently:
@@ -1141,6 +1147,51 @@ implementation that needs those should layer them above this
 specification: a grant's `approver_signature` may be produced by a
 WebAuthn authenticator, and the evidence log's entries may be committed to
 a transparency log, without changing any byte defined here.
+
+### 16.1 The Acta export
+
+The reference implementation exports the witness (section 15.1) as a chain
+of Acta `protectmcp:decision` receipts in the draft's envelope shape
+(`gargoyle acta export`, `gargoyle.acta`; docs/interop-acta.md), and
+verifies receipts in that shape (`gargoyle acta verify`). The export is the
+issuer's statement about its own decisions in Acta's vocabulary, signed by
+the issuer key at export time; the Gargoyle receipt, grant and execution
+receipt are not re-encoded and remain the evidence. Mapping, one receipt
+per witness entry in witness order:
+
+| Witness entry | `decision` | `reason` |
+|---|---|---|
+| `issued`, not held | `allow` | (`covered_by_plan` when a plan covered it) |
+| `issued`, held | `require_approval` | - |
+| `refused` | `deny` | the refusal code |
+| `granted`, the hold complete | `allow` | `approval_granted` |
+| `declined` | `deny` | `approval_declined` |
+
+`tool_name` is the entry's tool; `issued_at` the entry's `at`; `issuer_id`
+and `signature.kid` the issuer key id, which the issuer's
+`/.well-known/acta-keys.json` resolves (Acta section 5.3); `policy_digest`
+is Acta section 6.8 over a one-file manifest derived from the pin the entry
+recorded (engine `gargoyle.rules/1`, file `rules.json`, its SHA-256 the
+pin's `policy_sha256`; `policy.json` under the policy id for any other
+policy), and the issuer serves the bundle for the pin in force at
+`/.well-known/acta-policies/<hex>.json`; `previousReceiptHash` is Acta
+section 6.7 over the previous exported receipt. No argument, principal or
+path enters a payload (Acta section 9.3); a `gargoyle` member carries the
+witness sequence number and entry hash, the `decision_id`,
+`decision_sha256`, `args_sha256`, `approval_request_id` and `target_url`, so
+a reader can go from the Acta receipt to the native artifacts and to the
+witness entry. Plans, partial grants and lifecycle entries are counted, not
+exported.
+
+Acta section 9.7 states that its chain cannot show its own tail is complete
+and asks for a commitment, outside the chain and signed by the issuer, to
+the chain's length and terminal hash. The export writes one: a
+`gargoyle:chain-commitment` receipt in the same envelope shape naming
+`count`, `terminal_hash` and the witness head (`seq`, `entry_sha256`) the
+export was taken at. The witness itself is the record the draft describes
+as missing: every entry is issuer-signed, its head is public at `/health`,
+and the exported receipts name their entries, so a chain shorter than the
+commitment, or a commitment that disagrees with the witness, is a finding.
 
 ## 17. Scoped grants (plans)
 

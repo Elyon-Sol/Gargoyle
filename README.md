@@ -26,10 +26,10 @@ by whom, and what changed.
 
 ## Status
 
-Release candidate `1.0.0rc1` on PyPI as `gargoyle-receipts`. Wire format
+Release candidate `1.0.0rc2` on PyPI as `gargoyle-receipts`. Wire format
 `gargoyle/3`, execution receipt `gargoyle-execution/1`, plan
 `gargoyle-plan/1`, evidence log `gargoyle-evidence/4`, witness
-`gargoyle-witness/1`; all five are specified in [SPEC.md](SPEC.md) and
+`gargoyle-witness/2`; all five are specified in [SPEC.md](SPEC.md) and
 frozen as of 2026-11-06 (SPEC.md section 12): a change to any of them is a
 new format name, and verifiers keep verifying the old one. The freeze is a
 statement about the formats; the software is still one author's, unreviewed
@@ -168,6 +168,7 @@ through the gate with OPA in Docker for sites that run a policy engine.
 | `gargoyle backup DIR` / `restore ARCHIVE` | the issuer host's state as one verified archive, and back | the issuer host |
 | `gargoyle audit --log audit.jsonl [--witness witness.jsonl] [--check-tree DIR] [--summary]` | verify the evidence log, reconcile it against the witness, find files changed around the gate | anywhere, offline |
 | `gargoyle emilia --log audit.jsonl` | export approved calls as EMILIA Trust Receipts | anywhere, offline |
+| `gargoyle acta export --witness witness.jsonl --out DIR` / `acta verify FILE --jwks URL` | the issuer's decisions as an Acta receipt chain with a signed commitment; verify Acta receipts against a JWK Set | the issuer host; anywhere |
 | `gargoyle remote` / `remote-token` | the gate as an HTTPS MCP server for hosted connectors, and a person's capability URL for it | the gate host |
 | `gargoyle hook --env middleware.env` | the Claude Code hook command (PreToolUse, PostToolUse) | each workstation, from settings |
 
@@ -679,6 +680,7 @@ reason, without a new card.
 | `issuer_service`, `entra_login`, `notify` | the HTTP issuing service and console; `gargoyle login`; the hold webhook |
 | `doctor`, `rulecheck`, `operations` | `gargoyle doctor`; `gargoyle rules`; `gargoyle backup` and `restore` |
 | `emilia`, `emilia_runner` | EMILIA Trust Receipt export and the EMILIA conformance runner |
+| `acta` | Acta signed decision receipts: the verifier, the policy digest and bundle, the witness export with its chain commitment |
 | `published_record_source`, `key_record_source` | the live policy pin as a publisher-signed record; root-signed issuer and approver keys with windows and revocation |
 | `cli` | the `gargoyle` command |
 
@@ -699,6 +701,7 @@ reason, without a new card.
 | [docs/scenario-client-workstation.md](docs/scenario-client-workstation.md) | the scenario the design answers (2026-10-16) |
 | [docs/comparison-2026-10-20.md](docs/comparison-2026-10-20.md) | Gargoyle against its nearest peers, from primary sources |
 | [docs/interop-emilia.md](docs/interop-emilia.md) | interoperation with the EMILIA Protocol, both directions |
+| [docs/interop-acta.md](docs/interop-acta.md) | interoperation with Acta signed receipts: their vectors through our verifier, our witness as their chain |
 | [docs/ally-design.md](docs/ally-design.md) | how Gargoyle fits beside governance runtimes and the receipt drafts |
 | [ts/README.md](ts/README.md) | the TypeScript verifier and consumer |
 | [examples/](examples/) | the gated filesystem agent with OPA; a live pilot's rules and the calls they decided |
