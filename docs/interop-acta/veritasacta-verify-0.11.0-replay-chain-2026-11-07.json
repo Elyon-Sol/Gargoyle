@@ -1,0 +1,235 @@
+{
+  "total": 6,
+  "verified": 6,
+  "failed": 0,
+  "undecidable": 0,
+  "chainBreaks": 0,
+  "byTier": {
+    "1": 6,
+    "2": 0,
+    "3": 0,
+    "4": 0,
+    "5": 0
+  },
+  "errors": [],
+  "receipts": [
+    {
+      "index": 0,
+      "valid": true,
+      "outcome": "valid",
+      "tier": 1,
+      "kid": "issuer-1",
+      "type": "protectmcp:decision",
+      "checks": {
+        "signing_input": {
+          "result": "pass"
+        },
+        "signature": {
+          "result": "pass"
+        },
+        "issuer_kid": {
+          "result": "pass"
+        },
+        "chain_link": {
+          "result": "absent"
+        },
+        "key_window": {
+          "result": "not_established"
+        }
+      },
+      "keyStatus": {
+        "source": "jwks",
+        "window": null,
+        "issued_at": "2026-11-07T04:05:55.752923+00:00",
+        "applied": false,
+        "result": "no_window",
+        "detail": "The key source carries no validity window, so the key's validity at issuance is not established."
+      }
+    },
+    {
+      "index": 1,
+      "valid": true,
+      "outcome": "valid",
+      "tier": 1,
+      "kid": "issuer-1",
+      "type": "protectmcp:decision",
+      "checks": {
+        "signing_input": {
+          "result": "pass"
+        },
+        "signature": {
+          "result": "pass"
+        },
+        "issuer_kid": {
+          "result": "pass"
+        },
+        "chain_link": {
+          "result": "pass"
+        },
+        "key_window": {
+          "result": "not_established"
+        },
+        "previous": {
+          "result": "pass"
+        }
+      },
+      "keyStatus": {
+        "source": "jwks",
+        "window": null,
+        "issued_at": "2026-11-07T04:05:55.759050+00:00",
+        "applied": false,
+        "result": "no_window",
+        "detail": "The key source carries no validity window, so the key's validity at issuance is not established."
+      }
+    },
+    {
+      "index": 2,
+      "valid": true,
+      "outcome": "valid",
+      "tier": 1,
+      "kid": "issuer-1",
+      "type": "protectmcp:decision",
+      "checks": {
+        "signing_input": {
+          "result": "pass"
+        },
+        "signature": {
+          "result": "pass"
+        },
+        "issuer_kid": {
+          "result": "pass"
+        },
+        "chain_link": {
+          "result": "pass"
+        },
+        "key_window": {
+          "result": "not_established"
+        },
+        "previous": {
+          "result": "pass"
+        }
+      },
+      "keyStatus": {
+        "source": "jwks",
+        "window": null,
+        "issued_at": "2026-11-07T04:05:55.771328+00:00",
+        "applied": false,
+        "result": "no_window",
+        "detail": "The key source carries no validity window, so the key's validity at issuance is not established."
+      }
+    },
+    {
+      "index": 3,
+      "valid": true,
+      "outcome": "valid",
+      "tier": 1,
+      "kid": "issuer-1",
+      "type": "protectmcp:decision",
+      "checks": {
+        "signing_input": {
+          "result": "pass"
+        },
+        "signature": {
+          "result": "pass"
+        },
+        "issuer_kid": {
+          "result": "pass"
+        },
+        "chain_link": {
+          "result": "pass"
+        },
+        "key_window": {
+          "result": "not_established"
+        },
+        "previous": {
+          "result": "pass"
+        }
+      },
+      "keyStatus": {
+        "source": "jwks",
+        "window": null,
+        "issued_at": "2026-11-07T04:05:55.775485+00:00",
+        "applied": false,
+        "result": "no_window",
+        "detail": "The key source carries no validity window, so the key's validity at issuance is not established."
+      }
+    },
+    {
+      "index": 4,
+      "valid": true,
+      "outcome": "valid",
+      "tier": 1,
+      "kid": "issuer-1",
+      "type": "protectmcp:decision",
+      "checks": {
+        "signing_input": {
+          "result": "pass"
+        },
+        "signature": {
+          "result": "pass"
+        },
+        "issuer_kid": {
+          "result": "pass"
+        },
+        "chain_link": {
+          "result": "pass"
+        },
+        "key_window": {
+          "result": "not_established"
+        },
+        "previous": {
+          "result": "pass"
+        }
+      },
+      "keyStatus": {
+        "source": "jwks",
+        "window": null,
+        "issued_at": "2026-11-07T04:05:55.779371+00:00",
+        "applied": false,
+        "result": "no_window",
+        "detail": "The key source carries no validity window, so the key's validity at issuance is not established."
+      }
+    },
+    {
+      "index": 5,
+      "valid": true,
+      "outcome": "valid",
+      "tier": 1,
+      "kid": "issuer-1",
+      "type": "protectmcp:decision",
+      "checks": {
+        "signing_input": {
+          "result": "pass"
+        },
+        "signature": {
+          "result": "pass"
+        },
+        "issuer_kid": {
+          "result": "pass"
+        },
+        "chain_link": {
+          "result": "pass"
+        },
+        "key_window": {
+          "result": "not_established"
+        },
+        "previous": {
+          "result": "pass"
+        }
+      },
+      "keyStatus": {
+        "source": "jwks",
+        "window": null,
+        "issued_at": "2026-11-07T04:05:55.785120+00:00",
+        "applied": false,
+        "result": "no_window",
+        "detail": "The key source carries no validity window, so the key's validity at issuance is not established."
+      }
+    }
+  ],
+  "valid": true,
+  "legacyLinks": 0,
+  "chains": 1,
+  "warnings": [],
+  "outcome": "valid"
+}

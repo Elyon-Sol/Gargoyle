@@ -727,6 +727,8 @@ outside.
   The witness is gargoyle-witness/2: issued, refused and plan entries record the policy
   pin, which the export needs and which lets an audit compare the receipt's pin with the
   issuer's record; version 1 entries verify beside version 2 in one file. The freeze of
-  section 12 names witness/2 (same day). Not done: a run under @veritasacta/verify
-  (test present, skipped without GARGOYLE_ACTA_VERIFY); commitment mode (optional);
-  the flat shape; ML-DSA. docs/interop-acta.md.
+  section 12 names witness/2 (same day). Run under @veritasacta/verify 0.11.0 on
+  2026-11-07: six exported receipts, alone, after their predecessors and as a sequence,
+  all verified, 0 chain breaks (their report in docs/interop-acta/). Not done: commitment
+  mode (optional); the flat shape; ML-DSA; a validity window on the issuer's JWK Set.
+  docs/interop-acta.md.
