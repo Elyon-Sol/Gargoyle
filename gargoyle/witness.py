@@ -13,7 +13,7 @@ held call honored without a grant the issuer saw is a bypass, a receipt
 issued with no evidence at all is a gap.
 
     entry = {
-      "witness_version": "gargoyle-witness/1",
+      "witness_version": "gargoyle-witness/2",
       "seq": n, "prev_sha256": ..., "at": ...,
       "event": "issued" | "refused" | "granted" | "declined" | "plan" | "plan_granted",
       <fields per event>,
@@ -31,7 +31,8 @@ from typing import Any, Dict, Iterable, List, Optional
 
 from gargoyle.envelope import canonical_json
 
-WITNESS_VERSION = "gargoyle-witness/1"
+WITNESS_VERSION = "gargoyle-witness/2"          # 2 adds `policy` (the pin) to issued, refused and plan entries
+WITNESS_VERSIONS = ("gargoyle-witness/1", WITNESS_VERSION)
 GENESIS = "0" * 64
 _HASH_EXCLUDED = ("entry_sha256", "issuer_key_id", "issuer_signature")
 
@@ -94,7 +95,7 @@ def verify_witness(entries: Iterable[Any], *, issuer_public_keys: Dict[str, Any]
     Returns {"accepted", "reason", "count", "tail_sha256", "entries": [...]}."""
     report, prev, expect, tail, ok_all = [], GENESIS, 1, GENESIS, True
     for raw in entries:
-        if not isinstance(raw, dict) or raw.get("witness_version") != WITNESS_VERSION or "entry_sha256" not in raw \
+        if not isinstance(raw, dict) or raw.get("witness_version") not in WITNESS_VERSIONS or "entry_sha256" not in raw \
                 or not isinstance(raw.get("seq"), int) or "event" not in raw:
             report.append({"seq": None, "accepted": False, "reason": REF_WITNESS_MALFORMED}); ok_all = False
             continue

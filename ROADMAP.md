@@ -715,3 +715,18 @@ outside.
   (Acta, XAIP), the EP re-validation and the witness Internet-Draft, which cite the
   formats by name; the first production installation outside the author's hosts pins
   this release.
+- Acta interoperation (2026-11-06), version 1.0.0rc2: gargoyle/acta.py verifies
+  draft-farley-acta-signed-receipts-03 envelope receipts (signing input 6.6, chain
+  link 6.7, keys from a JWK Set with validity windows 9.2, never from the receipt 9.5,
+  the -04 combination rule) and exports the witness as a protectmcp:decision chain
+  signed by the issuer key, with a signed chain commitment (what 9.7 asks for) and
+  section 6.8 policy digests; the issuer serves /.well-known/acta-keys.json and the
+  policy bundle. ScopeBlind's verifier vectors (39 cases: key-window 6, chain-link 27,
+  signing-input 4, revocation 2; plus timeliness and the embedded-key negatives) reach
+  the published verdict, code and key status; their harness's policy digest reproduces.
+  The witness is gargoyle-witness/2: issued, refused and plan entries record the policy
+  pin, which the export needs and which lets an audit compare the receipt's pin with the
+  issuer's record; version 1 entries verify beside version 2 in one file. The freeze of
+  section 12 names witness/2 (same day). Not done: a run under @veritasacta/verify
+  (test present, skipped without GARGOYLE_ACTA_VERIFY); commitment mode (optional);
+  the flat shape; ML-DSA. docs/interop-acta.md.
