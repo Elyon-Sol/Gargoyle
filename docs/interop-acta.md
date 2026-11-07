@@ -20,7 +20,7 @@ an Acta verifier would.
 | Acta negatives, Gargoyle verifier | `negative/embedded-key`: a receipt carrying its own public key, in the Acta envelope and in the APS shape | never valid: `key_not_found` with a warning that the embedded member was ignored; the APS shape is `unknown_format` |
 | Acta policy digest | Section 6.8 over the suite's Cedar policy | equals the `policy_digest` in `expected/chain.jsonl`, which their harness computes independently |
 | Gargoyle export, Gargoyle verifier | An issuer run under the rules policy (allow, hold then release, refuse by rule, hold then decline) exported from its witness: six receipts, one chain, a signed commitment | every receipt valid under the issuer's own `/.well-known/acta-keys.json`; the sequence holds (1 chain, 0 breaks); the policy bundle served at `/.well-known/acta-policies/<hex>.json` recomputes to the receipts' digest; a tampered receipt is `signature_invalid` and breaks the link after it; a shortened set fails the commitment as `truncated` |
-| Gargoyle export, Acta's reference verifier | `tests/test_acta.py::test_export_verifies_under_an_outside_acta_verifier`, which runs the command in `GARGOYLE_ACTA_VERIFY` over the export with our JWK Set | not yet run: the verifier is an npm package this build host does not install unattended. Run it with `GARGOYLE_ACTA_VERIFY="npx --yes @veritasacta/verify@0.11.0" python -m pytest tests/test_acta.py -k outside` and record the result here |
+| Gargoyle export, Acta's reference verifier (2026-11-07 04:05 UTC) | `@veritasacta/verify` 0.11.0, run by `tests/test_acta.py::test_export_verifies_under_an_outside_acta_verifier` over the six-receipt export with our JWK Set: each receipt alone (`--mode receipt`), each after its predecessor (`--previous`), and the file as a sequence (`--replay-chain`); run twice, through `npx` and from a local install | every invocation exit 0. The sequence report: 6 total, 6 verified, 0 failed, 0 undecidable, 0 chain breaks; per receipt `signing_input`, `signature`, `issuer_kid`, `chain_link` and `previous` pass; `key_window` is `not_established` because our JWK Set carries no validity window. Their output is kept in [interop-acta/](interop-acta/) |
 
 The vectors are copied unmodified into `tests/fixtures/acta/` (commit
 5c749de5 of their repository, 2026-11-04) and run in CI. The `scripts/`
@@ -105,6 +105,10 @@ counts and the witness head.
   in.
 - Archival mode only (section 9.1): a receipt's age is reported, never
   judged. The timeliness suite's proposed commitment rule is not applied.
+- The issuer's JWK Set carries no `valid_from` / `valid_until`, so an Acta
+  verifier reports the key's validity at issuance as not established rather
+  than inside a window. A window from the witness's first `started` entry
+  is the natural value; not yet added.
 - The policy bundle is served for the pin in force. A past pin's digest
   still verifies (it is in the witness and the receipts); its bundle is the
   operator's backup of that rules file.
