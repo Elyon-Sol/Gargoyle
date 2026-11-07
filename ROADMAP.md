@@ -1,4 +1,4 @@
-# Gargoyle roadmap (opened 2026-10-16, last entry 2026-11-02)
+# Gargoyle roadmap (opened 2026-10-16, last entry 2026-11-06)
 
 Where this comes from: a comparison of Gargoyle against the products and
 drafts that overlap it most (ActionProxy, Vestige, the MCP "work contract"
@@ -701,3 +701,17 @@ outside.
   one approver is enrolled; the README documents the decline cooldown and the receipt TTL;
   a weekly self-audit of the hook host's log is scripted in the deployment repository and
   described in the hook guide and docs/operations.md.
+- Format freeze (2026-11-06), version 1.0.0rc1: SPEC.md section 12 names the five
+  formats (gargoyle/3 with grant 1.0, gargoyle-execution/1, gargoyle-plan/1,
+  gargoyle-evidence/4, gargoyle-witness/1) as frozen at this date, and states the
+  version promises from 1.0 on: a change to a receipt-family format is a new name and
+  a major release; a record version that only adds a member is a minor release and
+  every earlier version stays verifiable; codes are never renamed. No byte of any
+  format changed in this step. The one field the interoperability work wants that no
+  record carries, a per-call latency for XAIP export, is derivable from the entry's
+  `at` and the execution receipt's `executed_at`; if a measured value is ever needed
+  it is a `gargoyle-evidence/5` member under the minor-release rule, not an addition
+  to version 4. The freeze is the precondition for the interoperability exporters
+  (Acta, XAIP), the EP re-validation and the witness Internet-Draft, which cite the
+  formats by name; the first production installation outside the author's hosts pins
+  this release.
