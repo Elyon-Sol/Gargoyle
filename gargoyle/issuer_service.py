@@ -966,9 +966,11 @@ def build_issuer_app(
     async def acta_keys():
         """The issuer key as a JWK Set (draft-farley-acta-signed-receipts
         section 5.3), the anchor an Acta verifier resolves `kid` through for
-        receipts `gargoyle acta export` signs (gargoyle.acta)."""
-        from gargoyle.acta import jwks_for
-        return jwks_for(signing_key.public_key(), key_id)
+        receipts `gargoyle acta export` signs (gargoyle.acta). `valid_from` is
+        the witness's first `started` entry (section 9.2)."""
+        from gargoyle.acta import jwks_for, key_valid_from
+        entries = list(witness.entries) if witness is not None else []
+        return jwks_for(signing_key.public_key(), key_id, valid_from=key_valid_from(entries, key_id))
 
     @app.get("/.well-known/acta-policies/{digest_hex}.json")
     async def acta_policy(digest_hex: str):

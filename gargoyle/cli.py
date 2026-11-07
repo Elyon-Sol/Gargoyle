@@ -763,7 +763,7 @@ def _acta_export(args, acta) -> int:
     with open(out / "receipts.jsonl", "w", encoding="utf-8") as f:
         for r in result["receipts"]:
             f.write(json.dumps(r, sort_keys=True) + "\n")
-    _write(out / "acta-keys.json", json.dumps(acta.jwks_for(signing_key.public_key(), key_id), indent=1) + "\n")
+    _write(out / "acta-keys.json", json.dumps(acta.jwks_for(signing_key.public_key(), key_id, valid_from=acta.key_valid_from(entries, key_id)), indent=1) + "\n")
     if result["commitment"] is not None:
         _write(out / "commitment.json", json.dumps(result["commitment"], indent=1) + "\n")
     bundle_name = None
