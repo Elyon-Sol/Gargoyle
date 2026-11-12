@@ -1169,7 +1169,8 @@ per witness entry in witness order:
 
 `tool_name` is the entry's tool; `issued_at` the entry's `at`; `issuer_id`
 and `signature.kid` the issuer key id, which the issuer's
-`/.well-known/acta-keys.json` resolves (Acta section 5.3); `policy_digest`
+`/.well-known/acta-keys.json` resolves (Acta section 5.3; its `valid_from` is
+the witness's first `started` entry, section 9.2); `policy_digest`
 is Acta section 6.8 over a one-file manifest derived from the pin the entry
 recorded (engine `gargoyle.rules/1`, file `rules.json`, its SHA-256 the
 pin's `policy_sha256`; `policy.json` under the policy id for any other

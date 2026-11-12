@@ -167,10 +167,16 @@ def test_witness_export_is_an_acta_chain_the_issuers_jwks_verifies(tmp_path):
     # The issuer's own well-known key set verifies every receipt, and the chain holds as a sequence.
     jwks = c.get("/.well-known/acta-keys.json").json()
     keys = acta.keys_from_jwks(jwks, source="jwks:issuer")
-    assert jwks["keys"][0] == {"kty": "OKP", "crv": "Ed25519", "kid": "issuer-1", "x": jwks["keys"][0]["x"], "use": "sig", "alg": "EdDSA"}
+    started = next(e for e in entries if e["event"] == "started")
+    assert jwks["keys"][0] == {"kty": "OKP", "crv": "Ed25519", "kid": "issuer-1", "x": jwks["keys"][0]["x"], "use": "sig", "alg": "EdDSA",
+                               "valid_from": started["at"]}                      # section 9.2: the window opens when the witness did
+    assert acta.key_valid_from(entries, "issuer-1") == started["at"] and acta.key_valid_from([], "issuer-1") is None
     for n, r in enumerate(receipts):
         v = acta.verify_receipt(r, keys, previous=receipts[n - 1] if n else None)
-        assert v["outcome"] == acta.VALID and v["key_source"] == "jwks:issuer" and v["key_status"] == "no_window", v
+        assert v["outcome"] == acta.VALID and v["key_source"] == "jwks:issuer" and v["key_status"] == "inside", v
+    # A receipt dated before the window is outside it, whoever signed it.
+    early = json.loads(json.dumps(receipts[0])); early["payload"]["issued_at"] = "2020-01-01T00:00:00Z"
+    assert acta.verify_receipt(early, keys)["key_status"] == "outside"
     seq = acta.verify_sequence(receipts, keys)
     assert (seq["outcome"], seq["chains"], seq["chain_breaks"], seq["count"]) == (acta.VALID, 1, 0, 6)
 
@@ -221,6 +227,7 @@ def test_cli_exports_and_verifies(tmp_path, capsys):
     summary = _load(out / "EXPORT.json")
     assert summary["receipts"] == 6 and set(summary["files"]) >= {"receipts.jsonl", "acta-keys.json", "commitment.json"}
     assert any(f.startswith("policy-bundle-") for f in summary["files"])
+    assert _load(out / "acta-keys.json")["keys"][0]["valid_from"] == read_witness(str(tmp_path / "witness.jsonl"))[0]["at"]
     assert main(["acta", "verify", "--replay-chain", str(out / "receipts.jsonl"), "--jwks", str(out / "acta-keys.json")]) == 0
     assert capsys.readouterr().out.startswith("valid")
     lines = (out / "receipts.jsonl").read_text(encoding="utf-8").splitlines()
@@ -239,8 +246,9 @@ def test_export_verifies_under_an_outside_acta_verifier(tmp_path):
     """The acceptance that matters: a verifier written from the draft by
     someone else, run over our export with our JWK Set."""
     c, w, rules = _rig(tmp_path)
-    result = acta.export_witness(read_witness(str(tmp_path / "witness.jsonl")), signing_key=issuer, key_id="issuer-1")
-    (tmp_path / "acta-keys.json").write_text(json.dumps(acta.jwks_for(issuer.public_key(), "issuer-1")), encoding="utf-8")
+    entries = read_witness(str(tmp_path / "witness.jsonl"))
+    result = acta.export_witness(entries, signing_key=issuer, key_id="issuer-1")
+    (tmp_path / "acta-keys.json").write_text(json.dumps(acta.jwks_for(issuer.public_key(), "issuer-1", valid_from=acta.key_valid_from(entries, "issuer-1"))), encoding="utf-8")
     (tmp_path / "receipts.jsonl").write_text("".join(json.dumps(r) + "\n" for r in result["receipts"]), encoding="utf-8")
     cmd = shlex.split(os.environ["GARGOYLE_ACTA_VERIFY"])
     for n, r in enumerate(result["receipts"]):

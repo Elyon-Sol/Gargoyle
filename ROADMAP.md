@@ -730,5 +730,12 @@ outside.
   section 12 names witness/2 (same day). Run under @veritasacta/verify 0.11.0 on
   2026-11-07: six exported receipts, alone, after their predecessors and as a sequence,
   all verified, 0 chain breaks (their report in docs/interop-acta/). Not done: commitment
-  mode (optional); the flat shape; ML-DSA; a validity window on the issuer's JWK Set.
-  docs/interop-acta.md.
+  mode (optional); the flat shape; ML-DSA. docs/interop-acta.md.
+- Acta follow-ups (2026-11-07): the issuer's JWK Set and the export's acta-keys.json
+  carry valid_from, the witness's first started entry (section 9.2), so a verifier
+  reports the key inside its window; the live issuer's 1,487-entry witness exported as
+  1,420 receipts, one chain, no breaks, under the live key set; a probe of the Microsoft
+  agent-governance-toolkit found no consumer of outside Acta receipts (its verifier
+  checks its own record shape with the key inside the record; the Acta-format skill
+  and the protect-mcp verifier it once merged are no longer on main), recorded with
+  paths and dates in docs/interop-acta.md.
