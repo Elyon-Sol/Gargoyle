@@ -1001,7 +1001,11 @@ def build_issuer_app(
         who = authenticate(authorization)
         upn = who["principal"]
         _notice_revocations()
-        return {"principal": upn, "subject_id": who["subject_id"], "name": who.get("name"), "may_approve": may_enroll(who, role=approver_role, groups=approver_groups) or upn in static_approvers,
+        return {"principal": upn, "subject_id": who["subject_id"], "name": who.get("name"),
+                # When this person signed in, as their token says (None when it does not), and how old the site
+                # allows that to be at a release: the console warns up front when the two cannot meet.
+                "signed_in_at": _signed_in(who).get("auth_time"), "sign_in_max_age": release_max_auth_age,
+                "may_approve": may_enroll(who, role=approver_role, groups=approver_groups) or upn in static_approvers,
                 "enrolled_public_key_hex": registry.public_hex().get(upn),
                 "roles": [r for r in (who.get("roles") or []) if isinstance(r, str)],
                 "approver_role": approver_role,
@@ -1287,6 +1291,7 @@ def app_from_env() -> FastAPI:
         tenant_key_ids=set(tenant_keys) if tenant else None,
         idp_key_refresh=(lambda: entra_keys(tenant_id)) if tenant else None,
         console_entra=({"tenant": tenant, "client_id": os.environ[ENV_CONSOLE_CLIENT_ID],
-                        "scope": os.environ.get(ENV_CONSOLE_SCOPE) or "api://%s/access" % (os.environ.get(ENV_AUDIENCE) or "").split(",")[-1].strip()}
+                        "scope": os.environ.get(ENV_CONSOLE_SCOPE) or "api://%s/access" % (os.environ.get(ENV_AUDIENCE) or "").split(",")[-1].strip(),
+                        **({"max_age": release_max_auth_age_from_env(os.environ)} if release_max_auth_age_from_env(os.environ) else {})}
                        if tenant and os.environ.get(ENV_CONSOLE_CLIENT_ID) else None),
     )

@@ -139,7 +139,7 @@ async function entraSetup() {
     // One shape for both: an OpenID Connect provider carries its own endpoints; Entra is addressed by tenant.
     cfg = conf.oidc ? { clientId: conf.oidc.client_id, scope: conf.oidc.scope, authorizationEndpoint: conf.oidc.authorization_endpoint,
                         tokenEndpoint: conf.oidc.token_endpoint, maxAge: conf.oidc.max_age, label: conf.oidc.label }
-        : conf.entra ? { tenant: conf.entra.tenant, clientId: conf.entra.client_id, scope: conf.entra.scope, label: "Microsoft" } : null;
+        : conf.entra ? { tenant: conf.entra.tenant, clientId: conf.entra.client_id, scope: conf.entra.scope, maxAge: conf.entra.max_age, label: "Microsoft" } : null;
   } catch (err) { /* older issuer: files only */ }
   if (!cfg) return;
   $("entra").style.display = "";
@@ -167,6 +167,10 @@ async function entraReady() {
   let me;
   try { me = await api("me"); } catch (err) { sessionStorage.removeItem("gargoyle-token"); log("session expired; sign in again"); return; }
   if (!me.may_approve) { $("entra-note").textContent = `${me.principal} is signed in but has no Approver role`; return; }
+  if (me.sign_in_max_age && me.signed_in_at == null) {
+    // Said before anyone tries: every release would be refused, and the fix is at the identity provider, not here.
+    log(`This site requires a sign-in no older than ${me.sign_in_max_age} seconds, and your sign-in does not say when it happened (no auth_time in the token). Releases will be refused until the identity provider adds it; tell the operator.`);
+  }
   let keyPair = await loadStoredKey(me.principal);
   if (!keyPair) { keyPair = await generateApproverKey(); await storeKey(me.principal, keyPair); }
   const mine = await publicKeyHex(keyPair);

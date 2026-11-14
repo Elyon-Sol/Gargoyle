@@ -124,3 +124,22 @@ def test_console_signs_in_at_any_providers_endpoints(tmp_path):
     assert out["noAge"].startswith("https://id.example/auth?tenant=x&") and "max_age" not in out["noAge"]
     assert out["calls"][0]["u"] == "https://id.example/token" and "code_verifier=v1" in out["calls"][0]["body"] and "grant_type=authorization_code" in out["calls"][0]["body"]
     assert out["tok"] == {"access_token": "tok"} and out["bad"] == "invalid_grant"
+
+
+ENTRA_AGE_SCRIPT = r'''
+import { authorizeUrl } from "%s";
+const base = { tenant: "t", clientId: "c", scope: "api://a/access", redirectUri: "https://g/approve", challenge: "ch", state: "s1" };
+console.log(JSON.stringify({ plain: authorizeUrl(base), aged: authorizeUrl({ ...base, maxAge: 900 }) }));
+'''
+
+
+def test_console_asks_entra_for_a_fresh_sign_in_when_the_site_sets_an_age(tmp_path):
+    """Entra documents `prompt=login`, not `max_age`: with a sign-in age rule
+    the Entra request carries the one it documents; without a rule, nothing changes."""
+    if shutil.which("node") is None:
+        pytest.skip("node not installed")
+    script = tmp_path / "age.mjs"
+    script.write_text(ENTRA_AGE_SCRIPT % (ROOT / "gargoyle" / "static" / "approve.js").as_uri())
+    out = json.loads(subprocess.run(["node", str(script)], capture_output=True, text=True, check=True, timeout=60).stdout)
+    assert "prompt=" not in out["plain"] and "max_age" not in out["plain"]
+    assert "prompt=login" in out["aged"] and out["aged"].startswith("https://login.microsoftonline.com/t/")

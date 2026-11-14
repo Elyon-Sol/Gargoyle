@@ -536,3 +536,18 @@ def test_the_console_config_is_public_and_names_no_secret(tmp_path):
     assert c.get("/approve-config").json() == {"entra": None, "oidc": cfg}
     plain, _, _ = service(tmp_path / "plain")
     assert plain.get("/approve-config").json() == {"entra": None}                  # as before when not configured
+
+
+# ---- a sign-in age rule the provider cannot satisfy is said up front (stage 3b) ----
+
+def test_me_says_when_the_person_signed_in_and_what_the_site_requires(tmp_path):
+    c, _, _ = service(tmp_path, release_max_auth_age=300)
+    at = int(datetime.now(timezone.utc).timestamp()) - 30
+    me = c.get("/me", headers=live("s-dana", "dana@alpha.example", roles=["Approver"], auth_time=at)).json()
+    assert me["signed_in_at"] == at and me["sign_in_max_age"] == 300
+    # A provider whose tokens carry no sign-in time: the console can warn before anyone tries to release.
+    me = c.get("/me", headers=live("s-dana", "dana@alpha.example", roles=["Approver"])).json()
+    assert me["signed_in_at"] is None and me["sign_in_max_age"] == 300
+    assert c.get("/me", headers=live("s-dana", "dana@alpha.example", auth_time="soon")).json()["signed_in_at"] is None
+    off, _, _ = service(tmp_path / "off")
+    assert off.get("/me", headers=live("s-dana", "dana@alpha.example")).json()["sign_in_max_age"] is None

@@ -78,7 +78,11 @@ export function authorizeUrl({ tenant, authorizationEndpoint, clientId, scope, r
   const q = new URLSearchParams({ client_id: clientId, response_type: "code", redirect_uri: redirectUri, response_mode: "query",
                                   scope: authorizationEndpoint ? scope : scope + " openid profile",
                                   code_challenge: challenge, code_challenge_method: "S256", state });
-  if (!authorizationEndpoint) return `https://login.microsoftonline.com/${tenant}/oauth2/v2.0/authorize?${q}`;
+  if (!authorizationEndpoint) {
+    // Entra documents `prompt=login` (enter credentials on this request), not `max_age`: with a sign-in age rule, ask for that.
+    if (maxAge) q.set("prompt", "login");
+    return `https://login.microsoftonline.com/${tenant}/oauth2/v2.0/authorize?${q}`;
+  }
   // The site's sign-in age rule: the provider must sign the person in again if their session is older (OpenID Connect Core 3.1.2.1).
   if (maxAge) q.set("max_age", String(maxAge));
   return authorizationEndpoint + (authorizationEndpoint.includes("?") ? "&" : "?") + q;
