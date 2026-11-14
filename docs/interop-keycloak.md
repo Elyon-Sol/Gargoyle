@@ -33,7 +33,7 @@ Without `GARGOYLE_LIVE_KEYCLOAK` the test is skipped, so CI does not run it.
 
 | Date | Provider | Result |
 |---|---|---|
-| 2026-11-14 03:50 UTC | Keycloak 26.4.7 (`quay.io/keycloak/keycloak:26.4`, `start-dev`, loopback http) | 8 passed |
+| 2026-11-14 04:10 UTC | Keycloak 26.4.7 (`quay.io/keycloak/keycloak:26.4`, `start-dev`, loopback http) | 9 passed |
 
 What each test shows, with people and tokens Keycloak made:
 
@@ -47,6 +47,8 @@ What each test shows, with people and tokens Keycloak made:
 | a name reissued | An approver is deleted and the same sign-in name is created for a new person. The new person can neither enrol over the old key nor release under it: `REF_ISSUER_SUBJECT_MISMATCH`. |
 | a key roll | Keycloak is given a new signing key while the service runs. The next token, under a key id the service has never seen, is accepted after one refresh. |
 | sign-in age | With `GARGOYLE_RELEASE_MAX_AUTH_AGE` set, a token from Keycloak's login page (authorization code with PKCE) carries `auth_time` and releases; a password-grant token carries none and is `REF_ISSUER_AUTH_TIME_MISSING`; the same sign-in under a rule shorter than its age is `REF_ISSUER_AUTH_TOO_OLD`. |
+
+| the console's sign-in code | The functions the approval page runs (`approve.js`, under Node), given what the issuer serves at `/approve-config`, build the sign-in request with `max_age`, the person signs in at Keycloak's login page, the code is exchanged at Keycloak's token endpoint with PKCE, and the issuer recognises the person and their approver role from the resulting token. |
 
 Each of six checks (issuer match, discovery issuer match, nested claim
 lookup, same-person comparison, provider key refresh, audience) was
@@ -78,6 +80,12 @@ Three things the self-signed tests had not asked for:
   `GARGOYLE_APPROVER_ROLE`), and `GARGOYLE_CLAIM_ROLES=realm_access.roles`.
 - `GARGOYLE_OIDC_ISSUER=https://<host>/realms/<realm>`, exactly as the
   realm's discovery document spells it.
+- For the approval console: the client is public (no secret), has the
+  standard flow enabled, lists the console's address
+  (`https://<gate>/approve`) under *Valid redirect URIs* and the gate's
+  origin under *Web origins* (the browser exchanges the code at
+  Keycloak's token endpoint, which is a cross-origin request), and
+  `GARGOYLE_OIDC_CLIENT_ID` names it.
 
 ## What this run does not show
 
@@ -85,9 +93,14 @@ Three things the self-signed tests had not asked for:
   service allows for a provider on the same machine only. A provider on
   another host must be https; that path is covered by unit tests, not by
   this run.
-- **The approval console.** Its sign-in is still Entra-only. A Keycloak
-  person can be identified, hold, enrol and release through the API, as
-  here, but not yet in the browser console.
+- **The approval page in a browser.** The page's sign-in functions were
+  run under Node against Keycloak; the page itself, in a browser, with
+  Keycloak's cross-origin rules (*Web origins*) in force, was not. That
+  needs a person at a browser.
+- **Providers whose access tokens are not signed JWTs.** The console
+  sends the access token to the issuer. Keycloak's and Entra's are JWTs
+  the issuer can verify; some providers issue opaque access tokens unless
+  an API audience is configured, and those will be refused.
 - **Other providers.** One product, one version. Okta, Auth0, Google and
   others are expected to work by the same rules and have not been run.
 - **Per-provider claim settings.** The claim settings apply to every

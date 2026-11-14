@@ -493,3 +493,46 @@ def test_a_sign_in_age_setting_that_is_not_a_positive_number_stops_the_service(m
     for bad in ("0", "-5", "ten", "1.5"):
         with pytest.raises(RuntimeError):
             release_max_auth_age_from_env({"GARGOYLE_RELEASE_MAX_AUTH_AGE": bad})
+
+
+# ---- the approval console signs in with the same provider (stage 3b) ---------
+
+def test_the_console_is_told_where_to_sign_in_from_the_providers_own_document():
+    from gargoyle.issuer_service import console_oidc_from_env, providers_from_env
+    docs = site(ISS_A, jwk(key_a, "a-1"))
+    docs[ISS_A + "/.well-known/openid-configuration"].update(authorization_endpoint=ISS_A + "/auth", token_endpoint=ISS_A + "/token")
+    ps, _ = providers_from_env({"GARGOYLE_OIDC_ISSUER": ISS_A}, http=Http(docs))
+    assert console_oidc_from_env({}, ps) is None                                   # no client id: the console offers no provider sign-in
+    cfg = console_oidc_from_env({"GARGOYLE_OIDC_CLIENT_ID": "console"}, ps, max_auth_age=900)
+    assert cfg == {"issuer": ISS_A, "client_id": "console", "scope": "openid profile", "authorization_endpoint": ISS_A + "/auth",
+                   "token_endpoint": ISS_A + "/token", "label": "id.alpha.example", "max_age": 900}
+    cfg = console_oidc_from_env({"GARGOYLE_OIDC_CLIENT_ID": "console", "GARGOYLE_OIDC_SCOPE": "openid gate", "GARGOYLE_OIDC_LABEL": "Alpha SSO"}, ps)
+    assert (cfg["scope"], cfg["label"]) == ("openid gate", "Alpha SSO") and "max_age" not in cfg
+    with pytest.raises(RuntimeError):                                              # a client id and no provider
+        console_oidc_from_env({"GARGOYLE_OIDC_CLIENT_ID": "console"}, [])
+    with pytest.raises(RuntimeError):                                              # a console issuer that is not one of the trusted ones
+        console_oidc_from_env({"GARGOYLE_OIDC_CLIENT_ID": "console", "GARGOYLE_OIDC_CONSOLE_ISSUER": ISS_B}, ps)
+
+
+@pytest.mark.parametrize("endpoints", [
+    {"token_endpoint": ISS_A + "/token"},                                                        # no sign-in page
+    {"authorization_endpoint": ISS_A + "/auth"},                                                 # no token endpoint
+    {"authorization_endpoint": "http://id.alpha.example/auth", "token_endpoint": ISS_A + "/token"},   # a sign-in page over plain http
+    {"authorization_endpoint": ISS_A + "/auth", "token_endpoint": "javascript:alert(1)"},
+])
+def test_the_console_is_never_sent_to_an_endpoint_that_cannot_be_trusted(endpoints):
+    from gargoyle.issuer_service import console_oidc_from_env, providers_from_env
+    docs = site(ISS_A, jwk(key_a, "a-1"))
+    docs[ISS_A + "/.well-known/openid-configuration"].update(endpoints)
+    ps, _ = providers_from_env({"GARGOYLE_OIDC_ISSUER": ISS_A}, http=Http(docs))
+    with pytest.raises(RuntimeError):
+        console_oidc_from_env({"GARGOYLE_OIDC_CLIENT_ID": "console"}, ps)
+
+
+def test_the_console_config_is_public_and_names_no_secret(tmp_path):
+    cfg = {"issuer": ISS_A, "client_id": "console", "scope": "openid profile", "authorization_endpoint": ISS_A + "/auth",
+           "token_endpoint": ISS_A + "/token", "label": "Alpha SSO"}
+    c, _, _ = service(tmp_path, console_oidc=cfg)
+    assert c.get("/approve-config").json() == {"entra": None, "oidc": cfg}
+    plain, _, _ = service(tmp_path / "plain")
+    assert plain.get("/approve-config").json() == {"entra": None}                  # as before when not configured

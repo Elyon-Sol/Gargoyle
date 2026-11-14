@@ -112,14 +112,27 @@ class Lab:
         """Sign in the way a person does in a browser (authorization code
         with PKCE, the provider's own login page), not with the password
         grant: this is the sign-in a console performs."""
-        import hashlib, html, re
-        from urllib.parse import parse_qs, urlsplit
+        import hashlib
+        from urllib.parse import urlencode
         verifier = secrets.token_urlsafe(48)
         challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
-        web = requests.Session()
-        page = web.get(issuer_url(realm) + "/protocol/openid-connect/auth", timeout=20, params={
+        code = self.sign_in_at(realm, username, issuer_url(realm) + "/protocol/openid-connect/auth?" + urlencode({
             "client_id": "gargoyle-cli", "redirect_uri": REDIRECT, "response_type": "code", "scope": "openid profile",
-            "state": secrets.token_urlsafe(8), "code_challenge": challenge, "code_challenge_method": "S256"})
+            "state": secrets.token_urlsafe(8), "code_challenge": challenge, "code_challenge_method": "S256"}))
+        r = requests.post(issuer_url(realm) + "/protocol/openid-connect/token", timeout=20, data={
+            "grant_type": "authorization_code", "client_id": "gargoyle-cli", "code": code, "redirect_uri": REDIRECT, "code_verifier": verifier})
+        assert r.status_code == 200, r.text[:200]
+        return r.json()["access_token"]
+
+    def sign_in_at(self, realm, username, authorize_url):
+        """Open a sign-in address as a browser would, type the person's
+        name and password into the provider's page, and return the code
+        the provider sends back to the redirect address."""
+        import html, re
+        from urllib.parse import parse_qs, urlsplit
+        web = requests.Session()
+        page = web.get(authorize_url, timeout=20)
+        assert page.status_code == 200, (page.status_code, page.text[:200])
         action = html.unescape(re.search(r'<form[^>]*action="([^"]+)"', page.text).group(1))
         # Keycloak marks its session cookies Secure. A browser still returns them to a loopback address over
         # plain http; this client does not unless told to, so they are passed back by hand.
@@ -127,11 +140,7 @@ class Lab:
         back = requests.post(action, data={"username": username, "password": self._passwords[(realm, username)]},
                              headers={"Cookie": cookies}, allow_redirects=False, timeout=20)
         assert back.status_code == 302 and back.headers["Location"].startswith(REDIRECT), (back.status_code, back.text[:200])
-        code = parse_qs(urlsplit(back.headers["Location"]).query)["code"][0]
-        r = requests.post(issuer_url(realm) + "/protocol/openid-connect/token", timeout=20, data={
-            "grant_type": "authorization_code", "client_id": "gargoyle-cli", "code": code, "redirect_uri": REDIRECT, "code_verifier": verifier})
-        assert r.status_code == 200, r.text[:200]
-        return r.json()["access_token"]
+        return parse_qs(urlsplit(back.headers["Location"]).query)["code"][0]
 
     def roll_signing_key(self, realm):
         realm_id = self.admin("GET", "/admin/realms/" + realm).json()["id"]
@@ -305,3 +314,44 @@ def test_the_sign_in_age_rule_with_the_providers_own_statement_of_when(lab, tmp_
     strict.post("/approvers/enroll", json={"public_key_hex": pub_hex(key)}, headers=bearer(signed_in))
     env2 = hold(strict, lab.token(REALM_A, "uma"))
     assert strict.post("/grants", json=grant_for(env2, key, "vic"), headers=bearer(signed_in)).json() == {"accepted": False, "reason": REF_ISSUER_AUTH_TOO_OLD}
+
+
+CONSOLE_JS = r"""
+import { authorizeUrl, exchangeCode, pkceChallenge, randomVerifier } from "%s";
+const cfg = JSON.parse(process.argv[2]);
+if (process.argv[3] === "url") {
+  const verifier = randomVerifier();
+  console.log(JSON.stringify({ verifier, url: authorizeUrl({ ...cfg, challenge: await pkceChallenge(verifier), state: "st-1" }) }));
+} else {
+  console.log(JSON.stringify(await exchangeCode({ ...cfg, code: process.argv[4], verifier: process.argv[5] })));
+}
+"""
+
+
+def test_the_consoles_own_sign_in_code_signs_a_person_in_at_keycloak(lab, tmp_path):
+    """The functions the approval page runs (approve.js, under Node), given
+    what the issuer's /approve-config says, against Keycloak's real login
+    page and token endpoint. The page itself and a browser are not driven."""
+    import shutil, subprocess
+    from pathlib import Path
+    from gargoyle.issuer_service import console_oidc_from_env
+    if shutil.which("node") is None:
+        pytest.skip("node not installed")
+    uid = lab.user(REALM_A, "wes", first="Wes", last="Approver", roles=["Approver"])
+    ps, keys = providers_from_env(settings(REALM_A))
+    conf = console_oidc_from_env({"GARGOYLE_OIDC_CLIENT_ID": "gargoyle-cli"}, ps, max_auth_age=600)
+    c, _, _ = service(tmp_path, REALM_A, release_max_auth_age=600, console_oidc=conf)
+    served = c.get("/approve-config").json()["oidc"]
+    assert served["authorization_endpoint"].startswith(issuer_url(REALM_A)) and served["max_age"] == 600
+    cfg = json.dumps({"clientId": served["client_id"], "scope": served["scope"], "authorizationEndpoint": served["authorization_endpoint"],
+                      "tokenEndpoint": served["token_endpoint"], "maxAge": served["max_age"], "redirectUri": REDIRECT})
+    script = tmp_path / "console.mjs"
+    script.write_text(CONSOLE_JS % (Path(__file__).resolve().parent.parent / "gargoyle" / "static" / "approve.js").as_uri())
+    run = lambda *a: json.loads(subprocess.run(["node", str(script), cfg, *a], capture_output=True, text=True, check=True, timeout=60).stdout)
+    start = run("url")
+    assert "max_age=600" in start["url"]
+    code = lab.sign_in_at(REALM_A, "wes", start["url"])
+    tok = run("code", code, start["verifier"])
+    me = c.get("/me", headers=bearer(tok["access_token"])).json()
+    assert me["principal"] == "wes" and me["subject_id"] == {"iss": issuer_url(REALM_A), "sub": uid} and me["may_approve"] is True
+    assert isinstance(claims_of(tok["access_token"]).get("auth_time"), int)

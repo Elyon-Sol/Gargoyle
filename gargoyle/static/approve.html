@@ -75,7 +75,7 @@
 </header>
 <main>
   <section class="setup" id="entra" style="display:none">
-    <strong>Sign in with Microsoft</strong> to approve as yourself. Your signing key is created in this browser,
+    <strong id="signin-title">Sign in with Microsoft</strong> to approve as yourself. Your signing key is created in this browser,
     cannot be exported, and is enrolled under your account the first time.
     <div style="margin-top:10px"><button id="signin">Sign in with Microsoft</button> <span id="entra-note"></span></div>
   </section>
@@ -130,20 +130,27 @@ function rememberedView(fallback) {
   return fallback;
 }
 
-// ---- Entra path: sign in, hold a browser key, enroll it once ----
+// ---- Sign-in path (Entra ID, or any OpenID Connect provider the issuer names): sign in, hold a browser key, enroll it once ----
 const redirectUri = location.origin + location.pathname;
 async function entraSetup() {
   let cfg = null;
-  try { cfg = (await (await fetch("approve-config")).json()).entra; } catch (err) { /* older issuer: files only */ }
+  try {
+    const conf = await (await fetch("approve-config")).json();
+    // One shape for both: an OpenID Connect provider carries its own endpoints; Entra is addressed by tenant.
+    cfg = conf.oidc ? { clientId: conf.oidc.client_id, scope: conf.oidc.scope, authorizationEndpoint: conf.oidc.authorization_endpoint,
+                        tokenEndpoint: conf.oidc.token_endpoint, maxAge: conf.oidc.max_age, label: conf.oidc.label }
+        : conf.entra ? { tenant: conf.entra.tenant, clientId: conf.entra.client_id, scope: conf.entra.scope, label: "Microsoft" } : null;
+  } catch (err) { /* older issuer: files only */ }
   if (!cfg) return;
   $("entra").style.display = "";
+  $("signin-title").textContent = $("signin").textContent = "Sign in with " + cfg.label;
   const params = new URLSearchParams(location.search);
-  if (params.get("code")) {                               // back from Microsoft with a code
+  if (params.get("code")) {                               // back from the provider with a code
     history.replaceState(null, "", redirectUri);
     const verifier = sessionStorage.getItem("gargoyle-pkce"), expected = sessionStorage.getItem("gargoyle-state");
     if (!verifier || params.get("state") !== expected) { log("sign-in state mismatch; try again"); return; }
     try {
-      const tok = await exchangeCode({ tenant: cfg.tenant, clientId: cfg.client_id, scope: cfg.scope, redirectUri, code: params.get("code"), verifier });
+      const tok = await exchangeCode({ ...cfg, redirectUri, code: params.get("code"), verifier });
       sessionStorage.setItem("gargoyle-token", tok.access_token);
     } catch (err) { log("sign-in failed: " + err.message); return; }
   }
@@ -152,7 +159,7 @@ async function entraSetup() {
   $("signin").addEventListener("click", async () => {
     const verifier = randomVerifier(), st = randomVerifier();
     sessionStorage.setItem("gargoyle-pkce", verifier); sessionStorage.setItem("gargoyle-state", st);
-    location.href = authorizeUrl({ tenant: cfg.tenant, clientId: cfg.client_id, scope: cfg.scope, redirectUri, challenge: await pkceChallenge(verifier), state: st });
+    location.href = authorizeUrl({ ...cfg, redirectUri, challenge: await pkceChallenge(verifier), state: st });
   });
 }
 
@@ -582,6 +589,13 @@ async function approve(card, env) {
       return;
     }
     card.querySelector(".result").innerHTML = res.accepted ? '<span class="ok">approved; the call is running</span>' : `<span class="bad">refused: ${esc(reasonText(res.reason))}</span>`;
+    if (res.reason === "REF_ISSUER_AUTH_TOO_OLD" || res.reason === "REF_ISSUER_AUTH_TIME_MISSING") {
+      // The site wants a recent sign-in: drop this one, so the page offers the sign-in button again; the request stays open.
+      sessionStorage.removeItem("gargoyle-token");
+      card.querySelector(".result").innerHTML += ' <a href="">sign in again</a>';
+      buttons.forEach((b) => b.disabled = false);
+      return;
+    }
     if (res.accepted && state.released !== null) { state.released++; status(); }
     card.dataset.done = "1"; setTimeout(() => { card.remove(); state.seen.delete(env.approval_request_id); }, 8000);
   } catch (err) { card.querySelector(".result").innerHTML = `<span class="bad">${esc(err.message)}</span>`; buttons.forEach((b) => b.disabled = false); }
@@ -593,7 +607,10 @@ function reasonText(code) {
            REF_APPROVAL_APPROVER_NOT_ELIGIBLE: "this request names other approvers",
            REF_ISSUER_SELF_APPROVAL: "you cannot release your own request",
            REF_ISSUER_HOLD_EXPIRED: "the request expired before you decided",
-           REF_ISSUER_NOT_AN_APPROVER: "your sign-in no longer carries the approver role" }[code] || code;
+           REF_ISSUER_NOT_AN_APPROVER: "your sign-in no longer carries the approver role",
+           REF_ISSUER_AUTH_TOO_OLD: "you signed in too long ago for this site; sign in again to approve",
+           REF_ISSUER_AUTH_TIME_MISSING: "your sign-in does not say when you signed in; sign in again to approve",
+           REF_ISSUER_SUBJECT_MISMATCH: "this sign-in name is enrolled to a different person; ask the operator" }[code] || code;
 }
 
 async function decline(card, id) {

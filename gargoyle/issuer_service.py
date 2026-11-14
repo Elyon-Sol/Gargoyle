@@ -67,7 +67,7 @@ from gargoyle.plans import (REF_PLAN_MALFORMED, REF_PLAN_STEP_NOT_PLANNABLE, REF
 from gargoyle.notify import notifier_from_env
 from gargoyle.approvers import (DEFAULT_APPROVER_ROLE, ENV_APPROVER_GROUPS, ENV_APPROVER_ROLE, ENV_APPROVERS_PATH,
                                 ApproverRegistry, RevokedKeyError, may_enroll, valid_public_key_hex)
-from gargoyle.identity import ENTRA_ISSUER, entra_keys, entra_tenant_id, oidc_discovery, oidc_keys, principal_from_token, provider
+from gargoyle.identity import ENTRA_ISSUER, _trusted_url, entra_keys, entra_tenant_id, oidc_discovery, oidc_keys, principal_from_token, provider
 from gargoyle.jws import REF_JWS_KEY_UNKNOWN
 from gargoyle.published_record_source import sign_published_record
 from gargoyle.issuer import DEFAULT_TTL_SECONDS, issue
@@ -87,6 +87,10 @@ ENV_CLAIM_NAME = "GARGOYLE_CLAIM_NAME"            # claims tried in order for th
 ENV_CLAIM_DISPLAY_NAME = "GARGOYLE_CLAIM_DISPLAY_NAME"   # the printed name (default name)
 ENV_CLAIM_ROLES = "GARGOYLE_CLAIM_ROLES"          # default roles
 ENV_CLAIM_GROUPS = "GARGOYLE_CLAIM_GROUPS"        # default groups
+ENV_OIDC_CLIENT_ID = "GARGOYLE_OIDC_CLIENT_ID"    # the public client the approval console signs in with at the OIDC provider
+ENV_OIDC_SCOPE = "GARGOYLE_OIDC_SCOPE"            # default "openid profile"
+ENV_OIDC_CONSOLE_ISSUER = "GARGOYLE_OIDC_CONSOLE_ISSUER"   # which trusted provider the console uses (default: the first)
+ENV_OIDC_LABEL = "GARGOYLE_OIDC_LABEL"            # the name on the console's sign-in button (default: the provider's host name)
 ENV_RELEASE_MAX_AUTH_AGE = "GARGOYLE_RELEASE_MAX_AUTH_AGE"   # seconds: an enrolled approver's sign-in may be at most this old when they release
 ENV_CLAIM_SUBJECT = "GARGOYLE_CLAIM_SUBJECT"      # the permanent id (default sub; oid for a login.microsoftonline.com issuer)
 ENV_APPROVER_KEY_ID = "GARGOYLE_APPROVER_KEY_ID"
@@ -170,6 +174,7 @@ def build_issuer_app(
     allow_self_approval: bool = False,
     providers: Optional[List[Dict[str, Any]]] = None,
     release_max_auth_age: Optional[int] = None,
+    console_oidc: Optional[Dict[str, Any]] = None,
 ) -> FastAPI:
     """`on_hold(envelope, args)` is called once for every new hold (gargoyle.notify
     posts it to a webhook); it is notice, not admission, and its failure
@@ -1042,8 +1047,10 @@ def build_issuer_app(
     @app.get("/approve-config")
     async def approve_config():
         """Public: how the console signs in. `entra` is null when the site
-        uses approver files instead."""
-        return {"entra": console_entra}
+        does not sign approvers in with Entra; `oidc` is present when the
+        console signs in at an OpenID Connect provider (console_oidc_from_env).
+        Client ids and endpoint addresses only: a public client has no secret."""
+        return {"entra": console_entra, **({"oidc": console_oidc} if console_oidc else {})}
 
     @app.get("/approve")
     async def approve_page():
@@ -1136,6 +1143,33 @@ def release_max_auth_age_from_env(environ: Any) -> Optional[int]:
     return int(raw)
 
 
+def console_oidc_from_env(environ: Any, providers: List[Dict[str, Any]], *, max_auth_age: Optional[int] = None) -> Optional[Dict[str, Any]]:
+    """What the approval console needs to sign a person in at one of the
+    trusted OpenID Connect providers (authorization code with PKCE, a
+    public client): the endpoints from that provider's own discovery
+    document, the client id, the scope, a label for the button, and the
+    site's sign-in age so the provider asks for a fresh sign-in. None when
+    no console client is configured. Raises when the provider is not one
+    of the trusted ones or its endpoints are not https."""
+    from urllib.parse import urlsplit
+    client_id = (environ.get(ENV_OIDC_CLIENT_ID) or "").strip()
+    if not client_id:
+        return None
+    if not providers:
+        raise RuntimeError("%s is set but %s names no provider" % (ENV_OIDC_CLIENT_ID, ENV_OIDC_ISSUER))
+    want = (environ.get(ENV_OIDC_CONSOLE_ISSUER) or "").strip() or providers[0]["issuer"]
+    p = next((p for p in providers if p["issuer"] == want), None)
+    if p is None:
+        raise RuntimeError("%s is not one of the providers in %s" % (want, ENV_OIDC_ISSUER))
+    for name in ("authorization_endpoint", "token_endpoint"):
+        if not _trusted_url(p.get(name)):
+            raise RuntimeError("discovery for %s gives no https %s: %r" % (want, name, p.get(name)))
+    return {"issuer": want, "client_id": client_id, "scope": (environ.get(ENV_OIDC_SCOPE) or "").strip() or "openid profile",
+            "authorization_endpoint": p["authorization_endpoint"], "token_endpoint": p["token_endpoint"],
+            "label": (environ.get(ENV_OIDC_LABEL) or "").strip() or urlsplit(want).hostname,
+            **({"max_age": max_auth_age} if max_auth_age else {})}
+
+
 def providers_from_env(environ: Any, *, http: Any = None):
     """The OpenID Connect providers named in GARGOYLE_OIDC_ISSUER, each
     read from its own discovery document: ([provider, ...], {kid: key}).
@@ -1162,6 +1196,8 @@ def providers_from_env(environ: Any, *, http: Any = None):
                             roles_claim=environ.get(ENV_CLAIM_ROLES) or "roles",
                             groups_claim=environ.get(ENV_CLAIM_GROUPS) or "groups", subject_claim=subject,
                             refresh=(lambda uri=doc["jwks_uri"]: oidc_keys(uri, http=http))))
+        # For the console (console_oidc_from_env); not used in trusting a token.
+        out[-1].update(authorization_endpoint=doc.get("authorization_endpoint"), token_endpoint=doc.get("token_endpoint"))
         keys.update(fresh)
     return out, keys
 
@@ -1194,6 +1230,9 @@ def app_from_env() -> FastAPI:
         # A key id trusted two ways could not say which rule its tokens are held to.
         raise RuntimeError("key id %s is published by an OIDC provider and also trusted through %s or %s"
                            % (", ".join(sorted(clash)), ENV_ENTRA_TENANT, ENV_IDP_KEY_ID))
+    console_oidc = console_oidc_from_env(os.environ, oidc_providers, max_auth_age=release_max_auth_age_from_env(os.environ))
+    if console_oidc and tenant and os.environ.get(ENV_CONSOLE_CLIENT_ID):
+        raise RuntimeError("the console signs in one way: set %s or %s, not both" % (ENV_OIDC_CLIENT_ID, ENV_CONSOLE_CLIENT_ID))
     start_fields = {"providers": [p["issuer"] for p in oidc_providers] + ([ENTRA_ISSUER.format(tenant=tenant_id)] if tenant else []),
                     "software_version": _software_version()}
     rules_path = os.environ.get(ENV_RULES_PATH)
@@ -1225,6 +1264,7 @@ def app_from_env() -> FastAPI:
         # (the approver's, until approvers log in with Entra too).
         providers=oidc_providers,
         release_max_auth_age=release_max_auth_age_from_env(os.environ),
+        console_oidc=console_oidc,
         idp_public_keys={**tenant_keys, **oidc_key_map,
                          **({os.environ[ENV_IDP_KEY_ID]: Ed25519PublicKey.from_public_bytes(bytes.fromhex(os.environ[ENV_IDP_PUBLIC_KEY_HEX]))}
                             if pinned_idp else {})},
