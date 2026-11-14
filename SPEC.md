@@ -470,9 +470,20 @@ receipt anyway; accepting the grant would only tell the approver that
 something ran); and a grant whose approver key id is the hold's own
 principal, or the party it acts for, is `REF_ISSUER_SELF_APPROVAL`
 unless the operator allows self-approval (`GARGOYLE_ALLOW_SELF_APPROVAL`),
-since the point of a hold is a second person. The enrollment record
-keeps the directory's immutable object id and tenant id beside the UPN
-when the token carried them. An approver may revoke their own key
+since the point of a hold is a second person; an enrolled approver is
+also compared with the requester by permanent id, so a second sign-in
+name for the same person does not make a second person. The enrollment
+record keeps the person's permanent id (`subject_id`: the identity
+provider's issuer and the token's subject, section 14) beside the
+readable name, and the directory's immutable object id and tenant id
+when the token carried them. A sign-in name can be handed to someone
+else; the key stays with the first person: an enrollment, or a grant
+under an enrolled key, from a token whose readable name matches the
+record and whose permanent id does not is `REF_ISSUER_SUBJECT_MISMATCH`
+(with an `enroll_refused` or `grant_refused` entry), until the operator
+revokes the old binding. A record from before ids were kept is compared
+by object id, and one with neither learns its person at the first
+release under it. An approver may revoke their own key
 (`POST /approvers/revoke`); the operator revokes any approver on the
 service's host. A revoked key leaves the published map at once, so new
 grants under it are refused by the service and by every consumer that
@@ -828,6 +839,13 @@ five as frozen; its version promises, from that release on, are:
 - a refusal or accept code is never renamed or reused; new codes may be
   added in a minor release.
 
+**Since the freeze.** `gargoyle-witness/3` (2026-11-13) is a new record
+version under the second rule above: it only adds members (section
+15.1), keeps every member, the hash region and the signature region of
+`gargoyle-witness/2`, and its verifier accepts versions 1, 2 and 3 in one
+file. `gargoyle-witness/2` stays frozen as it was. The receipt, the grant,
+the execution receipt, the plan and the evidence log are unchanged.
+
 The reference implementation and its TypeScript port recompute every
 vector of section 11 in CI, so a change that breaks the freeze fails the
 build before it ships.
@@ -957,6 +975,33 @@ under the directory's keys must carry that tenant's id in `tid` (and in
 `REF_IDENTITY_WRONG_TENANT`. Tokens under a key the operator pinned name
 no tenant and are not held to one. An audience is required whenever a
 directory is trusted; a service configured without one refuses to start.
+
+Any OpenID Connect provider may be trusted the same way. The service is
+given the provider's issuer URL and reads its discovery document
+(OpenID Connect Discovery 1.0, section 4) and key set, accepting the
+document only over https (plain http for a provider on the same
+machine), only when its `issuer` is exactly the configured URL, and only
+with a `jwks_uri` under the same transport rule. Each provider owns the
+key ids it publishes, and a key id published by two trusted parties
+stops the service at startup. A token signed by a provider's key must
+carry that provider's issuer in `iss`, compared as a string with no
+normalization; otherwise it is `REF_IDENTITY_WRONG_ISSUER`, so one
+provider's key cannot speak for another provider. It must also carry the
+provider's permanent subject claim (`sub`; `oid` for Entra ID, whose
+`sub` differs per application), or it is `REF_IDENTITY_NO_SUBJECT`. A key
+refresh adopts a provider's answer for that provider's key ids and for
+ids nobody holds, and never replaces another party's key.
+
+Every authenticated party then has two names. The readable name (the
+first present of the configured name claims; by default
+`preferred_username`, `upn`, `sub`, and never `email` unless the operator
+names it) is what receipts, rules and approver key ids carry, unchanged.
+The permanent id is the pair `{"iss", "sub"}`: the provider's issuer and
+subject; for a tenant token `https://login.microsoftonline.com/<tenant
+id>/v2.0` and `oid`; for a pinned key `key:<kid>` and the subject. With
+delegation the actor and the party acted for each have one. The
+permanent id is recorded in the witness (section 15.1) and the
+enrollment record (section 12); it is in no receipt or grant.
 Receipts stay EdDSA only.
 
 ## 15. The evidence log
@@ -1051,7 +1096,7 @@ with the issuer key, so a client can neither forge nor edit it.
 
 ```
 entry = {
-  "witness_version": "gargoyle-witness/2",
+  "witness_version": "gargoyle-witness/3",
   "seq": n, "prev_sha256": ..., "at": ...,
   "event": "started" | "issued" | "refused" | "granted" | "grant_refused" | "declined" | "plan"
          | "plan_granted" | "enrolled" | "enroll_refused" | "revoked" | "sidedoors",
@@ -1069,9 +1114,31 @@ entry = {
 }
 ```
 
-`gargoyle-witness/1` entries carry no `policy` member; a verifier accepts
-both versions in one file, each entry under the version it names, as for
-the evidence log.
+`gargoyle-witness/1` entries carry no `policy` member. `gargoyle-witness/3`
+adds, and changes nothing else (`<id>` is a permanent id `{"iss", "sub"}`,
+section 14):
+
+- `started`: `providers` (the issuer URLs trusted) and `software_version`;
+- `issued`, `refused`, `plan`: `principal_id` (`<id>`), and
+  `on_behalf_of_id` when the token delegates;
+- `granted`: `meaning` (`"approval"`); for an enrolled approver
+  `approver_id` (`<id>`) and `approver_name` (the printed name, when the
+  token carries one); for a configured key `posted_by` and `posted_by_id`,
+  the party that carried the grant in, which is not a statement of who
+  signed; `auth_time` and `auth_age_seconds` when the token carries an
+  integer `auth_time`;
+- `declined`: `by_id`, `by_name`, and `meaning`: `"rejection"` when an
+  approver declines another party's hold, `"withdrawal"` when the party
+  whose call it is cancels it;
+- `grant_refused`: `posted_by`, `posted_by_id`;
+- `enrolled`, `enroll_refused`: `approver_id` (and `approver_name` on
+  `enrolled`); `revoked` by the approver: `by_id`;
+- every entry that answers a hold (`granted`, `grant_refused`,
+  `declined`): `requested_by_id`, and `requested_for_id` when the held
+  call was delegated.
+
+A verifier accepts all three versions in one file, each entry under the
+version it names, as for the evidence log.
 
 Reconciliation (`gargoyle audit --witness`) verifies both chains and
 compares them by `decision_id`. Findings, never resolved silently:
