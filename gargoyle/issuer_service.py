@@ -416,11 +416,22 @@ def build_issuer_app(
         return True
 
     def _signed_in(who: Dict[str, Any]) -> Dict[str, Any]:
-        """When the person last signed in, when their token says (`auth_time`), and how long ago that was."""
+        """When the person last signed in, when their token says (`auth_time`),
+        and how long ago that was by this service's clock. The age is not
+        tidied: a negative one says the provider's clock is ahead of ours,
+        which a reader of the record needs to see."""
         at = who["claims"].get("auth_time")
         if not isinstance(at, int) or isinstance(at, bool):
             return {}
-        return {"auth_time": at, "auth_age_seconds": max(0, int(now().timestamp()) - at)}
+        return {"auth_time": at, "auth_age_seconds": int(now().timestamp()) - at}
+
+    def _age_rule(approver_key_id: Any) -> Dict[str, Any]:
+        """The sign-in age limit, on an entry about a release it applies to:
+        one under an enrolled approver's key, while a limit is set."""
+        if (release_max_auth_age is None or not isinstance(approver_key_id, str)
+                or approver_key_id in static_approvers or approver_key_id not in registry):
+            return {}
+        return {"auth_max_age_seconds": release_max_auth_age}
 
     def authenticate(authorization: Optional[str]) -> Dict[str, Any]:
         if not authorization or not authorization.startswith("Bearer "):
@@ -750,7 +761,7 @@ def build_issuer_app(
             # unknown key trying to release a hold belongs in the witness.
             kid = grant.get("approver_key_id")
             event("grant_refused", approval_request_id=arid, reason=reason, **({"approver": kid} if isinstance(kid, str) else {}),
-                  posted_by=who["principal"], posted_by_id=who["subject_id"], **_signed_in(who), **_about(arid))
+                  posted_by=who["principal"], posted_by_id=who["subject_id"], **_signed_in(who), **_age_rule(kid), **_about(arid))
             return {"accepted": False, "reason": reason}
         if datetime.fromisoformat((env or plan)["not_after"]) <= now():
             # An expired hold can never be released: the executor refuses the
@@ -830,6 +841,7 @@ def build_issuer_app(
             # A configured key's grant may be carried in by any signed-in party: say who carried it, not who signed.
             signer = {"posted_by": who["principal"], "posted_by_id": who["subject_id"]}
         event("granted", approval_request_id=arid, approver=grant["approver_key_id"], **signer, meaning="approval", **_signed_in(who),
+              **_age_rule(grant["approver_key_id"]),
               collected=len(have), required=terms["required"],
               hold_kind="plan" if plan else "receipt", **({"roles": sorted(roles_held)} if terms.get("roles") else {}), **_about(arid))
         return {"accepted": True, "reason": g["reason"], "collected": len(have), "required": terms["required"],
@@ -868,7 +880,7 @@ def build_issuer_app(
         app.state.grants.pop(arid, None)
         app.state.declined.add(arid)
         event("declined", approval_request_id=arid, by=who["principal"], by_id=who["subject_id"],
-              **({"by_name": who["name"]} if who.get("name") else {}), meaning="rejection" if rejection else "withdrawal",
+              **({"by_name": who["name"]} if who.get("name") else {}), meaning="rejection" if rejection else "withdrawal", **_signed_in(who),
               **({"why": why} if why else {}), **about)
         return {"declined": True, "reason": None}
 
@@ -1135,6 +1147,14 @@ def _software_version() -> str:
         return "unknown"
 
 
+def witness_start_fields(issuers: List[str], max_auth_age: Optional[int]) -> Dict[str, Any]:
+    """What the witness's `started` entry says the service ran under: the
+    identity providers trusted, the software version, and the sign-in age
+    limit when one is set."""
+    return {"providers": list(issuers), "software_version": _software_version(),
+            **({"auth_max_age_seconds": max_auth_age} if max_auth_age else {})}
+
+
 def release_max_auth_age_from_env(environ: Any) -> Optional[int]:
     """GARGOYLE_RELEASE_MAX_AUTH_AGE as whole seconds, or None when unset.
     Anything but a positive whole number stops the service: a rule the
@@ -1237,8 +1257,8 @@ def app_from_env() -> FastAPI:
     console_oidc = console_oidc_from_env(os.environ, oidc_providers, max_auth_age=release_max_auth_age_from_env(os.environ))
     if console_oidc and tenant and os.environ.get(ENV_CONSOLE_CLIENT_ID):
         raise RuntimeError("the console signs in one way: set %s or %s, not both" % (ENV_OIDC_CLIENT_ID, ENV_CONSOLE_CLIENT_ID))
-    start_fields = {"providers": [p["issuer"] for p in oidc_providers] + ([ENTRA_ISSUER.format(tenant=tenant_id)] if tenant else []),
-                    "software_version": _software_version()}
+    start_fields = witness_start_fields([p["issuer"] for p in oidc_providers] + ([ENTRA_ISSUER.format(tenant=tenant_id)] if tenant else []),
+                                        release_max_auth_age_from_env(os.environ))
     rules_path = os.environ.get(ENV_RULES_PATH)
     if rules_path:
         from gargoyle.rules import RulesPolicy

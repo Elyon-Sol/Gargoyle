@@ -33,7 +33,7 @@ Without `GARGOYLE_LIVE_KEYCLOAK` the test is skipped, so CI does not run it.
 
 | Date | Provider | Result |
 |---|---|---|
-| 2026-11-14 04:10 UTC | Keycloak 26.4.7 (`quay.io/keycloak/keycloak:26.4`, `start-dev`, loopback http) | 9 passed |
+| 2026-11-14 03:55 UTC | Keycloak 26.4.7 (`quay.io/keycloak/keycloak:26.4`, `start-dev`, loopback http), on the code that writes `gargoyle-witness/4` | 9 passed |
 
 What each test shows, with people and tokens Keycloak made:
 

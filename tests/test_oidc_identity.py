@@ -215,11 +215,11 @@ def test_a_token_from_the_wrong_issuer_gets_nothing_and_leaves_no_receipt(tmp_pa
     assert not events(witness, "issued")
 
 
-def test_the_witness_is_version_3_and_names_who_asked_by_permanent_id(tmp_path):
+def test_the_witness_names_who_asked_by_permanent_id(tmp_path):
     c, witness, _ = service(tmp_path)
     hold(c, live("s-sam", "sam@alpha.example"))
     started, issued = events(witness, "started")[0], events(witness, "issued")[0]
-    assert started["witness_version"] == WITNESS_VERSION == "gargoyle-witness/3"
+    assert started["witness_version"] == WITNESS_VERSION == "gargoyle-witness/4"
     assert started["providers"] == [ISS_A, ISS_B] and started["software_version"] == "test"
     assert issued["principal"] == "sam@alpha.example" and issued["principal_id"] == {"iss": ISS_A, "sub": "s-sam"}
     assert verify_witness(witness.entries, issuer_public_keys={"issuer-1": issuer_key.public_key()})["accepted"]
@@ -303,16 +303,16 @@ def test_a_key_roll_is_adopted_for_its_own_provider_only(tmp_path):
     assert c.post("/issue", json=body, headers=live("s-1", "sam", key=key_b, kid="b-1", iss=ISS_B)).json()["issued"] is True
 
 
-def test_earlier_witness_versions_still_verify_beside_version_3(tmp_path, monkeypatch):
+def test_earlier_witness_versions_still_verify_beside_the_current_one(tmp_path, monkeypatch):
     import gargoyle.witness as wmod
     path = str(tmp_path / "w.jsonl")
-    for v in ("gargoyle-witness/1", "gargoyle-witness/2", "gargoyle-witness/3"):
+    for v in ("gargoyle-witness/1", "gargoyle-witness/2", "gargoyle-witness/3", "gargoyle-witness/4"):
         monkeypatch.setattr(wmod, "WITNESS_VERSION", v)
         WitnessLog(path, issuer_key, "issuer-1").record("issued", principal="p", tool="t")
     entries = wmod.read_witness(path)
-    assert [e["witness_version"] for e in entries] == ["gargoyle-witness/1"] * 2 + ["gargoyle-witness/2"] * 2 + ["gargoyle-witness/3"] * 2
+    assert [e["witness_version"] for e in entries] == ["gargoyle-witness/1"] * 2 + ["gargoyle-witness/2"] * 2 + ["gargoyle-witness/3"] * 2 + ["gargoyle-witness/4"] * 2
     assert verify_witness(entries, issuer_public_keys={"issuer-1": issuer_key.public_key()})["accepted"]
-    entries[-1] = {**entries[-1], "witness_version": "gargoyle-witness/4"}
+    entries[-1] = {**entries[-1], "witness_version": "gargoyle-witness/5"}
     assert not verify_witness(entries, issuer_public_keys={"issuer-1": issuer_key.public_key()})["accepted"]
 
 
@@ -551,3 +551,63 @@ def test_me_says_when_the_person_signed_in_and_what_the_site_requires(tmp_path):
     assert c.get("/me", headers=live("s-dana", "dana@alpha.example", auth_time="soon")).json()["signed_in_at"] is None
     off, _, _ = service(tmp_path / "off")
     assert off.get("/me", headers=live("s-dana", "dana@alpha.example")).json()["sign_in_max_age"] is None
+
+
+# ---- gargoyle-witness/4: the evidence for the sign-in age rule ----------------
+
+def test_a_sign_in_ahead_of_the_clock_is_recorded_as_ahead_not_as_fresh(tmp_path):
+    from gargoyle.issuer_service import REF_ISSUER_AUTH_TIME_MISSING
+    ahead = int(datetime.now(timezone.utc).timestamp()) + 3600
+    dana = Ed25519PrivateKey.generate()
+    as_dana = live("s-dana", "dana@alpha.example", roles=["Approver"], auth_time=ahead)
+    # Under a rule it is refused, and the entry shows a negative age: evidence of a clock problem, not of a fresh sign-in.
+    c, witness, _ = service(tmp_path, release_max_auth_age=300)
+    c.post("/approvers/enroll", json={"public_key_hex": pub_hex(dana)}, headers=as_dana)
+    env = hold(c, live("s-sam", "sam@alpha.example"))
+    assert c.post("/grants", json=grant_for(env, dana, "dana@alpha.example"), headers=as_dana).json()["reason"] == REF_ISSUER_AUTH_TIME_MISSING
+    r = events(witness, "grant_refused")[0]
+    assert r["auth_time"] == ahead and -3600 <= r["auth_age_seconds"] < -3590
+    # With no rule it is accepted, and still recorded as it is.
+    off, w2, _ = service(tmp_path / "off")
+    off.post("/approvers/enroll", json={"public_key_hex": pub_hex(dana)}, headers=as_dana)
+    env = hold(off, live("s-sam", "sam@alpha.example"))
+    assert off.post("/grants", json=grant_for(env, dana, "dana@alpha.example"), headers=as_dana).json()["accepted"] is True
+    assert events(w2, "granted")[0]["auth_age_seconds"] < -3590 and "auth_max_age_seconds" not in events(w2, "granted")[0]
+
+
+def test_the_limit_in_force_is_on_the_entries_it_was_applied_to_and_no_others(tmp_path):
+    filekey, dana = Ed25519PrivateKey.generate(), Ed25519PrivateKey.generate()
+    c, witness, _ = service(tmp_path, release_max_auth_age=300, approver_public_keys={"approver-file": filekey.public_key()})
+    t = int(datetime.now(timezone.utc).timestamp())
+    as_dana = lambda at: live("s-dana", "dana@alpha.example", roles=["Approver"], auth_time=at)
+    c.post("/approvers/enroll", json={"public_key_hex": pub_hex(dana)}, headers=as_dana(t))
+    env = hold(c, live("s-sam", "sam@alpha.example"))
+    c.post("/grants", json=grant_for(env, dana, "dana@alpha.example"), headers=as_dana(t - 4000))        # refused: too old
+    c.post("/grants", json=grant_for(env, dana, "dana@alpha.example"), headers=as_dana(t - 10))          # released
+    env2 = hold(c, live("s-sam", "sam@alpha.example"))
+    c.post("/grants", json=grant_for(env2, Ed25519PrivateKey.generate(), "nobody@alpha.example"), headers=as_dana(t))   # refused: unknown key
+    c.post("/grants", json=grant_for(env2, filekey, "approver-file"), headers=live("s-console", "console"))             # a configured key
+    refused_old, refused_unknown = events(witness, "grant_refused")
+    by_person, by_file = events(witness, "granted")
+    assert refused_old["auth_max_age_seconds"] == 300 and by_person["auth_max_age_seconds"] == 300
+    # The rule was not what decided these two; they do not claim it.
+    assert "auth_max_age_seconds" not in refused_unknown and "auth_max_age_seconds" not in by_file
+
+
+def test_a_decline_records_when_the_person_signed_in(tmp_path):
+    c, witness, _ = service(tmp_path)
+    at = int(datetime.now(timezone.utc).timestamp()) - 45
+    env = hold(c, live("s-sam", "sam@alpha.example"))
+    c.post("/decline", json={"approval_request_id": env["approval_request_id"]}, headers=live("s-dana", "dana@alpha.example", roles=["Approver"], auth_time=at))
+    d = events(witness, "declined")[0]
+    assert d["auth_time"] == at and 45 <= d["auth_age_seconds"] < 55
+    env = hold(c, live("s-sam", "sam@alpha.example"))
+    c.post("/decline", json={"approval_request_id": env["approval_request_id"]}, headers=live("s-dana", "dana@alpha.example", roles=["Approver"]))
+    assert "auth_time" not in events(witness, "declined")[1]
+
+
+def test_the_start_entry_says_which_sign_in_age_rule_the_service_ran_under(tmp_path):
+    from gargoyle.issuer_service import witness_start_fields
+    assert witness_start_fields([ISS_A], None) == {"providers": [ISS_A], "software_version": witness_start_fields([], None)["software_version"]}
+    w = WitnessLog(str(tmp_path / "w.jsonl"), issuer_key, "issuer-1", start_fields=witness_start_fields([ISS_A, ISS_B], 900))
+    assert w.entries[0]["auth_max_age_seconds"] == 900 and w.entries[0]["providers"] == [ISS_A, ISS_B]

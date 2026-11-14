@@ -13,7 +13,7 @@ held call honored without a grant the issuer saw is a bypass, a receipt
 issued with no evidence at all is a gap.
 
     entry = {
-      "witness_version": "gargoyle-witness/3",
+      "witness_version": "gargoyle-witness/4",
       "seq": n, "prev_sha256": ..., "at": ...,
       "event": "issued" | "refused" | "granted" | "declined" | "plan" | "plan_granted",
       <fields per event>,
@@ -34,9 +34,12 @@ from gargoyle.envelope import canonical_json
 # 2 adds `policy` (the pin) to issued, refused and plan entries. 3 adds who, by permanent id: `principal_id` and
 # `on_behalf_of_id` on issued, refused and plan; `approver_id`, `approver_name`, `meaning` (and `auth_time` when the
 # token carries one) on granted; `by_id`, `by_name`, `meaning` on declined; ids on the enrolment and refusal entries;
-# `providers` and `software_version` on started. Each version only adds members (SPEC section 12).
-WITNESS_VERSION = "gargoyle-witness/3"
-WITNESS_VERSIONS = ("gargoyle-witness/1", "gargoyle-witness/2", "gargoyle-witness/3")
+# `providers` and `software_version` on started. 4 is the evidence for the sign-in age rule: `auth_time` and
+# `auth_age_seconds` also on grant_refused and declined, the age signed (negative when the provider's clock is ahead;
+# version 3 recorded such an age as 0); `auth_max_age_seconds` on the granted and grant_refused entries the rule was
+# applied to, and on started. Each version only adds members (SPEC section 12).
+WITNESS_VERSION = "gargoyle-witness/4"
+WITNESS_VERSIONS = ("gargoyle-witness/1", "gargoyle-witness/2", "gargoyle-witness/3", "gargoyle-witness/4")
 GENESIS = "0" * 64
 _HASH_EXCLUDED = ("entry_sha256", "issuer_key_id", "issuer_signature")
 

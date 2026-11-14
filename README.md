@@ -29,9 +29,10 @@ by whom, and what changed.
 Release candidate `1.0.0rc2` on PyPI as `gargoyle-receipts`. Wire format
 `gargoyle/3`, execution receipt `gargoyle-execution/1`, plan
 `gargoyle-plan/1`, evidence log `gargoyle-evidence/4`, witness
-`gargoyle-witness/3` (`1.0.0rc2` writes `gargoyle-witness/2`; version 3
-only adds members, the permanent id of each person beside the readable
-name); all five are specified in [SPEC.md](SPEC.md) and
+`gargoyle-witness/4` (`1.0.0rc2` writes `gargoyle-witness/2`; versions 3
+and 4 only add members: the permanent id of each person beside the
+readable name, and the evidence for the sign-in age rule); all five are
+specified in [SPEC.md](SPEC.md) and
 frozen as of 2026-11-06 (SPEC.md section 12): a change to any of them is a
 new format name, and verifiers keep verifying the old one. The freeze is a
 statement about the formats; the software is still one author's, unreviewed

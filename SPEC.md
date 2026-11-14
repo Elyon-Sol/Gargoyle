@@ -847,11 +847,14 @@ five as frozen; its version promises, from that release on, are:
 - a refusal or accept code is never renamed or reused; new codes may be
   added in a minor release.
 
-**Since the freeze.** `gargoyle-witness/3` (2026-11-13) is a new record
-version under the second rule above: it only adds members (section
-15.1), keeps every member, the hash region and the signature region of
-`gargoyle-witness/2`, and its verifier accepts versions 1, 2 and 3 in one
-file. `gargoyle-witness/2` stays frozen as it was. The receipt, the grant,
+**Since the freeze.** `gargoyle-witness/3` (2026-11-13) and
+`gargoyle-witness/4` (2026-11-14) are new record versions under the
+second rule above: each only adds members (section 15.1), keeps every
+member, the hash region and the signature region of the version before,
+and the verifier accepts versions 1 to 4 in one file. Each earlier
+version stays as it was named: version 4 exists because the evidence
+for the sign-in age rule was wanted a day after version 3 was named, and
+a named version is not added to. The receipt, the grant,
 the execution receipt, the plan and the evidence log are unchanged.
 
 The reference implementation and its TypeScript port recompute every
@@ -1110,7 +1113,7 @@ with the issuer key, so a client can neither forge nor edit it.
 
 ```
 entry = {
-  "witness_version": "gargoyle-witness/3",
+  "witness_version": "gargoyle-witness/4",
   "seq": n, "prev_sha256": ..., "at": ...,
   "event": "started" | "issued" | "refused" | "granted" | "grant_refused" | "declined" | "plan"
          | "plan_granted" | "enrolled" | "enroll_refused" | "revoked" | "sidedoors",
@@ -1144,16 +1147,29 @@ section 14):
 - `declined`: `by_id`, `by_name`, and `meaning`: `"rejection"` when an
   approver declines another party's hold, `"withdrawal"` when the party
   whose call it is cancels it;
-- `grant_refused`: `posted_by`, `posted_by_id`, and `auth_time` and
-  `auth_age_seconds` as on `granted` (added 2026-11-14, before any
-  release wrote version 3 other than the reference deployment);
+- `grant_refused`: `posted_by`, `posted_by_id`;
 - `enrolled`, `enroll_refused`: `approver_id` (and `approver_name` on
   `enrolled`); `revoked` by the approver: `by_id`;
 - every entry that answers a hold (`granted`, `grant_refused`,
   `declined`): `requested_by_id`, and `requested_for_id` when the held
   call was delegated.
 
-A verifier accepts all three versions in one file, each entry under the
+`gargoyle-witness/4` adds the evidence for the sign-in age rule of
+section 12, and changes nothing else:
+
+- `grant_refused` and `declined`: `auth_time` and `auth_age_seconds`,
+  when the token carries an integer `auth_time`, as `granted` has had
+  since version 3;
+- `auth_age_seconds`, wherever it appears, is the service's clock minus
+  `auth_time` as it is, so a sign-in time ahead of the service's clock
+  gives a negative age (a version 3 entry records such an age as 0);
+- `granted` and `grant_refused`: `auth_max_age_seconds`, the limit in
+  force, on entries about a release under an enrolled approver's key
+  while a limit is set, and on no others, so an entry never claims a
+  rule that was not applied to it;
+- `started`: `auth_max_age_seconds` when a limit is set.
+
+A verifier accepts all four versions in one file, each entry under the
 version it names, as for the evidence log.
 
 Reconciliation (`gargoyle audit --witness`) verifies both chains and
