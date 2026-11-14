@@ -483,7 +483,15 @@ record and whose permanent id does not is `REF_ISSUER_SUBJECT_MISMATCH`
 (with an `enroll_refused` or `grant_refused` entry), until the operator
 revokes the old binding. A record from before ids were kept is compared
 by object id, and one with neither learns its person at the first
-release under it. An approver may revoke their own key
+release under it. Where the operator sets a sign-in age
+(`GARGOYLE_RELEASE_MAX_AUTH_AGE`, seconds), a grant under an enrolled
+key is accepted only from a token whose `auth_time` (OpenID Connect Core,
+section 2: when the person authenticated) is an integer no further than
+60 seconds ahead of the service's clock, else
+`REF_ISSUER_AUTH_TIME_MISSING`, and no older than the setting, else
+`REF_ISSUER_AUTH_TOO_OLD`: the release is then the act of a person who
+signed in recently, not of whoever holds a token from this morning. A
+configured (static) key is no person's sign-in and is not held to it. An approver may revoke their own key
 (`POST /approvers/revoke`); the operator revokes any approver on the
 service's host. A revoked key leaves the published map at once, so new
 grants under it are refused by the service and by every consumer that
@@ -990,7 +998,13 @@ provider's key cannot speak for another provider. It must also carry the
 provider's permanent subject claim (`sub`; `oid` for Entra ID, whose
 `sub` differs per application), or it is `REF_IDENTITY_NO_SUBJECT`. A key
 refresh adopts a provider's answer for that provider's key ids and for
-ids nobody holds, and never replaces another party's key.
+ids nobody holds, and never replaces another party's key. A key the
+provider marks for encryption (`"use": "enc"`) is not loaded. A claim
+setting names a claim or, with dots, a path into nested objects
+(`realm_access.roles`); a claim whose own name is the whole setting
+matches first, and a path that does not lead through objects yields
+nothing. A run of these rules against Keycloak is recorded in
+`docs/interop-keycloak.md`.
 
 Every authenticated party then has two names. The readable name (the
 first present of the configured name claims; by default
@@ -1130,7 +1144,9 @@ section 14):
 - `declined`: `by_id`, `by_name`, and `meaning`: `"rejection"` when an
   approver declines another party's hold, `"withdrawal"` when the party
   whose call it is cancels it;
-- `grant_refused`: `posted_by`, `posted_by_id`;
+- `grant_refused`: `posted_by`, `posted_by_id`, and `auth_time` and
+  `auth_age_seconds` as on `granted` (added 2026-11-14, before any
+  release wrote version 3 other than the reference deployment);
 - `enrolled`, `enroll_refused`: `approver_id` (and `approver_name` on
   `enrolled`); `revoked` by the approver: `by_id`;
 - every entry that answers a hold (`granted`, `grant_refused`,

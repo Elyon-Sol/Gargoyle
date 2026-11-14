@@ -87,6 +87,7 @@ ENV_CLAIM_NAME = "GARGOYLE_CLAIM_NAME"            # claims tried in order for th
 ENV_CLAIM_DISPLAY_NAME = "GARGOYLE_CLAIM_DISPLAY_NAME"   # the printed name (default name)
 ENV_CLAIM_ROLES = "GARGOYLE_CLAIM_ROLES"          # default roles
 ENV_CLAIM_GROUPS = "GARGOYLE_CLAIM_GROUPS"        # default groups
+ENV_RELEASE_MAX_AUTH_AGE = "GARGOYLE_RELEASE_MAX_AUTH_AGE"   # seconds: an enrolled approver's sign-in may be at most this old when they release
 ENV_CLAIM_SUBJECT = "GARGOYLE_CLAIM_SUBJECT"      # the permanent id (default sub; oid for a login.microsoftonline.com issuer)
 ENV_APPROVER_KEY_ID = "GARGOYLE_APPROVER_KEY_ID"
 ENV_APPROVER_PUBLIC_KEY_HEX = "GARGOYLE_APPROVER_PUBLIC_KEY_HEX"
@@ -115,6 +116,9 @@ REF_ISSUER_KEY_ENROLLED = "REF_ISSUER_KEY_ENROLLED"          # another key is en
 REF_ISSUER_HOLD_EXPIRED = "REF_ISSUER_HOLD_EXPIRED"          # the hold's receipt or plan expired; nothing can release it now
 REF_ISSUER_SELF_APPROVAL = "REF_ISSUER_SELF_APPROVAL"        # the approver is the hold's requester (or the party acted for)
 REF_ISSUER_SUBJECT_MISMATCH = "REF_ISSUER_SUBJECT_MISMATCH"  # the readable name is enrolled to a different person (another issuer or subject)
+REF_ISSUER_AUTH_TIME_MISSING = "REF_ISSUER_AUTH_TIME_MISSING"  # a sign-in age rule is set and the token does not say when the person signed in
+REF_ISSUER_AUTH_TOO_OLD = "REF_ISSUER_AUTH_TOO_OLD"            # the person signed in longer ago than the rule allows; sign in again
+AUTH_TIME_SKEW_SECONDS = 60                                    # how far ahead of this service's clock a sign-in time may be
 REF_ISSUER_STATE_TEXT_MISMATCH = "REF_ISSUER_STATE_TEXT_MISMATCH"  # the state text is not the bytes the state hash names
 
 
@@ -165,6 +169,7 @@ def build_issuer_app(
     idp_key_refresh: Optional[Callable[[], Dict[str, Any]]] = None,
     allow_self_approval: bool = False,
     providers: Optional[List[Dict[str, Any]]] = None,
+    release_max_auth_age: Optional[int] = None,
 ) -> FastAPI:
     """`on_hold(envelope, args)` is called once for every new hold (gargoyle.notify
     posts it to a webhook); it is notice, not admission, and its failure
@@ -174,7 +179,9 @@ def build_issuer_app(
     directory rolled after startup is picked up without a restart.
     `providers` (gargoyle.identity.provider) are the OpenID Connect
     providers trusted: each owns its key ids, and a token under one of them
-    must name that provider in `iss`."""
+    must name that provider in `iss`. `release_max_auth_age` (seconds)
+    makes an enrolled approver's release depend on how recently they
+    signed in: the token's `auth_time` must be present and no older."""
     # The trusted identity keys are held in a dict this app owns: a refresh adds to them.
     idp_public_keys = dict(idp_public_keys)
     providers = [{**p, "key_ids": set(p["key_ids"])} for p in (providers or [])]
@@ -738,7 +745,7 @@ def build_issuer_app(
             # unknown key trying to release a hold belongs in the witness.
             kid = grant.get("approver_key_id")
             event("grant_refused", approval_request_id=arid, reason=reason, **({"approver": kid} if isinstance(kid, str) else {}),
-                  posted_by=who["principal"], posted_by_id=who["subject_id"], **_about(arid))
+                  posted_by=who["principal"], posted_by_id=who["subject_id"], **_signed_in(who), **_about(arid))
             return {"accepted": False, "reason": reason}
         if datetime.fromisoformat((env or plan)["not_after"]) <= now():
             # An expired hold can never be released: the executor refuses the
@@ -763,6 +770,17 @@ def build_issuer_app(
             return refused(REF_ISSUER_SUBJECT_MISMATCH)
         if not _enrolled_speaks_for(who, grant["approver_key_id"]):
             return refused(REF_ISSUER_NOT_AN_APPROVER)
+        if enrolled and release_max_auth_age is not None:
+            # A release is the person's act now, not the act of whoever holds
+            # a token they obtained this morning: the provider's own statement
+            # of when they signed in (`auth_time`, OpenID Connect Core 2) must
+            # be there and recent. A time ahead of this clock is no statement.
+            at = who["claims"].get("auth_time")
+            age = int(now().timestamp()) - at if isinstance(at, int) and not isinstance(at, bool) else None
+            if age is None or age < -AUTH_TIME_SKEW_SECONDS:
+                return refused(REF_ISSUER_AUTH_TIME_MISSING)
+            if age > release_max_auth_age:
+                return refused(REF_ISSUER_AUTH_TOO_OLD)
         if not allow_self_approval:
             # Two people: the one asking and the one releasing. The approver
             # key id (a UPN for an enrolled key) may be neither the hold's
@@ -1106,6 +1124,18 @@ def _software_version() -> str:
         return "unknown"
 
 
+def release_max_auth_age_from_env(environ: Any) -> Optional[int]:
+    """GARGOYLE_RELEASE_MAX_AUTH_AGE as whole seconds, or None when unset.
+    Anything but a positive whole number stops the service: a rule the
+    operator meant to set must not be silently off."""
+    raw = (environ.get(ENV_RELEASE_MAX_AUTH_AGE) or "").strip()
+    if not raw:
+        return None
+    if not raw.isdigit() or int(raw) <= 0:
+        raise RuntimeError("%s must be a positive whole number of seconds, not %r" % (ENV_RELEASE_MAX_AUTH_AGE, raw))
+    return int(raw)
+
+
 def providers_from_env(environ: Any, *, http: Any = None):
     """The OpenID Connect providers named in GARGOYLE_OIDC_ISSUER, each
     read from its own discovery document: ([provider, ...], {kid: key}).
@@ -1194,6 +1224,7 @@ def app_from_env() -> FastAPI:
         # `gargoyle login`, the pinned key for tokens `gargoyle init` minted
         # (the approver's, until approvers log in with Entra too).
         providers=oidc_providers,
+        release_max_auth_age=release_max_auth_age_from_env(os.environ),
         idp_public_keys={**tenant_keys, **oidc_key_map,
                          **({os.environ[ENV_IDP_KEY_ID]: Ed25519PublicKey.from_public_bytes(bytes.fromhex(os.environ[ENV_IDP_PUBLIC_KEY_HEX]))}
                             if pinned_idp else {})},

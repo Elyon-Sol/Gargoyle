@@ -135,14 +135,16 @@ def decode(token: str, public_keys: Dict[str, Any], allowed_algs=RECEIPT_ALGS) -
 def keys_from_jwks(jwks: Any) -> Dict[str, Any]:
     """{kid: public key} from a JWKS document (RFC 7517): RSA (kty RSA, n, e),
     P-256 (kty EC, crv P-256, x, y) and Ed25519 (kty OKP, crv Ed25519, x).
-    Entries without a kid, or of another type, are skipped, never guessed."""
+    Entries without a kid, of another type, or marked for encryption
+    (`"use": "enc"`: providers publish those beside their signing keys)
+    are skipped, never guessed."""
     from cryptography.hazmat.primitives.asymmetric import ec, ed25519, rsa
     out: Dict[str, Any] = {}
     entries = jwks.get("keys") if isinstance(jwks, dict) else None
     if not isinstance(entries, list):
         return out
     for k in entries:
-        if not isinstance(k, dict) or not isinstance(k.get("kid"), str):
+        if not isinstance(k, dict) or not isinstance(k.get("kid"), str) or k.get("use") == "enc":
             continue
         try:
             if k.get("kty") == "RSA":

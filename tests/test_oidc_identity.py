@@ -435,3 +435,61 @@ def test_an_oidc_issuer_without_an_audience_does_not_start(monkeypatch):
     monkeypatch.setenv("GARGOYLE_OIDC_ISSUER", ISS_A)
     with pytest.raises(RuntimeError, match="GARGOYLE_ISSUER_AUDIENCE"):
         app_from_env()
+
+
+# ---- what a real provider's tokens look like (stage 3b) ----------------------
+
+def test_a_claim_setting_may_name_a_nested_claim_and_a_literal_name_wins():
+    # Keycloak: roles under realm_access.roles. Auth0: a namespaced claim whose name has dots in it.
+    ps = providers(roles_claim="realm_access.roles", groups_claim="https://lab.example/groups", name_claims=["profile.login", "sub"])
+    r = who(tok(iss=ISS_A, sub="s-1", realm_access={"roles": ["Approver", "offline_access"]}, roles=["Admin"],
+                **{"https://lab.example/groups": ["qa"]}, profile={"login": "dana"}), providers=ps)
+    assert r["roles"] == ["Approver", "offline_access"] and r["groups"] == ["qa"] and r["principal"] == "dana"
+    # A path that leads nowhere, or through something that is not an object, gives nothing: never another claim's value.
+    for bad in ({"realm_access": "Approver"}, {"realm_access": {"role": ["Approver"]}}, {"realm_access": ["Approver"]}, {}):
+        assert who(tok(iss=ISS_A, sub="s-1", roles=["Approver"], **bad), providers=ps)["roles"] == []
+
+
+def test_an_encryption_key_in_a_key_set_is_not_a_signing_key():
+    from gargoyle.jws import keys_from_jwks
+    ks = keys_from_jwks({"keys": [{**jwk(key_a, "sig-1"), "use": "sig"}, {**jwk(key_b, "enc-1"), "use": "enc"}, jwk(key_b, "plain-1")]})
+    assert set(ks) == {"sig-1", "plain-1"}
+
+
+# ---- how recently the approver signed in (stage 3b) ---------------------------
+
+def test_with_a_sign_in_age_rule_a_release_needs_a_recent_sign_in(tmp_path):
+    from gargoyle.issuer_service import REF_ISSUER_AUTH_TIME_MISSING, REF_ISSUER_AUTH_TOO_OLD
+    c, witness, _ = service(tmp_path, release_max_auth_age=300)
+    dana = Ed25519PrivateKey.generate()
+    t = lambda: int(datetime.now(timezone.utc).timestamp())
+    as_dana = lambda **claims: live("s-dana", "dana@alpha.example", roles=["Approver"], **claims)
+    c.post("/approvers/enroll", json={"public_key_hex": pub_hex(dana)}, headers=as_dana())
+    env = hold(c, live("s-sam", "sam@alpha.example"))
+    post = lambda headers: c.post("/grants", json=grant_for(env, dana, "dana@alpha.example"), headers=headers).json()
+    assert post(as_dana()) == {"accepted": False, "reason": REF_ISSUER_AUTH_TIME_MISSING}                    # the token does not say when
+    assert post(as_dana(auth_time=str(t()))) == {"accepted": False, "reason": REF_ISSUER_AUTH_TIME_MISSING}  # not a number
+    assert post(as_dana(auth_time=True)) == {"accepted": False, "reason": REF_ISSUER_AUTH_TIME_MISSING}
+    assert post(as_dana(auth_time=t() + 3600)) == {"accepted": False, "reason": REF_ISSUER_AUTH_TIME_MISSING}  # a sign-in in the future is no sign-in
+    assert post(as_dana(auth_time=t() - 301)) == {"accepted": False, "reason": REF_ISSUER_AUTH_TOO_OLD}
+    assert post(as_dana(auth_time=t() - 86400)) == {"accepted": False, "reason": REF_ISSUER_AUTH_TOO_OLD}
+    assert not events(witness, "granted") and len(events(witness, "grant_refused")) == 6                     # every refusal is on record
+    assert events(witness, "grant_refused")[-1]["auth_age_seconds"] >= 86400
+    ok = post(as_dana(auth_time=t() - 120))                                                                  # the hold stood through all of it
+    assert ok["accepted"] is True and 120 <= events(witness, "granted")[0]["auth_age_seconds"] < 130
+
+
+def test_the_sign_in_age_rule_is_about_people_and_is_off_unless_set(tmp_path):
+    filekey = Ed25519PrivateKey.generate()
+    c, witness, _ = service(tmp_path, release_max_auth_age=300, approver_public_keys={"approver-file": filekey.public_key()})
+    env = hold(c, live("s-sam", "sam@alpha.example"))
+    # A configured key is no person's sign-in: the rule does not reach it (the regulated profile excludes such keys instead).
+    assert c.post("/grants", json=grant_for(env, filekey, "approver-file"), headers=live("s-console", "console")).json()["accepted"] is True
+
+
+def test_a_sign_in_age_setting_that_is_not_a_positive_number_stops_the_service(monkeypatch):
+    from gargoyle.issuer_service import release_max_auth_age_from_env
+    assert release_max_auth_age_from_env({}) is None and release_max_auth_age_from_env({"GARGOYLE_RELEASE_MAX_AUTH_AGE": " 900 "}) == 900
+    for bad in ("0", "-5", "ten", "1.5"):
+        with pytest.raises(RuntimeError):
+            release_max_auth_age_from_env({"GARGOYLE_RELEASE_MAX_AUTH_AGE": bad})
