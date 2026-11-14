@@ -611,3 +611,72 @@ def test_the_start_entry_says_which_sign_in_age_rule_the_service_ran_under(tmp_p
     assert witness_start_fields([ISS_A], None) == {"providers": [ISS_A], "software_version": witness_start_fields([], None)["software_version"]}
     w = WitnessLog(str(tmp_path / "w.jsonl"), issuer_key, "issuer-1", start_fields=witness_start_fields([ISS_A, ISS_B], 900))
     assert w.entries[0]["auth_max_age_seconds"] == 900 and w.entries[0]["providers"] == [ISS_A, ISS_B]
+
+
+# ---- each provider may lay its claims out differently (stage 3c) --------------
+
+MS = "https://login.microsoftonline.com/11111111-2222-3333-4444-555555555555/v2.0"
+
+
+def providers_file(tmp_path, doc):
+    import json
+    p = tmp_path / "providers.json"
+    p.write_text(doc if isinstance(doc, str) else json.dumps(doc))
+    return {"GARGOYLE_OIDC_PROVIDERS": str(p)}
+
+
+def test_two_providers_with_different_claim_layouts_are_each_read_their_own_way(tmp_path):
+    from gargoyle.issuer_service import providers_from_env
+    http = Http({**site(ISS_A, jwk(key_a, "a-1")), **site(MS, jwk(key_b, "ms-1"))})
+    env = providers_file(tmp_path, {"providers": [{"issuer": ISS_A, "roles_claim": "realm_access.roles", "name_claims": ["preferred_username"]},
+                                                  {"issuer": MS}]})
+    ps, keys = providers_from_env(env, http=http)
+    assert [(p["issuer"], p["roles_claim"], p["subject_claim"]) for p in ps] == [(ISS_A, "realm_access.roles", "sub"), (MS, "roles", "oid")]
+    a = principal_from_token(encode({"exp": EXP, "iss": ISS_A, "sub": "s-1", "preferred_username": "dana", "roles": ["Admin"],
+                                     "realm_access": {"roles": ["Approver"]}}, key_a, "a-1"), keys, now=NOW, providers=ps)
+    m = principal_from_token(encode({"exp": EXP, "iss": MS, "sub": "pairwise", "oid": "oid-9", "preferred_username": "erin@contoso.example",
+                                     "roles": ["Approver"], "realm_access": {"roles": ["Admin"]}}, key_b, "ms-1"), keys, now=NOW, providers=ps)
+    # Each token's roles come from where its own provider puts them, never from the other layout.
+    assert a["roles"] == ["Approver"] and m["roles"] == ["Approver"] and m["subject_id"] == {"iss": MS, "sub": "oid-9"}
+    # The one-line settings remain the defaults for whatever an entry leaves out.
+    ps, _ = providers_from_env({**env, "GARGOYLE_CLAIM_GROUPS": "teams"}, http=http)
+    assert [p["groups_claim"] for p in ps] == ["teams", "teams"] and ps[0]["roles_claim"] == "realm_access.roles"
+
+
+@pytest.mark.parametrize("doc", [
+    "not json",
+    {"providers": []},                                                             # names nobody
+    {"providers": {"issuer": ISS_A}},                                              # not a list
+    [{"issuer": ISS_A}],                                                           # no "providers" member
+    {"providers": [{"roles_claim": "roles"}]},                                     # no issuer
+    {"providers": [{"issuer": ISS_A, "role_claim": "realm_access.roles"}]},        # a misspelt setting must not be silently ignored
+    {"providers": [{"issuer": ISS_A, "roles_claim": ["roles"]}]},                  # wrong type
+    {"providers": [{"issuer": ISS_A, "name_claims": "preferred_username"}]},       # wrong type
+    {"providers": [{"issuer": ISS_A, "name_claims": []}]},                         # an empty list would name nobody
+    {"providers": [{"issuer": ISS_A}, {"issuer": ISS_A}]},                         # the same issuer twice
+    {"providers": [{"issuer": ISS_A}], "provider": []},                            # an unknown top-level member
+])
+def test_a_providers_file_that_is_not_exactly_understood_stops_the_service(tmp_path, doc):
+    from gargoyle.issuer_service import providers_from_env
+    with pytest.raises(RuntimeError):
+        providers_from_env(providers_file(tmp_path, doc), http=Http(site(ISS_A, jwk(key_a, "a-1"))))
+
+
+def test_the_file_and_the_one_line_setting_are_not_mixed(tmp_path):
+    from gargoyle.issuer_service import providers_from_env
+    env = {**providers_file(tmp_path, {"providers": [{"issuer": ISS_A}]}), "GARGOYLE_OIDC_ISSUER": ISS_B}
+    with pytest.raises(RuntimeError):
+        providers_from_env(env, http=Http({**site(ISS_A, jwk(key_a, "a-1")), **site(ISS_B, jwk(key_b, "b-1"))}))
+    with pytest.raises(RuntimeError):
+        providers_from_env({"GARGOYLE_OIDC_PROVIDERS": str(tmp_path / "missing.json")}, http=Http({}))
+
+
+def test_a_providers_file_without_an_audience_does_not_start(monkeypatch, tmp_path):
+    from gargoyle.issuer_service import app_from_env
+    for k in ("GARGOYLE_ENTRA_TENANT", "GARGOYLE_ISSUER_AUDIENCE", "GARGOYLE_IDP_KEY_ID", "GARGOYLE_IDP_PUBLIC_KEY_HEX", "GARGOYLE_OIDC_ISSUER"):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("GARGOYLE_ISSUER_KEY_ID", "issuer-1")
+    monkeypatch.setenv("GARGOYLE_ISSUER_KEY_HEX", "11" * 32)
+    monkeypatch.setenv("GARGOYLE_OIDC_PROVIDERS", providers_file(tmp_path, {"providers": [{"issuer": ISS_A}]})["GARGOYLE_OIDC_PROVIDERS"])
+    with pytest.raises(RuntimeError, match="GARGOYLE_ISSUER_AUDIENCE"):
+        app_from_env()

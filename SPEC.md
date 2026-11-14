@@ -1006,8 +1006,10 @@ provider marks for encryption (`"use": "enc"`) is not loaded. A claim
 setting names a claim or, with dots, a path into nested objects
 (`realm_access.roles`); a claim whose own name is the whole setting
 matches first, and a path that does not lead through objects yields
-nothing. A run of these rules against Keycloak is recorded in
-`docs/interop-keycloak.md`.
+nothing. Claim settings are per provider: two providers trusted at
+once may each put roles, names and the subject in different claims,
+and each token is read by its own provider's settings only. A run of
+these rules against Keycloak is recorded in `docs/interop-keycloak.md`.
 
 Every authenticated party then has two names. The readable name (the
 first present of the configured name claims; by default

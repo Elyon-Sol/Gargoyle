@@ -83,6 +83,7 @@ ENV_IDP_PUBLIC_KEY_HEX = "GARGOYLE_IDP_PUBLIC_KEY_HEX"
 ENV_ENTRA_TENANT = "GARGOYLE_ENTRA_TENANT"        # trust the tenant's JWKS instead of a pinned IdP key
 ENV_AUDIENCE = "GARGOYLE_ISSUER_AUDIENCE"
 ENV_OIDC_ISSUER = "GARGOYLE_OIDC_ISSUER"          # one or more OpenID Connect issuer URLs, comma-separated; keys come from discovery
+ENV_OIDC_PROVIDERS = "GARGOYLE_OIDC_PROVIDERS"    # or: a JSON file naming the providers, each with its own claim settings
 ENV_CLAIM_NAME = "GARGOYLE_CLAIM_NAME"            # claims tried in order for the readable name (default preferred_username, upn, sub)
 ENV_CLAIM_DISPLAY_NAME = "GARGOYLE_CLAIM_DISPLAY_NAME"   # the printed name (default name)
 ENV_CLAIM_ROLES = "GARGOYLE_CLAIM_ROLES"          # default roles
@@ -1194,19 +1195,54 @@ def console_oidc_from_env(environ: Any, providers: List[Dict[str, Any]], *, max_
             **({"max_age": max_auth_age} if max_auth_age else {})}
 
 
+_PROVIDER_SETTINGS = {"issuer": str, "name_claims": list, "display_claim": str, "roles_claim": str, "groups_claim": str, "subject_claim": str}
+
+
+def _providers_file(path: str) -> List[Dict[str, Any]]:
+    """The entries of a providers file, accepted only when every part of it
+    is understood: a setting that is misspelt or of the wrong type would
+    otherwise leave a provider's roles or names read from the wrong claim
+    without anyone being told."""
+    try:
+        doc = json.loads(open(path, encoding="utf-8").read())
+    except (OSError, ValueError) as exc:
+        raise RuntimeError("%s: cannot read %s: %s" % (ENV_OIDC_PROVIDERS, path, exc))
+    entries = doc.get("providers") if isinstance(doc, dict) else None
+    if not isinstance(doc, dict) or set(doc) != {"providers"} or not isinstance(entries, list) or not entries:
+        raise RuntimeError('%s: %s must be {"providers": [{"issuer": ...}, ...]}' % (ENV_OIDC_PROVIDERS, path))
+    for e in entries:
+        if not isinstance(e, dict) or not isinstance(e.get("issuer"), str) or not e["issuer"]:
+            raise RuntimeError("%s: every provider needs an issuer" % ENV_OIDC_PROVIDERS)
+        for k, v in e.items():
+            if k not in _PROVIDER_SETTINGS:
+                raise RuntimeError("%s: %s has an unknown setting %r (known: %s)" % (ENV_OIDC_PROVIDERS, e["issuer"], k, ", ".join(sorted(_PROVIDER_SETTINGS))))
+            if not isinstance(v, _PROVIDER_SETTINGS[k]) or not v or (k == "name_claims" and not all(isinstance(c, str) and c for c in v)):
+                raise RuntimeError("%s: %s setting %r has the wrong form" % (ENV_OIDC_PROVIDERS, e["issuer"], k))
+    return entries
+
+
 def providers_from_env(environ: Any, *, http: Any = None):
-    """The OpenID Connect providers named in GARGOYLE_OIDC_ISSUER, each
-    read from its own discovery document: ([provider, ...], {kid: key}).
-    The claim settings apply to all of them. Raises when a provider cannot
-    be read or trusted, or when two of them publish the same key id (the
-    key could not say which of them signed)."""
+    """The trusted OpenID Connect providers, each read from its own
+    discovery document: ([provider, ...], {kid: key}). They are named in
+    GARGOYLE_OIDC_ISSUER (issuer URLs; the GARGOYLE_CLAIM_* settings apply
+    to all of them) or in the JSON file GARGOYLE_OIDC_PROVIDERS names,
+    where each provider may carry its own claim settings and the
+    GARGOYLE_CLAIM_* settings are the defaults for what an entry leaves
+    out. Raises when both are set, when a provider cannot be read or
+    trusted, or when two of them publish the same key id (the key could
+    not say which of them signed)."""
     from urllib.parse import urlsplit
-    issuers = [i.strip() for i in (environ.get(ENV_OIDC_ISSUER) or "").split(",") if i.strip()]
+    path = (environ.get(ENV_OIDC_PROVIDERS) or "").strip()
+    if path and (environ.get(ENV_OIDC_ISSUER) or "").strip():
+        raise RuntimeError("name the providers one way: %s or %s, not both" % (ENV_OIDC_ISSUER, ENV_OIDC_PROVIDERS))
+    entries = _providers_file(path) if path else [{"issuer": i.strip()} for i in (environ.get(ENV_OIDC_ISSUER) or "").split(",") if i.strip()]
+    issuers = [e["issuer"] for e in entries]
     if len(set(issuers)) != len(issuers):
-        raise RuntimeError("%s names an issuer twice" % ENV_OIDC_ISSUER)
+        raise RuntimeError("%s names an issuer twice" % (ENV_OIDC_PROVIDERS if path else ENV_OIDC_ISSUER))
     names = [c.strip() for c in (environ.get(ENV_CLAIM_NAME) or "").split(",") if c.strip()]
     out, keys, owner = [], {}, {}
-    for iss in issuers:
+    for entry in entries:
+        iss = entry["issuer"]
         doc = oidc_discovery(iss, http=http)
         fresh = oidc_keys(doc["jwks_uri"], http=http)
         for k in fresh:
@@ -1214,11 +1250,11 @@ def providers_from_env(environ: Any, *, http: Any = None):
                 raise RuntimeError("identity providers %s and %s both publish key id %r" % (owner[k], iss, k))
             owner[k] = iss
         # Entra's `sub` differs per application; `oid` is the person.
-        subject = environ.get(ENV_CLAIM_SUBJECT) or ("oid" if urlsplit(iss).hostname == "login.microsoftonline.com" else "sub")
-        out.append(provider(iss, key_ids=set(fresh), name_claims=names or None,
-                            display_claim=environ.get(ENV_CLAIM_DISPLAY_NAME) or "name",
-                            roles_claim=environ.get(ENV_CLAIM_ROLES) or "roles",
-                            groups_claim=environ.get(ENV_CLAIM_GROUPS) or "groups", subject_claim=subject,
+        subject = entry.get("subject_claim") or environ.get(ENV_CLAIM_SUBJECT) or ("oid" if urlsplit(iss).hostname == "login.microsoftonline.com" else "sub")
+        out.append(provider(iss, key_ids=set(fresh), name_claims=entry.get("name_claims") or names or None,
+                            display_claim=entry.get("display_claim") or environ.get(ENV_CLAIM_DISPLAY_NAME) or "name",
+                            roles_claim=entry.get("roles_claim") or environ.get(ENV_CLAIM_ROLES) or "roles",
+                            groups_claim=entry.get("groups_claim") or environ.get(ENV_CLAIM_GROUPS) or "groups", subject_claim=subject,
                             refresh=(lambda uri=doc["jwks_uri"]: oidc_keys(uri, http=http))))
         # For the console (console_oidc_from_env); not used in trusting a token.
         out[-1].update(authorization_endpoint=doc.get("authorization_endpoint"), token_endpoint=doc.get("token_endpoint"))
@@ -1235,7 +1271,7 @@ def app_from_env() -> FastAPI:
     required = {k: os.environ.get(k) for k in (ENV_ISSUER_KEY_ID, ENV_ISSUER_KEY_HEX)}
     tenant = os.environ.get(ENV_ENTRA_TENANT)
     pinned_idp = os.environ.get(ENV_IDP_KEY_ID) and os.environ.get(ENV_IDP_PUBLIC_KEY_HEX)
-    oidc = bool((os.environ.get(ENV_OIDC_ISSUER) or "").strip())
+    oidc = bool((os.environ.get(ENV_OIDC_ISSUER) or "").strip() or (os.environ.get(ENV_OIDC_PROVIDERS) or "").strip())
     if not tenant and not oidc:
         required.update({k: os.environ.get(k) for k in (ENV_IDP_KEY_ID, ENV_IDP_PUBLIC_KEY_HEX)})
     missing = [k for k, v in required.items() if not v]
@@ -1245,7 +1281,7 @@ def app_from_env() -> FastAPI:
         # Fail closed: without an audience, any token the provider ever issued
         # for any application would be accepted here.
         raise RuntimeError("issuer service with %s set needs %s (the issuer API's client id or app id URI)"
-                           % (ENV_ENTRA_TENANT if tenant else ENV_OIDC_ISSUER, ENV_AUDIENCE))
+                           % (ENV_ENTRA_TENANT if tenant else "an OpenID Connect provider", ENV_AUDIENCE))
     tenant_id = entra_tenant_id(tenant) if tenant else None
     tenant_keys = entra_keys(tenant_id) if tenant else {}
     oidc_providers, oidc_key_map = providers_from_env(os.environ)

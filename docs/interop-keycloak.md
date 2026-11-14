@@ -103,6 +103,7 @@ Three things the self-signed tests had not asked for:
   an API audience is configured, and those will be refused.
 - **Other providers.** One product, one version. Okta, Auth0, Google and
   others are expected to work by the same rules and have not been run.
-- **Per-provider claim settings.** The claim settings apply to every
-  configured provider; two providers that lay out roles differently
-  cannot both be configured yet.
+- **Two providers at once, live.** Keycloak beside Entra ID, each with
+  its own claim settings (`GARGOYLE_OIDC_PROVIDERS`), is covered by unit
+  tests with tokens the tests sign; it has not been run against both
+  real providers together.
