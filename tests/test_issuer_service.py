@@ -319,6 +319,10 @@ def test_a_refused_release_is_an_event_and_sign_in_codes_leave_the_access_log():
     refused = [e for e in events if e["event"] == "grant_refused"]
     assert refused == [{"event": "grant_refused", "at": NOW.isoformat(), "approval_request_id": arid,
                         "approver": "mallory@example.org", "reason": REF_APPROVAL_KEY_UNKNOWN,
+                        # who carried the grant in, and who asked, each also by permanent id (gargoyle-witness/3)
+                        "posted_by": "spiffe://example.org/agents/coder",
+                        "posted_by_id": {"iss": "key:idp-1", "sub": "spiffe://example.org/agents/coder"},
+                        "requested_by_id": {"iss": "key:idp-1", "sub": "spiffe://example.org/agents/coder"},
                         # ... and, like every answer to a hold, who asked and for what
                         "requested_by": "spiffe://example.org/agents/coder", "tool": "write_file", "target_url": TARGET,
                         "summary": "Write a.txt (1 bytes)", "request": {"path": "a.txt", "bytes": 1}}]

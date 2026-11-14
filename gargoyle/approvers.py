@@ -118,12 +118,16 @@ class ApproverRegistry:
         self._stamp = self._file_stamp()
 
     def enroll(self, upn: str, public_key_hex: str, *, enrolled_by: Optional[str] = None,
-               now: Optional[datetime] = None, oid: Optional[str] = None, tid: Optional[str] = None) -> Dict[str, Any]:
+               now: Optional[datetime] = None, oid: Optional[str] = None, tid: Optional[str] = None,
+               subject_id: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
         """Bind `upn` to `public_key_hex`, replacing any earlier key for that
         UPN (one key per approver; a new browser re-enrolls). The directory's
         immutable object id and tenant id are kept beside the UPN when the
         token carried them: the UPN is the name people read, the oid is what
-        survives a rename. A key on the revoked list is never enrolled again,
+        survives a rename. `subject_id` ({"iss", "sub"}) is the same idea for
+        any identity provider: the person this name was when the key was
+        bound, so the issuing service can refuse the name when it later
+        arrives as someone else. A key on the revoked list is never enrolled again,
         for anyone (RevokedKeyError): the live exercise of 2026-10-20 showed a
         browser re-enrolling the very key the operator had just revoked. The
         revoked record stays when a fresh key enrolls, so grants signed under
@@ -139,6 +143,8 @@ class ApproverRegistry:
             entry["oid"] = oid
         if tid:
             entry["tid"] = tid
+        if subject_id:
+            entry["subject_id"] = {"iss": subject_id["iss"], "sub": subject_id["sub"]}
         with self._lock:
             self._refresh()
             if public_key_hex in self._revoked_keys():
@@ -150,6 +156,18 @@ class ApproverRegistry:
             self._approvers[upn] = entry
             self._save()
         return {"upn": upn, "replaced": replaced, **entry}
+
+    def bind_subject(self, upn: str, subject_id: Dict[str, str]) -> bool:
+        """Record who `upn` is, by permanent id, on an entry enrolled before
+        ids were kept. Never changes an id already recorded. True when written."""
+        with self._lock:
+            self._refresh()
+            entry = self._approvers.get(upn)
+            if entry is None or entry.get("subject_id"):
+                return False
+            entry["subject_id"] = {"iss": subject_id["iss"], "sub": subject_id["sub"]}
+            self._save()
+        return True
 
     def _remember(self, upn: str, entry: Dict[str, Any], reason: str, ended_by: str, now: Optional[datetime]) -> None:
         hist = self._history.setdefault(upn, [])

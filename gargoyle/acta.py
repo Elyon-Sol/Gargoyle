@@ -418,7 +418,7 @@ def export_witness(entries: Iterable[Any], *, signing_key: Any, key_id: str, now
     and `declined` (deny, reason approval_declined) entry, in witness order,
     each linked to the one before (section 6.7) and naming the witness entry
     it came from. `policy_digest` is section 6.8 over the pin the witness
-    recorded (gargoyle-witness/2); entries without one carry no digest.
+    recorded (since gargoyle-witness/2); entries without one carry no digest.
     Plans, lifecycle events and partial grants are counted, not exported.
 
     Returns {"receipts", "commitment", "witness_head", "counts"}. The

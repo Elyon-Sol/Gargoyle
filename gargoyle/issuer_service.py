@@ -67,7 +67,7 @@ from gargoyle.plans import (REF_PLAN_MALFORMED, REF_PLAN_STEP_NOT_PLANNABLE, REF
 from gargoyle.notify import notifier_from_env
 from gargoyle.approvers import (DEFAULT_APPROVER_ROLE, ENV_APPROVER_GROUPS, ENV_APPROVER_ROLE, ENV_APPROVERS_PATH,
                                 ApproverRegistry, RevokedKeyError, may_enroll, valid_public_key_hex)
-from gargoyle.identity import entra_keys, entra_tenant_id, principal_from_token
+from gargoyle.identity import ENTRA_ISSUER, entra_keys, entra_tenant_id, oidc_discovery, oidc_keys, principal_from_token, provider
 from gargoyle.jws import REF_JWS_KEY_UNKNOWN
 from gargoyle.published_record_source import sign_published_record
 from gargoyle.issuer import DEFAULT_TTL_SECONDS, issue
@@ -82,6 +82,12 @@ ENV_IDP_KEY_ID = "GARGOYLE_IDP_KEY_ID"
 ENV_IDP_PUBLIC_KEY_HEX = "GARGOYLE_IDP_PUBLIC_KEY_HEX"
 ENV_ENTRA_TENANT = "GARGOYLE_ENTRA_TENANT"        # trust the tenant's JWKS instead of a pinned IdP key
 ENV_AUDIENCE = "GARGOYLE_ISSUER_AUDIENCE"
+ENV_OIDC_ISSUER = "GARGOYLE_OIDC_ISSUER"          # one or more OpenID Connect issuer URLs, comma-separated; keys come from discovery
+ENV_CLAIM_NAME = "GARGOYLE_CLAIM_NAME"            # claims tried in order for the readable name (default preferred_username, upn, sub)
+ENV_CLAIM_DISPLAY_NAME = "GARGOYLE_CLAIM_DISPLAY_NAME"   # the printed name (default name)
+ENV_CLAIM_ROLES = "GARGOYLE_CLAIM_ROLES"          # default roles
+ENV_CLAIM_GROUPS = "GARGOYLE_CLAIM_GROUPS"        # default groups
+ENV_CLAIM_SUBJECT = "GARGOYLE_CLAIM_SUBJECT"      # the permanent id (default sub; oid for a login.microsoftonline.com issuer)
 ENV_APPROVER_KEY_ID = "GARGOYLE_APPROVER_KEY_ID"
 ENV_APPROVER_PUBLIC_KEY_HEX = "GARGOYLE_APPROVER_PUBLIC_KEY_HEX"
 ENV_RECEIPT_TTL = "GARGOYLE_RECEIPT_TTL_SECONDS"
@@ -108,6 +114,7 @@ REF_ISSUER_KEY_REVOKED = "REF_ISSUER_KEY_REVOKED"           # enrollment offered
 REF_ISSUER_KEY_ENROLLED = "REF_ISSUER_KEY_ENROLLED"          # another key is enrolled for this account; it must consent, or the operator revoke it
 REF_ISSUER_HOLD_EXPIRED = "REF_ISSUER_HOLD_EXPIRED"          # the hold's receipt or plan expired; nothing can release it now
 REF_ISSUER_SELF_APPROVAL = "REF_ISSUER_SELF_APPROVAL"        # the approver is the hold's requester (or the party acted for)
+REF_ISSUER_SUBJECT_MISMATCH = "REF_ISSUER_SUBJECT_MISMATCH"  # the readable name is enrolled to a different person (another issuer or subject)
 REF_ISSUER_STATE_TEXT_MISMATCH = "REF_ISSUER_STATE_TEXT_MISMATCH"  # the state text is not the bytes the state hash names
 
 
@@ -157,15 +164,27 @@ def build_issuer_app(
     decline_window_hours: float = DEFAULT_DECLINE_WINDOW_HOURS,
     idp_key_refresh: Optional[Callable[[], Dict[str, Any]]] = None,
     allow_self_approval: bool = False,
+    providers: Optional[List[Dict[str, Any]]] = None,
 ) -> FastAPI:
     """`on_hold(envelope, args)` is called once for every new hold (gargoyle.notify
     posts it to a webhook); it is notice, not admission, and its failure
     never affects the hold. `idp_key_refresh()` returns the identity
     provider's current signing keys {kid: key}; it is called, at most once a
     minute, when a token names a kid the service does not know, so a key the
-    directory rolled after startup is picked up without a restart."""
+    directory rolled after startup is picked up without a restart.
+    `providers` (gargoyle.identity.provider) are the OpenID Connect
+    providers trusted: each owns its key ids, and a token under one of them
+    must name that provider in `iss`."""
     # The trusted identity keys are held in a dict this app owns: a refresh adds to them.
     idp_public_keys = dict(idp_public_keys)
+    providers = [{**p, "key_ids": set(p["key_ids"])} for p in (providers or [])]
+    owned: Dict[str, str] = {}
+    for p in providers:
+        for k in p["key_ids"]:
+            if k in owned:
+                # One key id, two providers: the key could not say which of them signed.
+                raise ValueError("identity providers %s and %s both claim key id %r" % (owned[k], p["issuer"], k))
+            owned[k] = p["issuer"]
     tenant_key_ids = set(tenant_key_ids) if tenant_key_ids is not None else None
     key_refreshed_at: list = [None]
     app = FastAPI(title="Gargoyle issuing service")
@@ -324,34 +343,80 @@ def build_issuer_app(
         return HTTPException(status_code=status, detail={"reason": reason})
 
     def _refresh_idp_keys() -> bool:
-        """Fetch the identity provider's keys again (an unknown kid is how a
-        key roll shows up), at most once a minute. True when new keys came."""
-        if idp_key_refresh is None:
+        """Fetch the identity providers' keys again (an unknown kid is how a
+        key roll shows up), at most once a minute. True when new keys came.
+        A provider's answer is adopted for its own key ids and for ids
+        nobody holds yet; it never replaces a key another provider, the
+        tenant or the configuration put there."""
+        sources = [p for p in providers if p.get("refresh") is not None]
+        if idp_key_refresh is None and not sources:
             return False
         current = now()
         last = key_refreshed_at[0]
         if last is not None and (current - last).total_seconds() < 60:
             return False
         key_refreshed_at[0] = current
-        try:
-            fresh = idp_key_refresh()
-        except Exception as exc:
-            import sys
-            sys.stderr.write("gargoyle: identity key refresh failed: %s\n" % exc)
-            return False
-        new = {k: v for k, v in fresh.items() if k not in idp_public_keys}
-        idp_public_keys.update(fresh)
-        if tenant_key_ids is not None:
-            tenant_key_ids.update(fresh)
-        return bool(new)
+        import sys
+        added = False
+        if idp_key_refresh is not None:
+            try:
+                fresh = idp_key_refresh()
+            except Exception as exc:
+                sys.stderr.write("gargoyle: identity key refresh failed: %s\n" % exc)
+                fresh = {}
+            fresh = {k: v for k, v in fresh.items() if not any(k in p["key_ids"] for p in providers)}
+            added = any(k not in idp_public_keys for k in fresh)
+            idp_public_keys.update(fresh)
+            if tenant_key_ids is not None:
+                tenant_key_ids.update(fresh)
+        for p in sources:
+            try:
+                fresh = p["refresh"]()
+            except Exception as exc:
+                sys.stderr.write("gargoyle: key refresh for %s failed: %s\n" % (p["issuer"], exc))
+                continue
+            for k, v in fresh.items():
+                if k in p["key_ids"] or k not in idp_public_keys:
+                    added = added or k not in idp_public_keys
+                    idp_public_keys[k] = v
+                    p["key_ids"].add(k)
+        return added
+
+    def _identify(token: str) -> Dict[str, Any]:
+        return principal_from_token(token, idp_public_keys, audience=audience, now=now(), tenant=tenant,
+                                    tenant_key_ids=tenant_key_ids, providers=providers)
+
+    def _ids(who: Dict[str, Any]) -> Dict[str, Any]:
+        """Who asked, by permanent id (gargoyle-witness/3): beside the readable name, never instead of it."""
+        return {"principal_id": who["subject_id"], **({"on_behalf_of_id": who["on_behalf_of_id"]} if who.get("on_behalf_of_id") else {})}
+
+    def _same_person(name: str, who: Dict[str, Any]) -> bool:
+        """Is `who` the person `name` was when its key was enrolled? Compared
+        by permanent id: the issuer and subject, or the directory object id
+        on an entry enrolled before ids were kept. A directory can hand a
+        sign-in name to someone new; the key stays with the first person.
+        An entry with no id on record has nothing to compare."""
+        entry = registry.entries().get(name) or {}
+        if entry.get("subject_id"):
+            return entry["subject_id"] == who["subject_id"]
+        if entry.get("oid"):
+            return entry["oid"] == who.get("oid")
+        return True
+
+    def _signed_in(who: Dict[str, Any]) -> Dict[str, Any]:
+        """When the person last signed in, when their token says (`auth_time`), and how long ago that was."""
+        at = who["claims"].get("auth_time")
+        if not isinstance(at, int) or isinstance(at, bool):
+            return {}
+        return {"auth_time": at, "auth_age_seconds": max(0, int(now().timestamp()) - at)}
 
     def authenticate(authorization: Optional[str]) -> Dict[str, Any]:
         if not authorization or not authorization.startswith("Bearer "):
             raise _refuse(401, REF_ISSUER_UNAUTHENTICATED)
         token = authorization[7:].strip()
-        who = principal_from_token(token, idp_public_keys, audience=audience, now=now(), tenant=tenant, tenant_key_ids=tenant_key_ids)
+        who = _identify(token)
         if who["reason"] == REF_JWS_KEY_UNKNOWN and _refresh_idp_keys():
-            who = principal_from_token(token, idp_public_keys, audience=audience, now=now(), tenant=tenant, tenant_key_ids=tenant_key_ids)
+            who = _identify(token)
         if who["reason"] is not None:
             raise _refuse(401, who["reason"])
         return who
@@ -408,7 +473,7 @@ def build_issuer_app(
         asked = {"summary": describe_hold(body["tool"], body["args"], state)["sentence"],
                  "request": request_fields(body["tool"], body["args"])}
         if result.envelope is None:
-            event("refused", principal=who["principal"], tool=body["tool"], reason=result.decision.reason,
+            event("refused", principal=who["principal"], **_ids(who), tool=body["tool"], reason=result.decision.reason,
                   target_url=body["target_url"], policy=policy.pin(), **asked)
             return {"issued": False, "reason": result.decision.reason}
         covered = False
@@ -429,13 +494,13 @@ def build_issuer_app(
                     break
         cooled = declined_recently(who["principal"], body["tool"], body["args"]) if result.envelope["requires_approval"] and not covered else None
         if cooled is not None:
-            event("refused", principal=who["principal"], tool=body["tool"], reason=REF_ISSUER_DECLINED_RECENTLY,
+            event("refused", principal=who["principal"], **_ids(who), tool=body["tool"], reason=REF_ISSUER_DECLINED_RECENTLY,
                   declines=cooled["count"], target_url=body["target_url"], policy=result.envelope["policy"], **asked, **({"why": cooled["why"]} if cooled["why"] else {}))
             return {"issued": False, "reason": REF_ISSUER_DECLINED_RECENTLY, "why": cooled["why"], "declines": cooled["count"]}
         if result.envelope["requires_approval"] and not covered and _open_holds(who["principal"]) >= max_open_holds:
             # A service limit, not a policy decision: nothing is stored, the
             # signed envelope is dropped, the client reports the reason.
-            event("refused", principal=who["principal"], tool=body["tool"], reason=REF_ISSUER_TOO_MANY_HOLDS,
+            event("refused", principal=who["principal"], **_ids(who), tool=body["tool"], reason=REF_ISSUER_TOO_MANY_HOLDS,
                   target_url=body["target_url"], policy=result.envelope["policy"], **asked)
             return {"issued": False, "reason": REF_ISSUER_TOO_MANY_HOLDS}
         about: Dict[str, Any] = {}
@@ -445,9 +510,9 @@ def build_issuer_app(
             # payload (the hash binds that). A declined move reads as a
             # declined move of a named file a quarter later.
             about = asked
-        event("issued", principal=who["principal"], tool=body["tool"], held=bool(result.envelope["requires_approval"]),
+        event("issued", principal=who["principal"], **_ids(who), tool=body["tool"], held=bool(result.envelope["requires_approval"]),
               **({"oid": who["oid"]} if who.get("oid") else {}), **about,
-              policy=result.envelope["policy"],      # which policy version decided; gargoyle-witness/2 (the Acta export reads it)
+              policy=result.envelope["policy"],      # which policy version decided; since gargoyle-witness/2 (the Acta export reads it)
               target_url=body["target_url"],         # one issuer, several gates: an audit of one gate's log skips the others' receipts
               covered=covered, state_bound=state is not None,   # whether the receipt binds the target's state (asked by the 2026-11-01 soak)
               decision_id=result.envelope.get("decision_id"), decision_sha256=result.envelope["decision_sha256"],
@@ -456,7 +521,9 @@ def build_issuer_app(
             arid = result.envelope["approval_request_id"]
             app.state.pending[arid] = result.envelope
             app.state.pending_args[arid] = body["args"]
-            app.state.pending_about[arid] = {"requested_by": who["principal"], "tool": body["tool"], "target_url": body["target_url"], **about}
+            app.state.pending_about[arid] = {"requested_by": who["principal"], "requested_by_id": who["subject_id"],
+                                             **({"requested_for_id": who["on_behalf_of_id"]} if who.get("on_behalf_of_id") else {}),
+                                             "tool": body["tool"], "target_url": body["target_url"], **about}
             if state is not None:
                 app.state.pending_state[arid] = state
             if on_hold is not None:
@@ -520,7 +587,7 @@ def build_issuer_app(
                     role_sets.append(set(d.approver_roles))
             norm.append(step)
         if held and _open_holds(who["principal"]) >= max_open_holds:
-            event("refused", principal=who["principal"], tool="plan", reason=REF_ISSUER_TOO_MANY_HOLDS, steps=len(norm),
+            event("refused", principal=who["principal"], **_ids(who), tool="plan", reason=REF_ISSUER_TOO_MANY_HOLDS, steps=len(norm),
                   **({"target_url": body["target_url"]} if isinstance(body.get("target_url"), str) else {}))
             return {"issued": False, "reason": REF_ISSUER_TOO_MANY_HOLDS}
         import uuid
@@ -542,9 +609,10 @@ def build_issuer_app(
             about = {"summary": describe_plan(plan)["sentence"],
                      "request": {"steps": [{"tool": st.get("tool"), **request_fields(st.get("tool"), st.get("args") if isinstance(st.get("args"), dict) else st.get("match"))}
                                            for st in steps if isinstance(st, dict)]}}
-            app.state.pending_about[plan["approval_request_id"]] = {"requested_by": who["principal"], "tool": "plan", "target_url": body["target_url"],
+            app.state.pending_about[plan["approval_request_id"]] = {"requested_by": who["principal"], "requested_by_id": who["subject_id"],
+                                                                    "tool": "plan", "target_url": body["target_url"],
                                                                     "plan_id": plan["plan_id"], **about}
-        event("plan", principal=who["principal"], steps=len(norm), held=held, plan_id=plan["plan_id"], policy=plan.get("policy"), **about)
+        event("plan", principal=who["principal"], **_ids(who), steps=len(norm), held=held, plan_id=plan["plan_id"], policy=plan.get("policy"), **about)
         return {"issued": True, "plan": plan, "held": held}
 
     def _plan_terms(plan):
@@ -669,7 +737,8 @@ def build_issuer_app(
             # A release that did not happen is a decision too: a revoked or
             # unknown key trying to release a hold belongs in the witness.
             kid = grant.get("approver_key_id")
-            event("grant_refused", approval_request_id=arid, reason=reason, **({"approver": kid} if isinstance(kid, str) else {}), **_about(arid))
+            event("grant_refused", approval_request_id=arid, reason=reason, **({"approver": kid} if isinstance(kid, str) else {}),
+                  posted_by=who["principal"], posted_by_id=who["subject_id"], **_about(arid))
             return {"accepted": False, "reason": reason}
         if datetime.fromisoformat((env or plan)["not_after"]) <= now():
             # An expired hold can never be released: the executor refuses the
@@ -686,6 +755,12 @@ def build_issuer_app(
                          gate_key_id=key_id, now=now())
         if not g["accepted"]:
             return refused(g["reason"])
+        # An enrolled key belongs to a person; a configured (static) key to the configuration.
+        enrolled = grant["approver_key_id"] not in static_approvers and grant["approver_key_id"] in registry
+        if enrolled and who["principal"] == grant["approver_key_id"] and not _same_person(grant["approver_key_id"], who):
+            # The name matches and the person does not: the directory gave
+            # this sign-in name to someone else after the key was enrolled.
+            return refused(REF_ISSUER_SUBJECT_MISMATCH)
         if not _enrolled_speaks_for(who, grant["approver_key_id"]):
             return refused(REF_ISSUER_NOT_AN_APPROVER)
         if not allow_self_approval:
@@ -695,7 +770,9 @@ def build_issuer_app(
             parties = {hold_owner(arid)}
             if env is not None:
                 parties.add((env.get("request_context") or {}).get("on_behalf_of"))
-            if grant["approver_key_id"] in parties:
+            # And by permanent id: a second sign-in name for the same person is still that person.
+            party_ids = [i for i in (_about(arid).get("requested_by_id"), _about(arid).get("requested_for_id")) if i]
+            if grant["approver_key_id"] in parties or (enrolled and who["subject_id"] in party_ids):
                 return refused(REF_ISSUER_SELF_APPROVAL)
         # The receipt's (or plan's) own terms: distinct approvers, from the named set if any.
         terms = approval_terms(env) if env else _plan_terms(plan)
@@ -723,7 +800,14 @@ def build_issuer_app(
             grant["role_attestation"] = attest_roles(grant, roles_held, signing_key, key_id)
         have.append(grant)
         app.state.grants[arid] = have                      # written back: the store persists on assignment
-        event("granted", approval_request_id=arid, approver=grant["approver_key_id"], collected=len(have), required=terms["required"],
+        if enrolled:
+            registry.bind_subject(grant["approver_key_id"], who["subject_id"])     # an entry from before ids were kept learns its person here
+            signer = {"approver_id": who["subject_id"], **({"approver_name": who["name"]} if who.get("name") else {})}
+        else:
+            # A configured key's grant may be carried in by any signed-in party: say who carried it, not who signed.
+            signer = {"posted_by": who["principal"], "posted_by_id": who["subject_id"]}
+        event("granted", approval_request_id=arid, approver=grant["approver_key_id"], **signer, meaning="approval", **_signed_in(who),
+              collected=len(have), required=terms["required"],
               hold_kind="plan" if plan else "receipt", **({"roles": sorted(roles_held)} if terms.get("roles") else {}), **_about(arid))
         return {"accepted": True, "reason": g["reason"], "collected": len(have), "required": terms["required"],
                 "complete": len(have) >= terms["required"]}
@@ -745,7 +829,8 @@ def build_issuer_app(
             raise _refuse(400, REF_ISSUER_BAD_REQUEST)
         if not is_approver(who) and hold_owner(arid) != who["principal"]:
             raise _refuse(403, REF_ISSUER_FORBIDDEN)      # only an approver, or the person whose call it is, may cancel it
-        if is_approver(who) and hold_owner(arid) != who["principal"]:
+        rejection = is_approver(who) and hold_owner(arid) != who["principal"]
+        if rejection:
             # A human's decline is remembered; a gate withdrawing its own
             # timed-out hold is not a decision about the file.
             remember_decline(arid, why)
@@ -759,7 +844,9 @@ def build_issuer_app(
         app.state.pending_about.pop(arid, None)
         app.state.grants.pop(arid, None)
         app.state.declined.add(arid)
-        event("declined", approval_request_id=arid, by=who["principal"], **({"why": why} if why else {}), **about)
+        event("declined", approval_request_id=arid, by=who["principal"], by_id=who["subject_id"],
+              **({"by_name": who["name"]} if who.get("name") else {}), meaning="rejection" if rejection else "withdrawal",
+              **({"why": why} if why else {}), **about)
         return {"declined": True, "reason": None}
 
     @app.post("/sidedoors")
@@ -834,6 +921,11 @@ def build_issuer_app(
             raise _refuse(400, REF_ISSUER_BAD_REQUEST)
         if not isinstance(body, dict) or not valid_public_key_hex(body.get("public_key_hex")):
             raise _refuse(400, REF_ISSUER_BAD_REQUEST)
+        if who["principal"] in registry and not _same_person(who["principal"], who):
+            # The name is enrolled to someone else. No signature from the old
+            # key changes that; the operator revokes the old binding first.
+            event("enroll_refused", approver=who["principal"], reason=REF_ISSUER_SUBJECT_MISMATCH, approver_id=who["subject_id"], oid=who.get("oid"))
+            raise _refuse(409, REF_ISSUER_SUBJECT_MISMATCH)
         current = registry.public_hex().get(who["principal"])
         if current is not None and current != body["public_key_hex"]:
             # A bearer token alone must not swap the key holds are released
@@ -841,16 +933,18 @@ def build_issuer_app(
             # signature over it (`supersede_signature`), or after the operator
             # revoked the first (`gargoyle approvers revoke <upn>`).
             if not _supersedes(current, body.get("supersede_signature"), body["public_key_hex"]):
-                event("enroll_refused", approver=who["principal"], reason=REF_ISSUER_KEY_ENROLLED, oid=who.get("oid"))
+                event("enroll_refused", approver=who["principal"], reason=REF_ISSUER_KEY_ENROLLED, approver_id=who["subject_id"], oid=who.get("oid"))
                 raise _refuse(409, REF_ISSUER_KEY_ENROLLED)
         try:
-            result = registry.enroll(who["principal"], body["public_key_hex"], now=now(), oid=who.get("oid"), tid=who.get("tid"))
+            result = registry.enroll(who["principal"], body["public_key_hex"], now=now(), oid=who.get("oid"), tid=who.get("tid"),
+                                     subject_id=who["subject_id"])
         except RevokedKeyError:
             # A revoked key stays revoked, whoever offers it; the console
             # generates a fresh one on this answer.
-            event("enroll_refused", approver=who["principal"], reason=REF_ISSUER_KEY_REVOKED, oid=who.get("oid"))
+            event("enroll_refused", approver=who["principal"], reason=REF_ISSUER_KEY_REVOKED, approver_id=who["subject_id"], oid=who.get("oid"))
             raise _refuse(409, REF_ISSUER_KEY_REVOKED)
-        event("enrolled", approver=who["principal"], replaced=result["replaced"], oid=who.get("oid"))
+        event("enrolled", approver=who["principal"], approver_id=who["subject_id"], **({"approver_name": who["name"]} if who.get("name") else {}),
+              replaced=result["replaced"], oid=who.get("oid"))
         return {"enrolled": True, "key_id": who["principal"], "replaced": result["replaced"]}
 
     @app.post("/approvers/revoke")
@@ -872,7 +966,7 @@ def build_issuer_app(
             raise _refuse(403, REF_ISSUER_FORBIDDEN)
         gone = registry.revoke(upn, revoked_by=who["principal"], now=now())
         if gone:
-            event("revoked", approver=upn, by=who["principal"])
+            event("revoked", approver=upn, by=who["principal"], by_id=who["subject_id"])
             app.state.revoked_seen = _revoked_marks(registry.revoked_entries())   # witnessed here, not again on the next read
         return {"revoked": gone}
 
@@ -884,7 +978,7 @@ def build_issuer_app(
         who = authenticate(authorization)
         upn = who["principal"]
         _notice_revocations()
-        return {"principal": upn, "may_approve": may_enroll(who, role=approver_role, groups=approver_groups) or upn in static_approvers,
+        return {"principal": upn, "subject_id": who["subject_id"], "name": who.get("name"), "may_approve": may_enroll(who, role=approver_role, groups=approver_groups) or upn in static_approvers,
                 "enrolled_public_key_hex": registry.public_hex().get(upn),
                 "roles": [r for r in (who.get("roles") or []) if isinstance(r, str)],
                 "approver_role": approver_role,
@@ -1004,6 +1098,44 @@ def redact_access_log(logger_name: str = "uvicorn.access") -> None:
     logging.getLogger(logger_name).addFilter(_Redact())
 
 
+def _software_version() -> str:
+    try:
+        from importlib.metadata import version
+        return version("gargoyle-receipts")
+    except Exception:
+        return "unknown"
+
+
+def providers_from_env(environ: Any, *, http: Any = None):
+    """The OpenID Connect providers named in GARGOYLE_OIDC_ISSUER, each
+    read from its own discovery document: ([provider, ...], {kid: key}).
+    The claim settings apply to all of them. Raises when a provider cannot
+    be read or trusted, or when two of them publish the same key id (the
+    key could not say which of them signed)."""
+    from urllib.parse import urlsplit
+    issuers = [i.strip() for i in (environ.get(ENV_OIDC_ISSUER) or "").split(",") if i.strip()]
+    if len(set(issuers)) != len(issuers):
+        raise RuntimeError("%s names an issuer twice" % ENV_OIDC_ISSUER)
+    names = [c.strip() for c in (environ.get(ENV_CLAIM_NAME) or "").split(",") if c.strip()]
+    out, keys, owner = [], {}, {}
+    for iss in issuers:
+        doc = oidc_discovery(iss, http=http)
+        fresh = oidc_keys(doc["jwks_uri"], http=http)
+        for k in fresh:
+            if k in owner:
+                raise RuntimeError("identity providers %s and %s both publish key id %r" % (owner[k], iss, k))
+            owner[k] = iss
+        # Entra's `sub` differs per application; `oid` is the person.
+        subject = environ.get(ENV_CLAIM_SUBJECT) or ("oid" if urlsplit(iss).hostname == "login.microsoftonline.com" else "sub")
+        out.append(provider(iss, key_ids=set(fresh), name_claims=names or None,
+                            display_claim=environ.get(ENV_CLAIM_DISPLAY_NAME) or "name",
+                            roles_claim=environ.get(ENV_CLAIM_ROLES) or "roles",
+                            groups_claim=environ.get(ENV_CLAIM_GROUPS) or "groups", subject_claim=subject,
+                            refresh=(lambda uri=doc["jwks_uri"]: oidc_keys(uri, http=http))))
+        keys.update(fresh)
+    return out, keys
+
+
 def app_from_env() -> FastAPI:
     """The deployable app: OPA policy, issuer key, trusted identity-provider
     key and optional approver key from the environment. Missing required
@@ -1013,18 +1145,27 @@ def app_from_env() -> FastAPI:
     required = {k: os.environ.get(k) for k in (ENV_ISSUER_KEY_ID, ENV_ISSUER_KEY_HEX)}
     tenant = os.environ.get(ENV_ENTRA_TENANT)
     pinned_idp = os.environ.get(ENV_IDP_KEY_ID) and os.environ.get(ENV_IDP_PUBLIC_KEY_HEX)
-    if not tenant:
+    oidc = bool((os.environ.get(ENV_OIDC_ISSUER) or "").strip())
+    if not tenant and not oidc:
         required.update({k: os.environ.get(k) for k in (ENV_IDP_KEY_ID, ENV_IDP_PUBLIC_KEY_HEX)})
     missing = [k for k, v in required.items() if not v]
     if missing:
         raise RuntimeError("issuer service needs " + ", ".join(missing))
-    if tenant and not os.environ.get(ENV_AUDIENCE):
-        # Fail closed: without an audience, any token the tenant ever issued
+    if (tenant or oidc) and not os.environ.get(ENV_AUDIENCE):
+        # Fail closed: without an audience, any token the provider ever issued
         # for any application would be accepted here.
         raise RuntimeError("issuer service with %s set needs %s (the issuer API's client id or app id URI)"
-                           % (ENV_ENTRA_TENANT, ENV_AUDIENCE))
+                           % (ENV_ENTRA_TENANT if tenant else ENV_OIDC_ISSUER, ENV_AUDIENCE))
     tenant_id = entra_tenant_id(tenant) if tenant else None
     tenant_keys = entra_keys(tenant_id) if tenant else {}
+    oidc_providers, oidc_key_map = providers_from_env(os.environ)
+    clash = set(oidc_key_map) & (set(tenant_keys) | ({os.environ[ENV_IDP_KEY_ID]} if pinned_idp else set()))
+    if clash:
+        # A key id trusted two ways could not say which rule its tokens are held to.
+        raise RuntimeError("key id %s is published by an OIDC provider and also trusted through %s or %s"
+                           % (", ".join(sorted(clash)), ENV_ENTRA_TENANT, ENV_IDP_KEY_ID))
+    start_fields = {"providers": [p["issuer"] for p in oidc_providers] + ([ENTRA_ISSUER.format(tenant=tenant_id)] if tenant else []),
+                    "software_version": _software_version()}
     rules_path = os.environ.get(ENV_RULES_PATH)
     if rules_path:
         from gargoyle.rules import RulesPolicy
@@ -1052,7 +1193,8 @@ def app_from_env() -> FastAPI:
         # Both may be trusted at once: the tenant's keys for users who ran
         # `gargoyle login`, the pinned key for tokens `gargoyle init` minted
         # (the approver's, until approvers log in with Entra too).
-        idp_public_keys={**tenant_keys,
+        providers=oidc_providers,
+        idp_public_keys={**tenant_keys, **oidc_key_map,
                          **({os.environ[ENV_IDP_KEY_ID]: Ed25519PublicKey.from_public_bytes(bytes.fromhex(os.environ[ENV_IDP_PUBLIC_KEY_HEX]))}
                             if pinned_idp else {})},
         approver_public_keys=approver,
@@ -1065,7 +1207,7 @@ def app_from_env() -> FastAPI:
         decline_window_hours=float(os.environ.get(ENV_DECLINE_WINDOW_HOURS, DEFAULT_DECLINE_WINDOW_HOURS)),
         allow_self_approval=os.environ.get(ENV_ALLOW_SELF_APPROVAL, "").strip().lower() in ("1", "true", "yes"),
         witness=(WitnessLog(os.environ["GARGOYLE_WITNESS_PATH"], Ed25519PrivateKey.from_private_bytes(bytes.fromhex(required[ENV_ISSUER_KEY_HEX])),
-                            required[ENV_ISSUER_KEY_ID]) if os.environ.get("GARGOYLE_WITNESS_PATH") else None),
+                            required[ENV_ISSUER_KEY_ID], start_fields=start_fields) if os.environ.get("GARGOYLE_WITNESS_PATH") else None),
         log_events=(lambda e: sys.stderr.write(json.dumps(e, sort_keys=True) + "\n")) if os.environ.get("GARGOYLE_LOG_JSON") else None,
         approver_registry=ApproverRegistry(os.environ.get(ENV_APPROVERS_PATH)),
         approver_role=os.environ.get(ENV_APPROVER_ROLE, DEFAULT_APPROVER_ROLE),

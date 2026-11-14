@@ -29,7 +29,9 @@ by whom, and what changed.
 Release candidate `1.0.0rc2` on PyPI as `gargoyle-receipts`. Wire format
 `gargoyle/3`, execution receipt `gargoyle-execution/1`, plan
 `gargoyle-plan/1`, evidence log `gargoyle-evidence/4`, witness
-`gargoyle-witness/2`; all five are specified in [SPEC.md](SPEC.md) and
+`gargoyle-witness/3` (`1.0.0rc2` writes `gargoyle-witness/2`; version 3
+only adds members, the permanent id of each person beside the readable
+name); all five are specified in [SPEC.md](SPEC.md) and
 frozen as of 2026-11-06 (SPEC.md section 12): a change to any of them is a
 new format name, and verifiers keep verifying the old one. The freeze is a
 statement about the formats; the software is still one author's, unreviewed
@@ -638,12 +640,15 @@ with the hold and grant exchange for flagged calls (`/issue`, `/pending`,
 `/grants`, `/decline`, `/record`, `/keys`, `/approvers`, `/approvers/audit`,
 `/sidedoors`) and the browser
 approval console at `/approve`. Policy from a rules file or OPA; identity
-from a pinned key or, with `GARGOYLE_ENTRA_TENANT`, the tenant's signing
-keys (both at once when a pinned key is also set).
+from a pinned key, from any OpenID Connect provider named in
+`GARGOYLE_OIDC_ISSUER`, or, with `GARGOYLE_ENTRA_TENANT`, the tenant's
+signing keys (any of these at once).
 
 | Variable | Meaning |
 |---|---|
 | `GARGOYLE_ISSUER_AUDIENCE` | the `aud` an identity token must carry; a comma-separated list accepts several, so init-minted tokens (`gargoyle-issuer`) and a tenant's tokens (the issuer app's client id) work side by side |
+| `GARGOYLE_OIDC_ISSUER` + `GARGOYLE_ISSUER_AUDIENCE` | trust one or more OpenID Connect providers (comma-separated issuer URLs: Keycloak, Okta, Auth0, Google, Entra ID, any provider with a discovery document). Keys are read from each provider's own discovery document over https; a token under a provider's key must carry that provider's `iss` exactly (`REF_IDENTITY_WRONG_ISSUER`) and a subject; the audience is required. Each person is recorded as issuer plus subject beside the readable name, and a name enrolled to one person is refused for another (`REF_ISSUER_SUBJECT_MISMATCH`). The approval console's own sign-in is still Entra-only |
+| `GARGOYLE_CLAIM_NAME`, `GARGOYLE_CLAIM_DISPLAY_NAME`, `GARGOYLE_CLAIM_ROLES`, `GARGOYLE_CLAIM_GROUPS`, `GARGOYLE_CLAIM_SUBJECT` | which claims carry the readable name (a comma-separated list tried in order; default `preferred_username`, `upn`, `sub`; `email` only if you name it, since an address is often editable by its holder), the printed name (`name`), roles (`roles`), groups (`groups`) and the permanent id (`sub`; `oid` for a `login.microsoftonline.com` issuer). They apply to every provider in `GARGOYLE_OIDC_ISSUER` |
 | `GARGOYLE_ENTRA_TENANT` + `GARGOYLE_ISSUER_AUDIENCE` | trust the tenant's tokens; the audience is required with a tenant (the service will not start without it), and a directory token for any other tenant is `REF_IDENTITY_WRONG_TENANT` |
 | `GARGOYLE_ENTRA_CLIENT_ID`, `GARGOYLE_ENTRA_SCOPE` | lets the console sign approvers in with Entra (code flow with PKCE, no library); the browser generates a non-exportable key and enrolls it under the UPN |
 | `GARGOYLE_APPROVERS_PATH`, `GARGOYLE_APPROVER_ROLE`, `GARGOYLE_APPROVER_GROUPS` | where enrolled approvers persist (default `approvers.json` beside the keys, with a `revoked` list, re-read when its content changes) and which Entra app role (default `Approver`) or groups may enroll, see every hold and the witness |

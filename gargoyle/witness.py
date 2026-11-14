@@ -13,7 +13,7 @@ held call honored without a grant the issuer saw is a bypass, a receipt
 issued with no evidence at all is a gap.
 
     entry = {
-      "witness_version": "gargoyle-witness/2",
+      "witness_version": "gargoyle-witness/3",
       "seq": n, "prev_sha256": ..., "at": ...,
       "event": "issued" | "refused" | "granted" | "declined" | "plan" | "plan_granted",
       <fields per event>,
@@ -31,8 +31,12 @@ from typing import Any, Dict, Iterable, List, Optional
 
 from gargoyle.envelope import canonical_json
 
-WITNESS_VERSION = "gargoyle-witness/2"          # 2 adds `policy` (the pin) to issued, refused and plan entries
-WITNESS_VERSIONS = ("gargoyle-witness/1", WITNESS_VERSION)
+# 2 adds `policy` (the pin) to issued, refused and plan entries. 3 adds who, by permanent id: `principal_id` and
+# `on_behalf_of_id` on issued, refused and plan; `approver_id`, `approver_name`, `meaning` (and `auth_time` when the
+# token carries one) on granted; `by_id`, `by_name`, `meaning` on declined; ids on the enrolment and refusal entries;
+# `providers` and `software_version` on started. Each version only adds members (SPEC section 12).
+WITNESS_VERSION = "gargoyle-witness/3"
+WITNESS_VERSIONS = ("gargoyle-witness/1", "gargoyle-witness/2", "gargoyle-witness/3")
 GENESIS = "0" * 64
 _HASH_EXCLUDED = ("entry_sha256", "issuer_key_id", "issuer_signature")
 
@@ -52,7 +56,8 @@ def entry_sha256(entry: Dict[str, Any]) -> str:
 class WitnessLog:
     """Append-only, one JSON line per event, each signed by the issuer."""
 
-    def __init__(self, path: Optional[str], signing_key: Any, key_id: str) -> None:
+    def __init__(self, path: Optional[str], signing_key: Any, key_id: str, *,
+                 start_fields: Optional[Dict[str, Any]] = None) -> None:
         self.path = Path(path) if path else None
         self._key, self._kid = signing_key, key_id
         self._lock = threading.Lock()
@@ -71,7 +76,10 @@ class WitnessLog:
         # Every start is on record: the first "started" entry is the witness's
         # horizon (evidence older than it cannot be vouched for either way),
         # and later ones mark restarts for the operator.
-        self.record("started", resumed=bool(self.entries))
+        # `start_fields` says what was running: the identity providers trusted
+        # and the software version, so a later reader knows the conditions
+        # every following entry was made under.
+        self.record("started", resumed=bool(self.entries), **(start_fields or {}))
 
     def record(self, event: str, **fields: Any) -> Dict[str, Any]:
         with self._lock:
