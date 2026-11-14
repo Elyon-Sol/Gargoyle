@@ -739,3 +739,14 @@ outside.
   checks its own record shape with the key inside the record; the Acta-format skill
   and the protect-mcp verifier it once merged are no longer on main), recorded with
   paths and dates in docs/interop-acta.md.
+- Identity from any OpenID Connect provider (2026-11-13 to 11-14), version 1.0.0rc3:
+  GARGOYLE_OIDC_ISSUER or a providers file (GARGOYLE_OIDC_PROVIDERS, claim settings per
+  provider); keys from each provider's discovery document; a token under a provider's
+  key must name that provider in iss exactly; every party recorded by permanent id
+  (issuer and subject) beside the readable name; a name enrolled to one person refused
+  for another; optional sign-in age rule (GARGOYLE_RELEASE_MAX_AUTH_AGE); the approval
+  console signs in at any provider. The witness is gargoyle-witness/4 (3 added the
+  permanent ids, 4 the sign-in age evidence); versions 1 to 4 verify in one file; the
+  receipt, grant, execution receipt, plan and evidence log are unchanged. Run against
+  Keycloak 26.4.7 (docs/interop-keycloak.md). Not done: the approval page in a browser
+  against Keycloak; an Entra tenant's auth_time; any provider but Keycloak and Entra.
