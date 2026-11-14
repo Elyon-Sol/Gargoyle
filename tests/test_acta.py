@@ -149,7 +149,7 @@ def test_witness_export_is_an_acta_chain_the_issuers_jwks_verifies(tmp_path):
     entries = read_witness(str(tmp_path / "witness.jsonl"))
     assert verify_witness(entries, issuer_public_keys={"issuer-1": issuer.public_key()})["accepted"]
     issued = [e for e in entries if e["event"] == "issued"]
-    assert all(e["witness_version"] == "gargoyle-witness/3" and e["policy"]["policy_id"] == RULES_POLICY_ID for e in issued)
+    assert all(e["witness_version"] == "gargoyle-witness/4" and e["policy"]["policy_id"] == RULES_POLICY_ID for e in issued)
     pin = issued[0]["policy"]
 
     result = acta.export_witness(entries, signing_key=issuer, key_id="issuer-1")
@@ -208,7 +208,7 @@ def test_witness_version_1_entries_still_verify(tmp_path, monkeypatch):
     w2 = WitnessLog(str(tmp_path / "w.jsonl"), issuer, "issuer-1")
     w2.record("issued", decision_id="d-2", principal="p", tool="read_file", held=False, policy={"policy_id": RULES_POLICY_ID, "policy_sha256": "a" * 64})
     entries = read_witness(str(tmp_path / "w.jsonl"))
-    assert [e["witness_version"] for e in entries] == ["gargoyle-witness/1"] * 2 + ["gargoyle-witness/3"] * 2
+    assert [e["witness_version"] for e in entries] == ["gargoyle-witness/1"] * 2 + ["gargoyle-witness/4"] * 2
     assert verify_witness(entries, issuer_public_keys={"issuer-1": issuer.public_key()})["accepted"]
     out = acta.export_witness(entries, signing_key=issuer, key_id="issuer-1")
     assert len(out["receipts"]) == 2 and "policy_digest" not in out["receipts"][0]["payload"] and "policy_digest" in out["receipts"][1]["payload"]

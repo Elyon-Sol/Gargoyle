@@ -59,7 +59,9 @@ export function newGrantId() {
   return hex(b.buffer);
 }
 
-// ---- Entra ID sign-in (OAuth 2.0 authorization code with PKCE, RFC 7636), no library ----
+// ---- Sign-in (OAuth 2.0 authorization code with PKCE, RFC 7636), no library ----
+// With `authorizationEndpoint` / `tokenEndpoint` (any OpenID Connect provider, from the issuer's /approve-config)
+// the request goes there; with `tenant` alone it goes to Entra ID, as before.
 
 const b64url = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 
@@ -72,16 +74,24 @@ export async function pkceChallenge(verifier) {
   return b64url(await subtle().digest("SHA-256", new TextEncoder().encode(verifier)));
 }
 
-export function authorizeUrl({ tenant, clientId, scope, redirectUri, challenge, state }) {
+export function authorizeUrl({ tenant, authorizationEndpoint, clientId, scope, redirectUri, challenge, state, maxAge }) {
   const q = new URLSearchParams({ client_id: clientId, response_type: "code", redirect_uri: redirectUri, response_mode: "query",
-                                  scope: scope + " openid profile", code_challenge: challenge, code_challenge_method: "S256", state });
-  return `https://login.microsoftonline.com/${tenant}/oauth2/v2.0/authorize?${q}`;
+                                  scope: authorizationEndpoint ? scope : scope + " openid profile",
+                                  code_challenge: challenge, code_challenge_method: "S256", state });
+  if (!authorizationEndpoint) {
+    // Entra documents `prompt=login` (enter credentials on this request), not `max_age`: with a sign-in age rule, ask for that.
+    if (maxAge) q.set("prompt", "login");
+    return `https://login.microsoftonline.com/${tenant}/oauth2/v2.0/authorize?${q}`;
+  }
+  // The site's sign-in age rule: the provider must sign the person in again if their session is older (OpenID Connect Core 3.1.2.1).
+  if (maxAge) q.set("max_age", String(maxAge));
+  return authorizationEndpoint + (authorizationEndpoint.includes("?") ? "&" : "?") + q;
 }
 
-export async function exchangeCode({ tenant, clientId, scope, redirectUri, code, verifier }, fetchImpl = globalThis.fetch) {
+export async function exchangeCode({ tenant, tokenEndpoint, clientId, scope, redirectUri, code, verifier }, fetchImpl = globalThis.fetch) {
   const body = new URLSearchParams({ client_id: clientId, grant_type: "authorization_code", code, redirect_uri: redirectUri,
-                                     code_verifier: verifier, scope: scope + " openid profile" });
-  const r = await fetchImpl(`https://login.microsoftonline.com/${tenant}/oauth2/v2.0/token`,
+                                     code_verifier: verifier, scope: tokenEndpoint ? scope : scope + " openid profile" });
+  const r = await fetchImpl(tokenEndpoint || `https://login.microsoftonline.com/${tenant}/oauth2/v2.0/token`,
                             { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body });
   const tok = await r.json();
   if (!r.ok || !tok.access_token) throw new Error(tok.error_description || tok.error || ("token endpoint " + r.status));

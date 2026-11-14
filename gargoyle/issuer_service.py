@@ -67,7 +67,7 @@ from gargoyle.plans import (REF_PLAN_MALFORMED, REF_PLAN_STEP_NOT_PLANNABLE, REF
 from gargoyle.notify import notifier_from_env
 from gargoyle.approvers import (DEFAULT_APPROVER_ROLE, ENV_APPROVER_GROUPS, ENV_APPROVER_ROLE, ENV_APPROVERS_PATH,
                                 ApproverRegistry, RevokedKeyError, may_enroll, valid_public_key_hex)
-from gargoyle.identity import ENTRA_ISSUER, entra_keys, entra_tenant_id, oidc_discovery, oidc_keys, principal_from_token, provider
+from gargoyle.identity import ENTRA_ISSUER, _trusted_url, entra_keys, entra_tenant_id, oidc_discovery, oidc_keys, principal_from_token, provider
 from gargoyle.jws import REF_JWS_KEY_UNKNOWN
 from gargoyle.published_record_source import sign_published_record
 from gargoyle.issuer import DEFAULT_TTL_SECONDS, issue
@@ -87,6 +87,11 @@ ENV_CLAIM_NAME = "GARGOYLE_CLAIM_NAME"            # claims tried in order for th
 ENV_CLAIM_DISPLAY_NAME = "GARGOYLE_CLAIM_DISPLAY_NAME"   # the printed name (default name)
 ENV_CLAIM_ROLES = "GARGOYLE_CLAIM_ROLES"          # default roles
 ENV_CLAIM_GROUPS = "GARGOYLE_CLAIM_GROUPS"        # default groups
+ENV_OIDC_CLIENT_ID = "GARGOYLE_OIDC_CLIENT_ID"    # the public client the approval console signs in with at the OIDC provider
+ENV_OIDC_SCOPE = "GARGOYLE_OIDC_SCOPE"            # default "openid profile"
+ENV_OIDC_CONSOLE_ISSUER = "GARGOYLE_OIDC_CONSOLE_ISSUER"   # which trusted provider the console uses (default: the first)
+ENV_OIDC_LABEL = "GARGOYLE_OIDC_LABEL"            # the name on the console's sign-in button (default: the provider's host name)
+ENV_RELEASE_MAX_AUTH_AGE = "GARGOYLE_RELEASE_MAX_AUTH_AGE"   # seconds: an enrolled approver's sign-in may be at most this old when they release
 ENV_CLAIM_SUBJECT = "GARGOYLE_CLAIM_SUBJECT"      # the permanent id (default sub; oid for a login.microsoftonline.com issuer)
 ENV_APPROVER_KEY_ID = "GARGOYLE_APPROVER_KEY_ID"
 ENV_APPROVER_PUBLIC_KEY_HEX = "GARGOYLE_APPROVER_PUBLIC_KEY_HEX"
@@ -115,6 +120,9 @@ REF_ISSUER_KEY_ENROLLED = "REF_ISSUER_KEY_ENROLLED"          # another key is en
 REF_ISSUER_HOLD_EXPIRED = "REF_ISSUER_HOLD_EXPIRED"          # the hold's receipt or plan expired; nothing can release it now
 REF_ISSUER_SELF_APPROVAL = "REF_ISSUER_SELF_APPROVAL"        # the approver is the hold's requester (or the party acted for)
 REF_ISSUER_SUBJECT_MISMATCH = "REF_ISSUER_SUBJECT_MISMATCH"  # the readable name is enrolled to a different person (another issuer or subject)
+REF_ISSUER_AUTH_TIME_MISSING = "REF_ISSUER_AUTH_TIME_MISSING"  # a sign-in age rule is set and the token does not say when the person signed in
+REF_ISSUER_AUTH_TOO_OLD = "REF_ISSUER_AUTH_TOO_OLD"            # the person signed in longer ago than the rule allows; sign in again
+AUTH_TIME_SKEW_SECONDS = 60                                    # how far ahead of this service's clock a sign-in time may be
 REF_ISSUER_STATE_TEXT_MISMATCH = "REF_ISSUER_STATE_TEXT_MISMATCH"  # the state text is not the bytes the state hash names
 
 
@@ -165,6 +173,8 @@ def build_issuer_app(
     idp_key_refresh: Optional[Callable[[], Dict[str, Any]]] = None,
     allow_self_approval: bool = False,
     providers: Optional[List[Dict[str, Any]]] = None,
+    release_max_auth_age: Optional[int] = None,
+    console_oidc: Optional[Dict[str, Any]] = None,
 ) -> FastAPI:
     """`on_hold(envelope, args)` is called once for every new hold (gargoyle.notify
     posts it to a webhook); it is notice, not admission, and its failure
@@ -174,7 +184,9 @@ def build_issuer_app(
     directory rolled after startup is picked up without a restart.
     `providers` (gargoyle.identity.provider) are the OpenID Connect
     providers trusted: each owns its key ids, and a token under one of them
-    must name that provider in `iss`."""
+    must name that provider in `iss`. `release_max_auth_age` (seconds)
+    makes an enrolled approver's release depend on how recently they
+    signed in: the token's `auth_time` must be present and no older."""
     # The trusted identity keys are held in a dict this app owns: a refresh adds to them.
     idp_public_keys = dict(idp_public_keys)
     providers = [{**p, "key_ids": set(p["key_ids"])} for p in (providers or [])]
@@ -404,11 +416,22 @@ def build_issuer_app(
         return True
 
     def _signed_in(who: Dict[str, Any]) -> Dict[str, Any]:
-        """When the person last signed in, when their token says (`auth_time`), and how long ago that was."""
+        """When the person last signed in, when their token says (`auth_time`),
+        and how long ago that was by this service's clock. The age is not
+        tidied: a negative one says the provider's clock is ahead of ours,
+        which a reader of the record needs to see."""
         at = who["claims"].get("auth_time")
         if not isinstance(at, int) or isinstance(at, bool):
             return {}
-        return {"auth_time": at, "auth_age_seconds": max(0, int(now().timestamp()) - at)}
+        return {"auth_time": at, "auth_age_seconds": int(now().timestamp()) - at}
+
+    def _age_rule(approver_key_id: Any) -> Dict[str, Any]:
+        """The sign-in age limit, on an entry about a release it applies to:
+        one under an enrolled approver's key, while a limit is set."""
+        if (release_max_auth_age is None or not isinstance(approver_key_id, str)
+                or approver_key_id in static_approvers or approver_key_id not in registry):
+            return {}
+        return {"auth_max_age_seconds": release_max_auth_age}
 
     def authenticate(authorization: Optional[str]) -> Dict[str, Any]:
         if not authorization or not authorization.startswith("Bearer "):
@@ -738,7 +761,7 @@ def build_issuer_app(
             # unknown key trying to release a hold belongs in the witness.
             kid = grant.get("approver_key_id")
             event("grant_refused", approval_request_id=arid, reason=reason, **({"approver": kid} if isinstance(kid, str) else {}),
-                  posted_by=who["principal"], posted_by_id=who["subject_id"], **_about(arid))
+                  posted_by=who["principal"], posted_by_id=who["subject_id"], **_signed_in(who), **_age_rule(kid), **_about(arid))
             return {"accepted": False, "reason": reason}
         if datetime.fromisoformat((env or plan)["not_after"]) <= now():
             # An expired hold can never be released: the executor refuses the
@@ -763,6 +786,17 @@ def build_issuer_app(
             return refused(REF_ISSUER_SUBJECT_MISMATCH)
         if not _enrolled_speaks_for(who, grant["approver_key_id"]):
             return refused(REF_ISSUER_NOT_AN_APPROVER)
+        if enrolled and release_max_auth_age is not None:
+            # A release is the person's act now, not the act of whoever holds
+            # a token they obtained this morning: the provider's own statement
+            # of when they signed in (`auth_time`, OpenID Connect Core 2) must
+            # be there and recent. A time ahead of this clock is no statement.
+            at = who["claims"].get("auth_time")
+            age = int(now().timestamp()) - at if isinstance(at, int) and not isinstance(at, bool) else None
+            if age is None or age < -AUTH_TIME_SKEW_SECONDS:
+                return refused(REF_ISSUER_AUTH_TIME_MISSING)
+            if age > release_max_auth_age:
+                return refused(REF_ISSUER_AUTH_TOO_OLD)
         if not allow_self_approval:
             # Two people: the one asking and the one releasing. The approver
             # key id (a UPN for an enrolled key) may be neither the hold's
@@ -807,6 +841,7 @@ def build_issuer_app(
             # A configured key's grant may be carried in by any signed-in party: say who carried it, not who signed.
             signer = {"posted_by": who["principal"], "posted_by_id": who["subject_id"]}
         event("granted", approval_request_id=arid, approver=grant["approver_key_id"], **signer, meaning="approval", **_signed_in(who),
+              **_age_rule(grant["approver_key_id"]),
               collected=len(have), required=terms["required"],
               hold_kind="plan" if plan else "receipt", **({"roles": sorted(roles_held)} if terms.get("roles") else {}), **_about(arid))
         return {"accepted": True, "reason": g["reason"], "collected": len(have), "required": terms["required"],
@@ -845,7 +880,7 @@ def build_issuer_app(
         app.state.grants.pop(arid, None)
         app.state.declined.add(arid)
         event("declined", approval_request_id=arid, by=who["principal"], by_id=who["subject_id"],
-              **({"by_name": who["name"]} if who.get("name") else {}), meaning="rejection" if rejection else "withdrawal",
+              **({"by_name": who["name"]} if who.get("name") else {}), meaning="rejection" if rejection else "withdrawal", **_signed_in(who),
               **({"why": why} if why else {}), **about)
         return {"declined": True, "reason": None}
 
@@ -978,7 +1013,11 @@ def build_issuer_app(
         who = authenticate(authorization)
         upn = who["principal"]
         _notice_revocations()
-        return {"principal": upn, "subject_id": who["subject_id"], "name": who.get("name"), "may_approve": may_enroll(who, role=approver_role, groups=approver_groups) or upn in static_approvers,
+        return {"principal": upn, "subject_id": who["subject_id"], "name": who.get("name"),
+                # When this person signed in, as their token says (None when it does not), and how old the site
+                # allows that to be at a release: the console warns up front when the two cannot meet.
+                "signed_in_at": _signed_in(who).get("auth_time"), "sign_in_max_age": release_max_auth_age,
+                "may_approve": may_enroll(who, role=approver_role, groups=approver_groups) or upn in static_approvers,
                 "enrolled_public_key_hex": registry.public_hex().get(upn),
                 "roles": [r for r in (who.get("roles") or []) if isinstance(r, str)],
                 "approver_role": approver_role,
@@ -1024,8 +1063,10 @@ def build_issuer_app(
     @app.get("/approve-config")
     async def approve_config():
         """Public: how the console signs in. `entra` is null when the site
-        uses approver files instead."""
-        return {"entra": console_entra}
+        does not sign approvers in with Entra; `oidc` is present when the
+        console signs in at an OpenID Connect provider (console_oidc_from_env).
+        Client ids and endpoint addresses only: a public client has no secret."""
+        return {"entra": console_entra, **({"oidc": console_oidc} if console_oidc else {})}
 
     @app.get("/approve")
     async def approve_page():
@@ -1106,6 +1147,53 @@ def _software_version() -> str:
         return "unknown"
 
 
+def witness_start_fields(issuers: List[str], max_auth_age: Optional[int]) -> Dict[str, Any]:
+    """What the witness's `started` entry says the service ran under: the
+    identity providers trusted, the software version, and the sign-in age
+    limit when one is set."""
+    return {"providers": list(issuers), "software_version": _software_version(),
+            **({"auth_max_age_seconds": max_auth_age} if max_auth_age else {})}
+
+
+def release_max_auth_age_from_env(environ: Any) -> Optional[int]:
+    """GARGOYLE_RELEASE_MAX_AUTH_AGE as whole seconds, or None when unset.
+    Anything but a positive whole number stops the service: a rule the
+    operator meant to set must not be silently off."""
+    raw = (environ.get(ENV_RELEASE_MAX_AUTH_AGE) or "").strip()
+    if not raw:
+        return None
+    if not raw.isdigit() or int(raw) <= 0:
+        raise RuntimeError("%s must be a positive whole number of seconds, not %r" % (ENV_RELEASE_MAX_AUTH_AGE, raw))
+    return int(raw)
+
+
+def console_oidc_from_env(environ: Any, providers: List[Dict[str, Any]], *, max_auth_age: Optional[int] = None) -> Optional[Dict[str, Any]]:
+    """What the approval console needs to sign a person in at one of the
+    trusted OpenID Connect providers (authorization code with PKCE, a
+    public client): the endpoints from that provider's own discovery
+    document, the client id, the scope, a label for the button, and the
+    site's sign-in age so the provider asks for a fresh sign-in. None when
+    no console client is configured. Raises when the provider is not one
+    of the trusted ones or its endpoints are not https."""
+    from urllib.parse import urlsplit
+    client_id = (environ.get(ENV_OIDC_CLIENT_ID) or "").strip()
+    if not client_id:
+        return None
+    if not providers:
+        raise RuntimeError("%s is set but %s names no provider" % (ENV_OIDC_CLIENT_ID, ENV_OIDC_ISSUER))
+    want = (environ.get(ENV_OIDC_CONSOLE_ISSUER) or "").strip() or providers[0]["issuer"]
+    p = next((p for p in providers if p["issuer"] == want), None)
+    if p is None:
+        raise RuntimeError("%s is not one of the providers in %s" % (want, ENV_OIDC_ISSUER))
+    for name in ("authorization_endpoint", "token_endpoint"):
+        if not _trusted_url(p.get(name)):
+            raise RuntimeError("discovery for %s gives no https %s: %r" % (want, name, p.get(name)))
+    return {"issuer": want, "client_id": client_id, "scope": (environ.get(ENV_OIDC_SCOPE) or "").strip() or "openid profile",
+            "authorization_endpoint": p["authorization_endpoint"], "token_endpoint": p["token_endpoint"],
+            "label": (environ.get(ENV_OIDC_LABEL) or "").strip() or urlsplit(want).hostname,
+            **({"max_age": max_auth_age} if max_auth_age else {})}
+
+
 def providers_from_env(environ: Any, *, http: Any = None):
     """The OpenID Connect providers named in GARGOYLE_OIDC_ISSUER, each
     read from its own discovery document: ([provider, ...], {kid: key}).
@@ -1132,6 +1220,8 @@ def providers_from_env(environ: Any, *, http: Any = None):
                             roles_claim=environ.get(ENV_CLAIM_ROLES) or "roles",
                             groups_claim=environ.get(ENV_CLAIM_GROUPS) or "groups", subject_claim=subject,
                             refresh=(lambda uri=doc["jwks_uri"]: oidc_keys(uri, http=http))))
+        # For the console (console_oidc_from_env); not used in trusting a token.
+        out[-1].update(authorization_endpoint=doc.get("authorization_endpoint"), token_endpoint=doc.get("token_endpoint"))
         keys.update(fresh)
     return out, keys
 
@@ -1164,8 +1254,11 @@ def app_from_env() -> FastAPI:
         # A key id trusted two ways could not say which rule its tokens are held to.
         raise RuntimeError("key id %s is published by an OIDC provider and also trusted through %s or %s"
                            % (", ".join(sorted(clash)), ENV_ENTRA_TENANT, ENV_IDP_KEY_ID))
-    start_fields = {"providers": [p["issuer"] for p in oidc_providers] + ([ENTRA_ISSUER.format(tenant=tenant_id)] if tenant else []),
-                    "software_version": _software_version()}
+    console_oidc = console_oidc_from_env(os.environ, oidc_providers, max_auth_age=release_max_auth_age_from_env(os.environ))
+    if console_oidc and tenant and os.environ.get(ENV_CONSOLE_CLIENT_ID):
+        raise RuntimeError("the console signs in one way: set %s or %s, not both" % (ENV_OIDC_CLIENT_ID, ENV_CONSOLE_CLIENT_ID))
+    start_fields = witness_start_fields([p["issuer"] for p in oidc_providers] + ([ENTRA_ISSUER.format(tenant=tenant_id)] if tenant else []),
+                                        release_max_auth_age_from_env(os.environ))
     rules_path = os.environ.get(ENV_RULES_PATH)
     if rules_path:
         from gargoyle.rules import RulesPolicy
@@ -1194,6 +1287,8 @@ def app_from_env() -> FastAPI:
         # `gargoyle login`, the pinned key for tokens `gargoyle init` minted
         # (the approver's, until approvers log in with Entra too).
         providers=oidc_providers,
+        release_max_auth_age=release_max_auth_age_from_env(os.environ),
+        console_oidc=console_oidc,
         idp_public_keys={**tenant_keys, **oidc_key_map,
                          **({os.environ[ENV_IDP_KEY_ID]: Ed25519PublicKey.from_public_bytes(bytes.fromhex(os.environ[ENV_IDP_PUBLIC_KEY_HEX]))}
                             if pinned_idp else {})},
@@ -1216,6 +1311,7 @@ def app_from_env() -> FastAPI:
         tenant_key_ids=set(tenant_keys) if tenant else None,
         idp_key_refresh=(lambda: entra_keys(tenant_id)) if tenant else None,
         console_entra=({"tenant": tenant, "client_id": os.environ[ENV_CONSOLE_CLIENT_ID],
-                        "scope": os.environ.get(ENV_CONSOLE_SCOPE) or "api://%s/access" % (os.environ.get(ENV_AUDIENCE) or "").split(",")[-1].strip()}
+                        "scope": os.environ.get(ENV_CONSOLE_SCOPE) or "api://%s/access" % (os.environ.get(ENV_AUDIENCE) or "").split(",")[-1].strip(),
+                        **({"max_age": release_max_auth_age_from_env(os.environ)} if release_max_auth_age_from_env(os.environ) else {})}
                        if tenant and os.environ.get(ENV_CONSOLE_CLIENT_ID) else None),
     )

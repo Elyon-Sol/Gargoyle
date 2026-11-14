@@ -204,6 +204,28 @@ enrolled public keys are published at `/approvers` for the middleware and
 are read from `approvers.json` by `gargoyle audit`. The file loader stays
 for sites that prefer key files.
 
+### Sign-in age (optional, not yet verified on a tenant)
+
+`GARGOYLE_RELEASE_MAX_AUTH_AGE` (seconds) makes a release depend on how
+recently the approver signed in. It reads the token's `auth_time` claim.
+Microsoft's documentation lists `auth_time` as an optional claim ("Time
+when the user last authenticated", token type JWT) and does not list it
+among the claims access tokens carry by default. So before turning the
+rule on:
+
+1. In the Gargoyle-Issuer-API app registration, *Token configuration*,
+   add the optional claim `auth_time` for the **access** token.
+2. Sign in at the console. If the token carries no sign-in time while
+   the rule is on, the console says so at once; `GET /me` shows
+   `signed_in_at` either way, so this can be checked with the rule off.
+3. Only then set `GARGOYLE_RELEASE_MAX_AUTH_AGE`.
+
+With the rule on, the console sends `prompt=login`, which Entra
+documents; `max_age` is not in Entra's documented parameters. Whether a
+tenant emits `auth_time` in access tokens once configured has not been
+run here; step 2 is the check. Keycloak's behavior is recorded in
+[interop-keycloak.md](interop-keycloak.md).
+
 ## 8. Hosted connectors sign users in through the gate
 
 The stdio middleware carries the user's token from `gargoyle login`. A

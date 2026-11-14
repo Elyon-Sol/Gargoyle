@@ -90,3 +90,56 @@ def test_console_emilia_signoff_matches_the_python_module(tmp_path):
     pub.verify(bytes.fromhex(member["signature"]), emilia.context_hash_for(member["context"]))
     carried = dict(grant); carried[emilia.EMILIA_MEMBER] = member
     assert emilia.verify_embedded_signoff(carried, receipt, pub) == {"accepted": True, "reason": None}
+
+
+OIDC_SCRIPT = r'''
+import { authorizeUrl, exchangeCode } from "%s";
+const url = authorizeUrl({ authorizationEndpoint: "https://id.example/realms/lab/protocol/openid-connect/auth", clientId: "console",
+                           scope: "openid profile", redirectUri: "https://g/approve", challenge: "ch", state: "s1", maxAge: 900 });
+const noAge = authorizeUrl({ authorizationEndpoint: "https://id.example/auth?tenant=x", clientId: "console", scope: "openid", redirectUri: "https://g/approve", challenge: "ch", state: "s1" });
+const calls = [];
+const fakeFetch = async (u, init) => { calls.push({ u, body: String(init.body) }); return { ok: true, json: async () => ({ access_token: "tok" }) }; };
+const tok = await exchangeCode({ tokenEndpoint: "https://id.example/token", clientId: "console", scope: "openid profile", redirectUri: "https://g/approve", code: "c1", verifier: "v1" }, fakeFetch);
+let bad = null;
+try { await exchangeCode({ tokenEndpoint: "https://id.example/token", clientId: "console", scope: "openid", redirectUri: "https://g/approve", code: "c1", verifier: "v1" },
+                         async () => ({ ok: false, status: 400, json: async () => ({ error: "invalid_grant" }) })); } catch (err) { bad = err.message; }
+console.log(JSON.stringify({ url, noAge, calls, tok, bad }));
+'''
+
+
+def test_console_signs_in_at_any_providers_endpoints(tmp_path):
+    """Given a provider's endpoints the console builds the same code-with-PKCE
+    request against them, asks for a fresh sign-in when the site sets an age,
+    and never falls back to Microsoft's address."""
+    if shutil.which("node") is None:
+        pytest.skip("node not installed")
+    script = tmp_path / "oidc.mjs"
+    script.write_text(OIDC_SCRIPT % (ROOT / "gargoyle" / "static" / "approve.js").as_uri())
+    proc = subprocess.run(["node", str(script)], capture_output=True, text=True, timeout=60)
+    assert proc.returncode == 0, proc.stderr[-2000:]
+    out = json.loads(proc.stdout)
+    assert out["url"].startswith("https://id.example/realms/lab/protocol/openid-connect/auth?") and "microsoftonline" not in out["url"]
+    for part in ("client_id=console", "response_type=code", "code_challenge=ch", "code_challenge_method=S256", "state=s1", "max_age=900", "scope=openid+profile&"):
+        assert part in out["url"], part
+    assert out["noAge"].startswith("https://id.example/auth?tenant=x&") and "max_age" not in out["noAge"]
+    assert out["calls"][0]["u"] == "https://id.example/token" and "code_verifier=v1" in out["calls"][0]["body"] and "grant_type=authorization_code" in out["calls"][0]["body"]
+    assert out["tok"] == {"access_token": "tok"} and out["bad"] == "invalid_grant"
+
+
+ENTRA_AGE_SCRIPT = r'''
+import { authorizeUrl } from "%s";
+const base = { tenant: "t", clientId: "c", scope: "api://a/access", redirectUri: "https://g/approve", challenge: "ch", state: "s1" };
+console.log(JSON.stringify({ plain: authorizeUrl(base), aged: authorizeUrl({ ...base, maxAge: 900 }) }));
+'''
+
+
+def test_console_asks_entra_for_a_fresh_sign_in_when_the_site_sets_an_age(tmp_path):
+    """Entra documents `prompt=login`, not `max_age`: with a sign-in age rule
+    the Entra request carries the one it documents; without a rule, nothing changes."""
+    if shutil.which("node") is None:
+        pytest.skip("node not installed")
+    script = tmp_path / "age.mjs"
+    script.write_text(ENTRA_AGE_SCRIPT % (ROOT / "gargoyle" / "static" / "approve.js").as_uri())
+    out = json.loads(subprocess.run(["node", str(script)], capture_output=True, text=True, check=True, timeout=60).stdout)
+    assert "prompt=" not in out["plain"] and "max_age" not in out["plain"]
+    assert "prompt=login" in out["aged"] and out["aged"].startswith("https://login.microsoftonline.com/t/")

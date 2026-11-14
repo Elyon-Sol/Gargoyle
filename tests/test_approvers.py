@@ -73,6 +73,7 @@ def test_enrollment_needs_the_role_and_binds_the_tokens_upn(tmp_path):
     assert c.get("/approvers").json() == {"approvers": {"dana@contoso.com": pub_hex(key)}}        # public
     me = c.get("/me", headers=h(token("dana@contoso.com", roles=["Approver"]))).json()
     assert me.pop("subject_id") == {"iss": "key:idp-1", "sub": "oid-dana@contoso.com"} and me.pop("name") is None   # who, by permanent id
+    assert me.pop("signed_in_at") is None and me.pop("sign_in_max_age") is None                                   # no sign-in age rule here
     assert me == {"principal": "dana@contoso.com", "may_approve": True, "enrolled_public_key_hex": pub_hex(key),
                   "roles": ["Approver"], "approver_role": "Approver", "released_7d": 0, "released_by_tool_7d": {}}
     assert c.get("/me", headers=h(token("eve@contoso.com"))).json()["may_approve"] is False

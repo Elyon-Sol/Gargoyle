@@ -483,7 +483,15 @@ record and whose permanent id does not is `REF_ISSUER_SUBJECT_MISMATCH`
 (with an `enroll_refused` or `grant_refused` entry), until the operator
 revokes the old binding. A record from before ids were kept is compared
 by object id, and one with neither learns its person at the first
-release under it. An approver may revoke their own key
+release under it. Where the operator sets a sign-in age
+(`GARGOYLE_RELEASE_MAX_AUTH_AGE`, seconds), a grant under an enrolled
+key is accepted only from a token whose `auth_time` (OpenID Connect Core,
+section 2: when the person authenticated) is an integer no further than
+60 seconds ahead of the service's clock, else
+`REF_ISSUER_AUTH_TIME_MISSING`, and no older than the setting, else
+`REF_ISSUER_AUTH_TOO_OLD`: the release is then the act of a person who
+signed in recently, not of whoever holds a token from this morning. A
+configured (static) key is no person's sign-in and is not held to it. An approver may revoke their own key
 (`POST /approvers/revoke`); the operator revokes any approver on the
 service's host. A revoked key leaves the published map at once, so new
 grants under it are refused by the service and by every consumer that
@@ -839,11 +847,14 @@ five as frozen; its version promises, from that release on, are:
 - a refusal or accept code is never renamed or reused; new codes may be
   added in a minor release.
 
-**Since the freeze.** `gargoyle-witness/3` (2026-11-13) is a new record
-version under the second rule above: it only adds members (section
-15.1), keeps every member, the hash region and the signature region of
-`gargoyle-witness/2`, and its verifier accepts versions 1, 2 and 3 in one
-file. `gargoyle-witness/2` stays frozen as it was. The receipt, the grant,
+**Since the freeze.** `gargoyle-witness/3` (2026-11-13) and
+`gargoyle-witness/4` (2026-11-14) are new record versions under the
+second rule above: each only adds members (section 15.1), keeps every
+member, the hash region and the signature region of the version before,
+and the verifier accepts versions 1 to 4 in one file. Each earlier
+version stays as it was named: version 4 exists because the evidence
+for the sign-in age rule was wanted a day after version 3 was named, and
+a named version is not added to. The receipt, the grant,
 the execution receipt, the plan and the evidence log are unchanged.
 
 The reference implementation and its TypeScript port recompute every
@@ -990,7 +1001,13 @@ provider's key cannot speak for another provider. It must also carry the
 provider's permanent subject claim (`sub`; `oid` for Entra ID, whose
 `sub` differs per application), or it is `REF_IDENTITY_NO_SUBJECT`. A key
 refresh adopts a provider's answer for that provider's key ids and for
-ids nobody holds, and never replaces another party's key.
+ids nobody holds, and never replaces another party's key. A key the
+provider marks for encryption (`"use": "enc"`) is not loaded. A claim
+setting names a claim or, with dots, a path into nested objects
+(`realm_access.roles`); a claim whose own name is the whole setting
+matches first, and a path that does not lead through objects yields
+nothing. A run of these rules against Keycloak is recorded in
+`docs/interop-keycloak.md`.
 
 Every authenticated party then has two names. The readable name (the
 first present of the configured name claims; by default
@@ -1096,7 +1113,7 @@ with the issuer key, so a client can neither forge nor edit it.
 
 ```
 entry = {
-  "witness_version": "gargoyle-witness/3",
+  "witness_version": "gargoyle-witness/4",
   "seq": n, "prev_sha256": ..., "at": ...,
   "event": "started" | "issued" | "refused" | "granted" | "grant_refused" | "declined" | "plan"
          | "plan_granted" | "enrolled" | "enroll_refused" | "revoked" | "sidedoors",
@@ -1137,7 +1154,22 @@ section 14):
   `declined`): `requested_by_id`, and `requested_for_id` when the held
   call was delegated.
 
-A verifier accepts all three versions in one file, each entry under the
+`gargoyle-witness/4` adds the evidence for the sign-in age rule of
+section 12, and changes nothing else:
+
+- `grant_refused` and `declined`: `auth_time` and `auth_age_seconds`,
+  when the token carries an integer `auth_time`, as `granted` has had
+  since version 3;
+- `auth_age_seconds`, wherever it appears, is the service's clock minus
+  `auth_time` as it is, so a sign-in time ahead of the service's clock
+  gives a negative age (a version 3 entry records such an age as 0);
+- `granted` and `grant_refused`: `auth_max_age_seconds`, the limit in
+  force, on entries about a release under an enrolled approver's key
+  while a limit is set, and on no others, so an entry never claims a
+  rule that was not applied to it;
+- `started`: `auth_max_age_seconds` when a limit is set.
+
+A verifier accepts all four versions in one file, each entry under the
 version it names, as for the evidence log.
 
 Reconciliation (`gargoyle audit --witness`) verifies both chains and

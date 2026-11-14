@@ -101,7 +101,8 @@ def provider(issuer: str, *, key_ids: Optional[Iterable[str]] = None, name_claim
 
     `issuer` is compared with a token's `iss` as a string, exactly (OpenID
     Connect Core 3.1.3.7). `key_ids` are the kids of this provider's own
-    signing keys. `name_claims` are tried in order for the readable name;
+    signing keys. A claim setting names a claim, or a path into nested
+    objects with dots (`realm_access.roles`). `name_claims` are tried in order for the readable name;
     the subject is used when none is present. `subject_claim` is the claim
     that never changes for a person: `sub`, or `oid` for Entra ID, whose
     `sub` differs per application. `refresh()` returns the provider's
@@ -169,6 +170,22 @@ def _string_list(value: Any) -> list:
 
 def _nonempty(value: Any) -> Optional[str]:
     return value if isinstance(value, str) and value else None
+
+
+def _claim(claims: Dict[str, Any], name: str) -> Any:
+    """The claim a setting names. A claim with exactly that name wins (a
+    namespaced claim such as `https://example.com/roles` has dots in it);
+    otherwise dots walk into nested objects (`realm_access.roles`, where
+    Keycloak puts realm roles). A path that does not lead through objects
+    gives None."""
+    if name in claims:
+        return claims[name]
+    value: Any = claims
+    for part in name.split("."):
+        if not isinstance(value, dict) or part not in value:
+            return None
+        value = value[part]
+    return value
 
 
 def _innermost_actor(act: Any) -> Optional[str]:
@@ -249,7 +266,7 @@ def principal_from_token(token: str, public_keys: Dict[str, Any], *,
 
     # OIDC providers' `sub` is opaque; the UPN is the identity people and
     # rules recognise.
-    sub = next((v for v in (_nonempty(claims.get(c)) for c in name_claims) if v is not None), None) or subject
+    sub = next((v for v in (_nonempty(_claim(claims, c)) for c in name_claims) if v is not None), None) or subject
     party = subject if subject is not None else sub
     actor = _innermost_actor(claims.get("act"))
     if actor is None:
@@ -268,7 +285,7 @@ def principal_from_token(token: str, public_keys: Dict[str, Any], *,
     else:
         return {"principal": None, "reason": REF_IDENTITY_NO_SUBJECT}
     return {"principal": principal, "on_behalf_of": on_behalf_of, "claims": claims, "reason": None,
-            "groups": _string_list(claims.get(groups_claim)), "roles": _string_list(claims.get(roles_claim)),
+            "groups": _string_list(_claim(claims, groups_claim)), "roles": _string_list(_claim(claims, roles_claim)),
             "oid": _nonempty(claims.get("oid")), "tid": _nonempty(claims.get("tid")),
             "iss": id_issuer, "subject_id": subject_id, "on_behalf_of_id": on_behalf_of_id,
-            "name": _nonempty(claims.get(display_claim)) if actor is None else None}
+            "name": _nonempty(_claim(claims, display_claim)) if actor is None else None}
