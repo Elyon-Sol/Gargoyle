@@ -707,6 +707,7 @@ reason, without a new card.
 | [docs/claude-code-hook.md](docs/claude-code-hook.md) | the gate as a Claude Code hook, and its limits |
 | [docs/rules.md](docs/rules.md) | how a call is decided by a rules file, on one page |
 | [docs/operations.md](docs/operations.md) | what the issuer host holds, backup, restore, restart |
+| [docs/compliance-mapping.md](docs/compliance-mapping.md) | which requirements a Gargoyle record is evidence for, clause by clause, with the limits; a mapping, not a statement of compliance |
 | [docs/beta-checklist.md](docs/beta-checklist.md) | a first client deployment: set up, tell people, watch, back out |
 | [docs/scenario-client-workstation.md](docs/scenario-client-workstation.md) | the scenario the design answers (2026-10-16) |
 | [docs/comparison-2026-10-20.md](docs/comparison-2026-10-20.md) | Gargoyle against its nearest peers, from primary sources |
