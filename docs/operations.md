@@ -132,6 +132,10 @@ not written yet.
 
 ## The evidence report
 
+Which requirement each record can be offered as evidence for, and the
+limits of each, is in [compliance-mapping.md](compliance-mapping.md).
+
+
 `gargoyle report` produces the periodic (quarterly) evidence report from the
 record, so the report is a thing a third party can regenerate, not a document
 someone assembled:
