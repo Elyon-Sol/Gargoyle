@@ -458,7 +458,8 @@ and SPEC.md section 16 maps every field.
 [docs/comparison-2026-10-20.md](docs/comparison-2026-10-20.md) scores
 Gargoyle against its nearest peers from their primary sources;
 [docs/interop-emilia.md](docs/interop-emilia.md) records the EMILIA
-interoperation, in both directions.
+interoperation, in both directions. The comparison and interop records are
+feature and interoperability evidence, not novelty or patent findings.
 
 ## Using the library
 
