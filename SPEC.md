@@ -1280,7 +1280,9 @@ Three Internet-Drafts of 2026 describe pieces of what this specification
 chains together. None is a standard yet; this section maps vocabulary so an
 implementer of one can read a Gargoyle receipt, and names what each lacks
 that the chain here supplies. All three and Gargoyle use RFC 8785 for the
-signed bytes (section 2) and Ed25519 signatures in lowercase hex.
+signed bytes (section 2) and Ed25519 signatures in lowercase hex. This
+mapping and the comparison and interop records it points to are feature
+and interoperability evidence, not novelty or patent findings.
 
 | Gargoyle | Acta signed receipts (draft-farley-acta-signed-receipts) | EP authorization receipts (draft-schrock-ep-authorization-receipts) | XAIP receipts (draft-xkumakichi-xaip-receipts) |
 |---|---|---|---|
