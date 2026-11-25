@@ -1174,6 +1174,69 @@ section 12, and changes nothing else:
 A verifier accepts all four versions in one file, each entry under the
 version it names, as for the evidence log.
 
+**Members the lists above leave out** (text added 2026-11-25; the
+members are not new). The reference issuing service has written the
+members below since before the freeze, each from the date given, in
+entries of whatever version was current. They sit inside the hash and
+the issuer's signature like every other member, and the frozen versions
+are those entries as they were written; this paragraph brings the text
+up to them and changes no entry.
+
+- `started`: `resumed`, true when the file already held entries
+  (2026-10-19);
+- `issued`: `target_url`; `state_bound` (section 6.1; 2026-11-01); `oid`,
+  the directory's object id for the caller when the token carried one
+  (2026-10-20); and, when the call is held, `summary` and `request`
+  (below);
+- `refused`: `tool`, `reason` (the refusal code), `target_url`, and
+  `summary` and `request` (2026-11-03); on `REF_ISSUER_DECLINED_RECENTLY` also `declines`, the
+  count of declines standing, and `why`, the last reason an approver
+  gave (2026-10-31); a refused plan has `tool` `"plan"` and `steps`, a
+  count;
+- `plan`: when held, `summary` and `request`;
+- `granted`: `roles`, the named roles the posting token carried, when the
+  receipt routes to roles (2026-10-31);
+- every entry that answers a hold (`granted`, `grant_refused`,
+  `declined`): `requested_by`, `tool`, `target_url`, the held entry's
+  `summary` and `request`, and `plan_id` when the hold is a plan's
+  (2026-11-02);
+- `declined`: `why`, the reason the person gave, when one was given
+  (2026-10-31);
+- `enroll_refused`: `oid`.
+
+`summary` is the sentence the approver's card showed (2026-11-02).
+`request` says what was asked without the payload: of the call's
+arguments, the paths it names (`path`, `source`, `destination`, `paths`;
+each cut at 512 characters, at most 20), `bytes` (the size of the content
+it would write), `edits` (a count), and for a message `to` and `subject`;
+for a plan, `steps`, one such object per step with its `tool`. File
+contents and message bodies never enter the witness; `args_sha256` binds
+them.
+
+**Verification** (`witness.verify_witness`), offline, with the issuer's
+public keys, for each entry in file order; the first failure is the
+entry's result:
+
+1. the entry is an object that names one of the four versions and
+   carries `entry_sha256`, an integer `seq` and `event`, else
+   `REF_WITNESS_MALFORMED`;
+2. `entry_sha256` recomputes, else `REF_WITNESS_HASH_MISMATCH`;
+3. `seq` is the previous entry's plus one and `prev_sha256` is the
+   previous entry's hash (the first entry: 1 and 64 zeros), else
+   `REF_WITNESS_CHAIN_BROKEN`;
+4. `issuer_key_id` names a trusted issuer key, else
+   `REF_WITNESS_KEY_UNKNOWN`;
+5. `issuer_signature` verifies over the entry minus `issuer_signature`,
+   else `REF_WITNESS_SIGNATURE_INVALID`;
+
+otherwise `WITNESS_VERIFIED`. Verification continues after a failed
+entry, taking the file's own `seq` and hash as the new expectation; a
+malformed entry is reported and the expectation left where it was. The
+result names each entry's outcome and the last `entry_sha256` (the
+tail), and the file is `WITNESS_VERIFIED` when every entry is. The
+verifier holds no list of members per event: the hash and the signature
+cover every member present, whatever its name.
+
 Reconciliation (`gargoyle audit --witness`) verifies both chains and
 compares them by `decision_id`. Findings, never resolved silently:
 
